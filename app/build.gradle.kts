@@ -7,7 +7,7 @@ plugins {
 }
 
 base {
-    archivesName.set("Alan-RIP-Dpi-v1.0.0")
+    archivesName.set("Alan-RIP-Dpi-v1.2.0")
 }
 
 android {
@@ -18,8 +18,8 @@ android {
         applicationId = "com.alan.ripdpi"
         minSdk = 24
         targetSdk = 35
-        versionCode = 100
-        versionName = "1.0.0"
+        versionCode = 105
+        versionName = "1.3.0"
     }
 
     splits {

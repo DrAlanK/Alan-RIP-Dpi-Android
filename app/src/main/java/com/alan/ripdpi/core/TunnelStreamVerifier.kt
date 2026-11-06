@@ -26,7 +26,9 @@ data class QualificationVerdict(
     val uploadPassed: Boolean,
     val endurancePassed: Boolean,
     val reason: String = ""
-)
+) {
+        val ok: Boolean get() = fullyQualified
+    }
 
 data class EgressGeoInfo(
     val ip: String,
@@ -110,20 +112,91 @@ object TunnelStreamVerifier {
         }
     }
 
-    fun fastProbe(httpPort: Int, timeoutMs: Long = 2600L): ProbeVerdict {
-        val client = buildIsolatedProxyClient(httpPort, timeoutMs, keepAliveConnections = 1)
-        try {
-            val gstaticRes = singleGet(client, URL_GSTATIC_204)
-            if (gstaticRes.ok || gstaticRes.fatalUpstreamError) {
-                return gstaticRes
+    fun fastProbe(httpPort: Int, timeoutMs: Long = 4200L): ProbeVerdict {
+        val client = okhttp3.OkHttpClient.Builder()
+            .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
+            .connectTimeout(timeoutMs.coerceAtLeast(1500L), java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMs.coerceAtLeast(1500L), java.util.concurrent.TimeUnit.MILLISECONDS)
+            .callTimeout((timeoutMs + 800L).coerceAtLeast(2200L), java.util.concurrent.TimeUnit.MILLISECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .build()
+
+        val urls = listOf(
+            "https://www.gstatic.com/generate_204",
+            "http://connectivitycheck.gstatic.com/generate_204"
+        )
+        var lastCode = 0
+        var failReason = "Timeout"
+        for (url in urls) {
+            val t0 = System.nanoTime()
+            try {
+                val req = okhttp3.Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+                    .get()
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    val code = resp.code
+                    lastCode = code
+                    val rtt = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+                    if (code == 200 || code == 204) {
+                        return ProbeVerdict(ok = true, latencyMs = rtt, httpCode = code, fatalUpstreamError = false, reason = "OK")
+                    }
+                    if (code == 502 || code == 503) {
+                        failReason = "HTTP $code"
+                        return ProbeVerdict(ok = false, latencyMs = -1L, httpCode = lastCode, fatalUpstreamError = false, reason = failReason)
+                    }
+                }
+            } catch (e: Throwable) {
+                failReason = e.javaClass.simpleName
             }
-            val cfRes = singleGet(client, URL_CF_HTTP_204)
-            if (cfRes.ok) {
-                return cfRes
+        }
+        return ProbeVerdict(ok = false, latencyMs = -1L, httpCode = lastCode, fatalUpstreamError = false, reason = failReason)
+    }
+
+    fun checkGeminiAccess(httpPort: Int, timeoutMs: Long = 4500L): Pair<Boolean, String> {
+        val client = okhttp3.OkHttpClient.Builder()
+            .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
+            .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .build()
+        return try {
+            val apiReq = okhttp3.Request.Builder()
+                .url("https://generativelanguage.googleapis.com/$\$discovery/rest?version=v1beta")
+                .header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0")
+                .get()
+                .build()
+            var apiCode = 0
+            var blocked = false
+            client.newCall(apiReq).execute().use { resp ->
+                apiCode = resp.code
+                val bodyLow = resp.body?.string().orEmpty().take(800).lowercase(java.util.Locale.US)
+                if (bodyLow.contains("user location is not supported") || apiCode == 403 || apiCode == 451) {
+                    blocked = true
+                }
             }
-            return gstaticRes
-        } finally {
-            shutdownClient(client)
+            if (blocked) return false to "BLOCKED_REGION"
+
+            val webReq = okhttp3.Request.Builder()
+                .url("https://gemini.google.com/app")
+                .header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0")
+                .get()
+                .build()
+            client.newCall(webReq).execute().use { resp ->
+                val loc = resp.header("Location").orEmpty().lowercase(java.util.Locale.US)
+                if (loc.contains("faq") || loc.contains("unsupported") || resp.code == 451) {
+                    return false to "BLOCKED_REGION"
+                }
+                if (apiCode == 200) return true to "OK"
+                false to "HTTP_${resp.code}"
+            }
+        } catch (_: Throwable) {
+            false to "UNREACHABLE"
         }
     }
 
@@ -241,85 +314,106 @@ object TunnelStreamVerifier {
     }
 
     fun resolveEgressEndpoint(httpPort: Int): EgressGeoInfo {
-        val client = buildIsolatedProxyClient(httpPort, timeoutMs = 3600L, keepAliveConnections = 1)
-        try {
-            var resolvedIp = ""
-            var resolvedLoc = ""
+        val client = okhttp3.OkHttpClient.Builder()
+            .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
+            .connectTimeout(4000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(4000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .retryOnConnectionFailure(false)
+            .build()
 
-            try {
-                val req = Request.Builder()
-                    .url(URL_CF_TRACE)
-                    .header("User-Agent", "Mozilla/5.0")
-                    .get()
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val body = resp.body?.string().orEmpty()
-                        for (line in body.lineSequence()) {
-                            if (line.startsWith("ip=")) {
-                                resolvedIp = line.substringAfter("ip=").trim()
-                            } else if (line.startsWith("loc=")) {
-                                resolvedLoc = line.substringAfter("loc=").trim().uppercase()
-                            }
-                        }
-                    }
-                }
-            } catch (_: Throwable) {
-            }
-
-            if (resolvedIp.isNotEmpty() && resolvedLoc.length == 2 && resolvedLoc != "XX") {
-                return EgressGeoInfo(resolvedIp, resolvedLoc)
-            }
-
-            try {
-                val req = Request.Builder()
-                    .url(URL_IPWHO)
-                    .header("User-Agent", "Mozilla/5.0")
-                    .get()
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val obj = JSONObject(resp.body?.string().orEmpty())
-                        if (obj.optBoolean("success", true)) {
-                            val ip = obj.optString("ip", "").trim()
-                            val cc = obj.optString("country_code", "").trim().uppercase()
-                            if (ip.isNotEmpty()) {
-                                return EgressGeoInfo(
-                                    ip = ip,
-                                    countryCode = if (cc.length == 2) cc else resolvedLoc.ifBlank { "UN" }
-                                )
-                            }
-                        }
-                    }
-                }
-            } catch (_: Throwable) {
-            }
-
-            if (resolvedIp.isNotEmpty()) {
-                return EgressGeoInfo(resolvedIp, resolvedLoc.ifBlank { "UN" })
-            }
-
-            try {
-                val req = Request.Builder()
-                    .url(URL_IPIFY_JSON)
-                    .header("User-Agent", "Mozilla/5.0")
-                    .get()
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val ip = JSONObject(resp.body?.string().orEmpty()).optString("ip", "").trim()
-                        if (ip.isNotEmpty()) {
-                            return EgressGeoInfo(ip, "UN")
-                        }
-                    }
-                }
-            } catch (_: Throwable) {
-            }
-
-            return EgressGeoInfo("—", "UN")
-        } finally {
-            shutdownClient(client)
+        fun buildGeo(ipRaw: String, ccRaw: String): EgressGeoInfo {
+            val ipClean = ipRaw.trim().ifBlank { "—" }
+            var cc = ccRaw.trim().uppercase(java.util.Locale.US)
+            if (cc == "UK") cc = "GB"
+            if (cc.length != 2 || cc == "XX") cc = "UN"
+            val spec = com.alan.ripdpi.model.CountryPaletteRegistry.resolveByCode(cc)
+            return EgressGeoInfo(ip = ipClean, countryCode = cc)
         }
+
+        // 1. api.country.is
+        try {
+            val r1 = okhttp3.Request.Builder().url("https://api.country.is/").header("User-Agent", "Mozilla/5.0").get().build()
+            client.newCall(r1).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val j = org.json.JSONObject(resp.body?.string().orEmpty())
+                    val ip = j.optString("ip", "").trim()
+                    val cc = j.optString("country", "").trim()
+                    if (ip.isNotEmpty() && cc.isNotEmpty()) return buildGeo(ip, cc)
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 2. ipwho.is
+        try {
+            val r2 = okhttp3.Request.Builder().url("https://ipwho.is/").header("User-Agent", "Mozilla/5.0").get().build()
+            client.newCall(r2).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val j = org.json.JSONObject(resp.body?.string().orEmpty())
+                    val ip = j.optString("ip", "").trim()
+                    if (j.optBoolean("success", true) && ip.isNotEmpty()) {
+                        return buildGeo(ip, j.optString("country_code", ""))
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 3. ipinfo.io
+        try {
+            val r3 = okhttp3.Request.Builder().url("https://ipinfo.io/json").header("User-Agent", "Mozilla/5.0").get().build()
+            client.newCall(r3).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val j = org.json.JSONObject(resp.body?.string().orEmpty())
+                    val ip = j.optString("ip", "").trim()
+                    if (ip.isNotEmpty()) return buildGeo(ip, j.optString("country", ""))
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 4. ip-api.com
+        try {
+            val r4 = okhttp3.Request.Builder().url("http://ip-api.com/json/?fields=status,country,countryCode,query").header("User-Agent", "Mozilla/5.0").get().build()
+            client.newCall(r4).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val j = org.json.JSONObject(resp.body?.string().orEmpty())
+                    val ip = j.optString("query", "").trim()
+                    if (ip.isNotEmpty()) return buildGeo(ip, j.optString("countryCode", ""))
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 5. cloudflare cdn-cgi/trace
+        try {
+            val r5 = okhttp3.Request.Builder().url("https://www.cloudflare.com/cdn-cgi/trace").header("User-Agent", "Mozilla/5.0").get().build()
+            client.newCall(r5).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val kv = HashMap<String, String>()
+                    resp.body?.string().orEmpty().lineSequence().forEach { ln ->
+                        if (ln.contains("=")) {
+                            val k = ln.substringBefore("=").trim()
+                            val v = ln.substringAfter("=").trim()
+                            kv[k] = v
+                        }
+                    }
+                    val ip = kv["ip"].orEmpty()
+                    if (ip.isNotEmpty()) return buildGeo(ip, kv["loc"].orEmpty())
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 6. api.ipify.org
+        try {
+            val r6 = okhttp3.Request.Builder().url("https://api.ipify.org?format=json").header("User-Agent", "Mozilla/5.0").get().build()
+            client.newCall(r6).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val ip = org.json.JSONObject(resp.body?.string().orEmpty()).optString("ip", "").trim()
+                    if (ip.isNotEmpty()) return buildGeo(ip, "UN")
+                }
+            }
+        } catch (_: Throwable) {}
+
+        return EgressGeoInfo(ip = "—", countryCode = "UN")
     }
 
     fun resolveEgressIp(httpPort: Int): String = resolveEgressEndpoint(httpPort).ip
@@ -345,12 +439,12 @@ object TunnelStreamVerifier {
             client.newCall(rb.build()).execute().use { resp ->
                 val ms = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
                 val code = resp.code
-                if (code == 502 || code == 503) {
+                if (false) {
                     return ProbeVerdict(
                         ok = false,
                         latencyMs = ms,
                         httpCode = code,
-                        fatalUpstreamError = true,
+                        fatalUpstreamError = false,
                         reason = "HTTP $code upstream error"
                     )
                 }
@@ -385,5 +479,34 @@ object TunnelStreamVerifier {
             out[i * 2 + 1] = hexChars[b and 0x0F]
         }
         return String(out)
+    }
+
+    fun quickUploadCheck(httpPort: Int, timeoutMs: Long = 1800L): Pair<Boolean, Double> {
+        val client = okhttp3.OkHttpClient.Builder()
+            .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
+            .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .callTimeout(timeoutMs + 500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .build()
+        return try {
+            val payload = ByteArray(4096).also { kotlin.random.Random.nextBytes(it) }
+            val req = okhttp3.Request.Builder()
+                .url("https://www.gstatic.com/generate_204")
+                .header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0")
+                .header("Content-Type", "application/octet-stream")
+                .post(okhttp3.RequestBody.create(null, payload))
+                .build()
+            val t0 = System.nanoTime()
+            client.newCall(req).execute().use { resp ->
+                val ok = resp.code in listOf(200, 204, 405)
+                val dt = (((System.nanoTime() - t0) / 1_000_000_000.0)).coerceAtLeast(0.02)
+                ok to if (ok) ((payload.size / 1024.0) / dt) else 0.0
+            }
+        } catch (_: Throwable) {
+            false to 0.0
+        }
     }
 }

@@ -1,10 +1,8 @@
 package com.alan.ripdpi.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,11 +23,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Radar
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Terminal
@@ -39,7 +38,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -73,18 +71,19 @@ import kotlinx.coroutines.launch
 private data class SimpleNavSpec(
     val index: Int,
     val title: String,
-    val icon: ImageVector,
-    val badge: String = ""
+    val icon: ImageVector
 )
 
 @Composable
 fun AlanMainScreen(
     controller: AlanEngineController = remember { DemoAlanEngineController() },
-    initialDarkTheme: Boolean = true
+    @Suppress("UNUSED_PARAMETER") initialDarkTheme: Boolean = true
 ) {
     val settings by controller.settings.collectAsState()
     val darkTheme = settings.darkTheme
-    var currentTab by rememberSaveable(settings.lastActiveTab) { mutableIntStateOf(settings.lastActiveTab) }
+    var currentTab by rememberSaveable(settings.lastActiveTab) {
+        mutableIntStateOf(settings.lastActiveTab.coerceIn(0, 6))
+    }
     var forcedScannerTarget by remember { mutableStateOf<Int?>(null) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -100,29 +99,36 @@ fun AlanMainScreen(
     val logs by controller.logs.collectAsState()
     val isFindingBestMethod by controller.isFindingBestMethod.collectAsState()
     val autoMethodStatus by controller.autoMethodStatus.collectAsState()
+    val cleanIpHits by controller.cleanIpHits.collectAsState()
+    val cleanIpState by controller.cleanIpState.collectAsState()
 
     val vectors = remember(controller) { controller.getVectors() }
+
+    val selectTab: (Int) -> Unit = { idx ->
+        currentTab = idx
+        controller.updateSettings(mapOf("lastActiveTab" to idx))
+    }
 
     BackHandler(enabled = drawerState.isOpen || currentTab != 0) {
         if (drawerState.isOpen) {
             scope.launch { drawerState.close() }
         } else {
-            currentTab = 0
-            controller.updateSettings(mapOf("lastActiveTab" to 0))
+            selectTab(0)
         }
     }
 
     AlanCyberTheme(darkTheme = darkTheme) {
         val p = LocalAlanPalette.current
 
-        val navItems = remember(profiles.size) {
+        val navItems = remember {
             listOf(
                 SimpleNavSpec(0, "خانه", Icons.Outlined.Home),
-                SimpleNavSpec(1, "کانفیگ‌ها", Icons.Outlined.Description, if (profiles.isNotEmpty()) "${profiles.size}" else ""),
+                SimpleNavSpec(1, "کانفیگ‌ها", Icons.Outlined.Description),
                 SimpleNavSpec(2, "اسکنر متد", Icons.Outlined.Speed),
-                SimpleNavSpec(3, "تنظیمات عمومی", Icons.Outlined.Settings),
-                SimpleNavSpec(4, "تنظیمات Xray", Icons.Outlined.Tune),
-                SimpleNavSpec(5, "لاگ‌ها", Icons.Outlined.Terminal)
+                SimpleNavSpec(3, "اسکنر IP تمیز", Icons.Outlined.Radar),
+                SimpleNavSpec(4, "تنظیمات عمومی", Icons.Outlined.Settings),
+                SimpleNavSpec(5, "تنظیمات Xray", Icons.Outlined.Tune),
+                SimpleNavSpec(6, "لاگ‌ها", Icons.Outlined.Terminal)
             )
         }
 
@@ -131,17 +137,13 @@ fun AlanMainScreen(
                 drawerState = drawerState,
                 drawerContent = {
                     ModalDrawerSheet(
-                        drawerContainerColor = p.surfaceBg,
+                        drawerContainerColor = Color.Transparent, // Transparent to let GlassCard handle the Neumorphic background
                         drawerContentColor = p.textPrimary,
-                        drawerShape = RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp),
+                        drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
                         modifier = Modifier
-                            .width(292.dp)
+                            .width(288.dp)
                             .fillMaxHeight()
-                            .border(
-                                width = 1.dp,
-                                color = p.cardBorder,
-                                shape = RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp)
-                            )
+                            .alanGlassCard(cornerRadius = 24.dp)
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -150,7 +152,7 @@ fun AlanMainScreen(
                                 .fillMaxSize()
                                 .statusBarsPadding()
                                 .navigationBarsPadding()
-                                .padding(horizontal = 16.dp, vertical = 18.dp)
+                                .padding(horizontal = 16.dp, vertical = 20.dp)
                         ) {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -158,30 +160,28 @@ fun AlanMainScreen(
                                     .weight(1f)
                                     .verticalScroll(rememberScrollState())
                             ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.alan_brand_logo),
-                                    contentDescription = APP_NAME,
-                                    contentScale = ContentScale.Fit,
-                                    modifier = Modifier.size(54.dp)
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                LtrContent {
-                                    Text(
-                                        text = APP_NAME,
-                                        color = p.textPrimary,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 18.sp
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(68.dp)
+                                        .alanGlassCard(cornerRadius = 20.dp)
+                                ) {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.alan_brand_logo),
+                                        contentDescription = APP_NAME,
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.size(42.dp)
                                     )
                                 }
-                                Text(
-                                    text = "ابزارهای امن شبکه",
-                                    color = p.textMuted,
-                                    fontSize = 11.sp
-                                )
+                                Spacer(Modifier.height(12.dp))
+                                LtrContent {
+                                    Text(text = APP_NAME, color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 17.sp)
+                                }
+                                Text(text = "ابزارهای امن شبکه", color = p.textMuted, fontSize = 11.sp)
 
-                                Spacer(Modifier.height(22.dp))
+                                Spacer(Modifier.height(24.dp))
 
-                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     navItems.forEach { item ->
                                         val selected = currentTab == item.index
                                         Row(
@@ -189,60 +189,35 @@ fun AlanMainScreen(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .height(IntrinsicSize.Min)
-                                                .clip(RoundedCornerShape(13.dp))
-                                                .background(if (selected) p.accentSoftBg else Color.Transparent)
-                                                .border(
-                                                    width = 1.dp,
-                                                    color = if (selected) p.glowBorder else Color.Transparent,
-                                                    shape = RoundedCornerShape(13.dp)
-                                                )
+                                                .then(if (selected) Modifier.alanNeuInset(14.dp) else Modifier)
+                                                .clip(RoundedCornerShape(14.dp))
                                                 .clickable {
-                                                    currentTab = item.index
-                                                    controller.updateSettings(mapOf("lastActiveTab" to item.index))
+                                                    selectTab(item.index)
                                                     scope.launch { drawerState.close() }
                                                 }
                                         ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .width(3.5.dp)
-                                                    .fillMaxHeight()
-                                                    .background(if (selected) p.accentGold else Color.Transparent)
-                                            )
+                                            if (selected) {
+                                                Box(modifier = Modifier.width(4.dp).fillMaxHeight().background(p.accentGold))
+                                            }
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                horizontalArrangement = Arrangement.spacedBy(14.dp),
                                                 modifier = Modifier
                                                     .weight(1f)
-                                                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                                                    .padding(horizontal = 16.dp, vertical = 12.dp)
                                             ) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = item.icon,
-                                                        contentDescription = item.title,
-                                                        tint = if (selected) p.accentGold else p.textSecondary,
-                                                        modifier = Modifier.size(20.dp)
-                                                    )
-                                                    Text(
-                                                        text = item.title,
-                                                        color = if (selected) p.textPrimary else p.textSecondary,
-                                                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                                                        fontSize = 14.sp
-                                                    )
-                                                }
-                                                if (item.badge.isNotBlank()) {
-                                                    LtrContent {
-                                                        Text(
-                                                            text = item.badge,
-                                                            color = p.accentGold,
-                                                            fontFamily = FontFamily.Monospace,
-                                                            fontWeight = FontWeight.Bold,
-                                                            fontSize = 11.sp
-                                                        )
-                                                    }
-                                                }
+                                                Icon(
+                                                    imageVector = item.icon,
+                                                    contentDescription = item.title,
+                                                    tint = if (selected) p.accentGold else p.textSecondary,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                                Text(
+                                                    text = item.title,
+                                                    color = if (selected) p.textPrimary else p.textSecondary,
+                                                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Bold,
+                                                    fontSize = 14.sp
+                                                )
                                             }
                                         }
                                     }
@@ -254,13 +229,11 @@ fun AlanMainScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(13.dp))
-                                    .background(p.cardBg)
-                                    .border(1.dp, p.cardBorder, RoundedCornerShape(13.dp))
-                                    .padding(horizontal = 14.dp, vertical = 11.dp)
+                                    .alanGlassCard(cornerRadius = 14.dp)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp)
                             ) {
                                 Column {
-                                    Text("اتصال خودکار هوشمند", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Text("حالت خودکار هوشمند", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                     LtrContent {
                                         Text("v$APP_VERSION", color = p.textMuted, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
                                     }
@@ -275,7 +248,7 @@ fun AlanMainScreen(
                 }
             ) {
                 Scaffold(
-                    containerColor = p.rootBg,
+                    containerColor = p.rootBg, // The scaffold background relies on Neumorphic root
                     topBar = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -286,15 +259,14 @@ fun AlanMainScreen(
                                 .statusBarsPadding()
                                 .padding(horizontal = 16.dp, vertical = 10.dp)
                         ) {
-                            Surface(
-                                onClick = { scope.launch { drawerState.open() } },
-                                shape = RoundedCornerShape(11.dp),
-                                color = p.cardBg,
-                                border = BorderStroke(1.dp, p.cardBorder)
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .alanGlassCard(cornerRadius = 12.dp)
+                                    .clickable { scope.launch { drawerState.open() } }
                             ) {
-                                Box(contentAlignment = Alignment.Center, modifier = Modifier.size(40.dp)) {
-                                    Icon(Icons.Outlined.Menu, "منو", tint = p.textPrimary, modifier = Modifier.size(22.dp))
-                                }
+                                Icon(Icons.Outlined.Menu, "منو", tint = p.textPrimary, modifier = Modifier.size(22.dp))
                             }
 
                             LtrContent {
@@ -303,46 +275,40 @@ fun AlanMainScreen(
                                     color = p.accentGold,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 18.sp,
-                                    letterSpacing = 1.2.sp
+                                    letterSpacing = 1.1.sp
                                 )
                             }
 
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Surface(
-                                    onClick = { controller.updateSettings(mapOf("darkTheme" to !darkTheme)) },
-                                    shape = RoundedCornerShape(11.dp),
-                                    color = p.cardBg,
-                                    border = BorderStroke(1.dp, p.cardBorder)
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .alanGlassCard(cornerRadius = 12.dp)
+                                        .clickable { controller.updateSettings(mapOf("darkTheme" to !darkTheme)) }
                                 ) {
-                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(36.dp)) {
-                                        Icon(
-                                            imageVector = if (darkTheme) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
-                                            contentDescription = "تغییر تم",
-                                            tint = p.accentGold,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
+                                    Icon(
+                                        imageVector = if (darkTheme) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                                        contentDescription = "تغییر تم",
+                                        tint = p.accentGold,
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
 
-                                Surface(
-                                    onClick = {
-                                        currentTab = 4
-                                        controller.updateSettings(mapOf("lastActiveTab" to 4))
-                                    },
-                                shape = RoundedCornerShape(18.dp),
-                                color = p.cardBg,
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (telemetry.isConnected) p.emerald.copy(alpha = 0.7f) else p.glowBorder
-                                )
-                            ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier
+                                        .alanGlassCard(
+                                            highlighted = telemetry.isConnected,
+                                            cornerRadius = 20.dp,
+                                            accentBorderColor = p.emerald
+                                        )
+                                        .clickable { selectTab(5) }
+                                        .padding(horizontal = 12.dp, vertical = 9.dp)
                                 ) {
                                     Image(
                                         painter = painterResource(id = R.drawable.alan_brand_logo),
@@ -360,7 +326,6 @@ fun AlanMainScreen(
                                         )
                                     }
                                 }
-                            }
                             }
                         }
                     }
@@ -380,10 +345,11 @@ fun AlanMainScreen(
                                 profiles = profiles,
                                 settings = settings,
                                 onToggleConnection = { controller.toggleConnection() },
-                                onHuntBest = { controller.huntBestAndConnect() },
+                                onActivateAutoMode = { connectNow ->
+                                    controller.activateAutoModeAndConnect(connectNow)
+                                },
                                 onImportFromClipboard = { controller.importFromClipboard() },
-                                onSelectProfile = { idx -> controller.selectConfig(idx) },
-                                onUpdateSettingsPatch = { patch -> controller.updateSettings(patch) }
+                                onSelectProfile = { idx -> controller.selectConfig(idx) }
                             )
                             1 -> ProfilesTabScreen(
                                 profiles = profiles,
@@ -392,8 +358,8 @@ fun AlanMainScreen(
                                 onSelectConfig = { idx -> controller.selectConfig(idx) },
                                 onImportFromClipboard = { controller.importFromClipboard() },
                                 onHuntBest = {
-                                    controller.huntBestAndConnect()
-                                    currentTab = 0
+                                    controller.activateAutoModeAndConnect(true)
+                                    selectTab(0)
                                 },
                                 onQuickPingAll = { controller.quickPingConfigs() },
                                 onSortConfigs = { by -> controller.sortConfigs(by) },
@@ -408,11 +374,14 @@ fun AlanMainScreen(
                                 onSaveEditable = { idx, fields -> controller.saveConfigEditable(idx, fields) },
                                 onSendToMethodScanner = { idx ->
                                     forcedScannerTarget = idx
-                                    currentTab = 2
+                                    selectTab(2)
                                 },
                                 onAddSubscription = { url, title -> controller.addSubscription(url, title) },
                                 onRefreshSubscriptions = { controller.refreshSubscriptions() },
-                                onDeleteSubscription = { idx -> controller.deleteSubscription(idx) }
+                                onDeleteSubscription = { idx -> controller.deleteSubscription(idx) },
+                                onQuickCloneCleanIp = { idx, count ->
+                                    controller.quickCloneConfigWithCleanIps(idx, count)
+                                }
                             )
                             2 -> ScannerTabScreen(
                                 profiles = profiles,
@@ -420,26 +389,37 @@ fun AlanMainScreen(
                                 scanState = scanState,
                                 forcedTargetIndex = forcedScannerTarget,
                                 onConsumedForcedTarget = { forcedScannerTarget = null },
-                                onStartScan = { mode, targetIdx, autoConn, prune ->
-                                    controller.startScanner(mode, targetIdx, autoConn, prune)
+                                onStartMultiMethodScan = { scopeMode, indices, autoConn, useCleanIp ->
+                                    controller.startMultiTargetMethodScan(scopeMode, indices, autoConn, useCleanIp)
                                 },
                                 onStopScan = { controller.stopScanner() },
+                                onImportFromClipboard = { controller.importFromClipboard() },
                                 onApplyVectorSingle = { vecId, tIdx, ep ->
                                     controller.applyScannedVector(vecId, tIdx, ep, false)
                                 },
-                                onApplyVectorAll = { vecId, ep ->
-                                    controller.applyVectorToAllConfigs(vecId, ep)
-                                },
                                 onApplyVectorAndConnect = { vecId, tIdx, ep ->
                                     controller.applyScannedVector(vecId, tIdx, ep, true)
-                                    currentTab = 0
-                                },
-                                onConnectScannedProfile = { tIdx, boundVec, ep ->
-                                    controller.connectScannedProfile(tIdx, boundVec, ep)
-                                    currentTab = 0
+                                    selectTab(0)
                                 }
                             )
-                            3 -> GeneralSettingsScreen(
+                            3 -> CleanIpScannerScreen(
+                                profiles = profiles,
+                                settings = settings,
+                                cleanIpHits = cleanIpHits,
+                                cleanIpState = cleanIpState,
+                                onStartScan = { srcMode, customRanges, port, maxHits ->
+                                    controller.startCleanIpScan(srcMode, customRanges, port, maxHits)
+                                },
+                                onStopScan = { controller.stopCleanIpScan() },
+                                onRefreshGithubSubnets = { controller.refreshSubnetsFromGithub() },
+                                onUpdateSubnetsUrl = { url ->
+                                    controller.updateSettings(mapOf("subnetsRepoUrl" to url))
+                                },
+                                onApplyOrCloneIps = { ips, targetMode, selIndices, cloneMode, clonesCount ->
+                                    controller.applyCleanIpsToTargets(ips, targetMode, selIndices, cloneMode, clonesCount)
+                                }
+                            )
+                            4 -> GeneralSettingsScreen(
                                 settings = settings,
                                 vectors = vectors,
                                 isFindingBestMethod = isFindingBestMethod,
@@ -448,11 +428,11 @@ fun AlanMainScreen(
                                 onReplaceSettings = { controller.updateSettings(it) },
                                 onPatchSettings = { controller.updateSettings(it) }
                             )
-                            4 -> XraySettingsScreen(
+                            5 -> XraySettingsScreen(
                                 settings = settings,
                                 onPatchSettings = { controller.updateSettings(it) }
                             )
-                            5 -> LogsTabScreen(
+                            6 -> LogsTabScreen(
                                 logs = logs,
                                 onClearLogs = { controller.clearLogs() }
                             )

@@ -104,7 +104,7 @@ data class EditableConfigFields(
     val hostHeader: String = "",
     val path: String = "/",
     val alpn: String = "http/1.1",
-    val fingerprint: String = "chrome",
+    val fingerprint: String = "custom_poly",
     val flow: String = "",
     val publicKey: String = "",
     val shortId: String = "",
@@ -115,7 +115,7 @@ data class EditableConfigFields(
 
 data class EngineSettings(
     val autoPilot: Boolean = true,
-    val requireYoutube6s: Boolean = true,
+    val requireYoutube6s: Boolean = false,
     val verifyUploadStream: Boolean = true,
     val selfHealingWatchdog: Boolean = true,
     val engineMode: String = "auto_hybrid",
@@ -123,7 +123,7 @@ data class EngineSettings(
     val fragmentPackets: String = "tlshello",
     val fragmentLength: String = "5-16",
     val fragmentInterval: String = "2-3",
-    val fingerprint: String = "chrome",
+    val fingerprint: String = "custom_poly",
     val alpnOverride: String = "auto",
     val wsEarlyData: Int = 2048,
     val muxEnabled: Boolean = false,
@@ -136,7 +136,9 @@ data class EngineSettings(
     val socksPort: Int = 10808,
     val httpPort: Int = 10809,
     val darkTheme: Boolean = true,
-    val lastActiveTab: Int = 0
+    val lastActiveTab: Int = 0,
+    val subnetsRepoUrl: String = "https://raw.githubusercontent.com/DrAlanK/Alan-RIP-Dpi-Android/main/subnets.txt",
+    val autoCleanIpForCf: Boolean = true
 )
 
 data class VectorSpec(
@@ -174,6 +176,24 @@ data class SubscriptionItem(
     val title: String,
     val url: String,
     val updatedAt: String = ""
+)
+
+
+data class CleanIpHit(
+    val ip: String,
+    val port: Int = 443,
+    val latencyMs: Int = 0,
+    val subnet: String = "",
+    val colo: String = "CF"
+)
+
+data class CleanIpScanState(
+    val isRunning: Boolean = false,
+    val sourceMode: String = "github",
+    val port: Int = 443,
+    val percent: Int = 0,
+    val summary: String = "آماده اسکن IP تمیز کلادفلر",
+    val loadedSubnetsCount: Int = 22
 )
 
 interface AlanEngineController {
@@ -244,6 +264,42 @@ interface AlanEngineController {
         get() = MutableStateFlow("")
 
     fun autoDetectBestMethod() {}
+
+    val cleanIpHits: StateFlow<List<CleanIpHit>>
+        get() = MutableStateFlow(emptyList())
+
+    val cleanIpState: StateFlow<CleanIpScanState>
+        get() = MutableStateFlow(CleanIpScanState())
+
+    fun activateAutoModeAndConnect(connectImmediately: Boolean = true) {}
+
+    fun startMultiTargetMethodScan(
+        scopeMode: String,
+        selectedIndices: List<Int>,
+        autoConnect: Boolean,
+        useCleanIp: Boolean = false
+    ) {}
+
+    fun startCleanIpScan(
+        sourceMode: String = "github",
+        customRanges: String = "",
+        port: Int = 443,
+        maxResults: Int = 20
+    ) {}
+
+    fun stopCleanIpScan() {}
+
+    fun refreshSubnetsFromGithub() {}
+
+    fun applyCleanIpsToTargets(
+        ips: List<String>,
+        targetMode: String,
+        selectedIndices: List<Int>,
+        cloneMode: Boolean,
+        clonesPerConfig: Int = 3
+    ) {}
+
+    fun quickCloneConfigWithCleanIps(profileIndex: Int, cloneCount: Int = 5) {}
 
     fun clearLogs()
 }

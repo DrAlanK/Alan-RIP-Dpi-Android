@@ -1,8 +1,6 @@
 package com.alan.ripdpi.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,14 +18,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -62,16 +57,11 @@ fun GeneralSettingsScreen(
     var tunDnsText by remember(settings.tunDns) { mutableStateOf(settings.tunDns) }
     var socksPortText by remember(settings.socksPort) { mutableStateOf(settings.socksPort.toString()) }
     var httpPortText by remember(settings.httpPort) { mutableStateOf(settings.httpPort.toString()) }
+    var subnetsUrlText by remember(settings.subnetsRepoUrl) { mutableStateOf(settings.subnetsRepoUrl) }
     var savedMsg by remember { mutableStateOf("") }
 
     val methodOptions = remember(vectors) {
-        vectors.map { spec ->
-            SelectOptionItem(
-                value = spec.id,
-                label = spec.id,
-                subtitle = spec.name.substringAfter("—").trim()
-            )
-        }
+        vectors.map { spec -> SelectOptionItem(spec.id, spec.id, spec.name.substringAfter("—").trim()) }
     }
 
     val modeOptions = remember {
@@ -83,151 +73,113 @@ fun GeneralSettingsScreen(
     }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("تنظیمات عمومی", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
-            Surface(
-                onClick = {
-                    onReplaceSettings(EngineSettings())
-                    savedMsg = "تنظیمات به حالت پیش‌فرض برگشت."
-                },
-                shape = RoundedCornerShape(9.dp),
-                color = p.subtleBg,
-                border = BorderStroke(1.dp, p.cardBorder)
+            Text("تنظیمات عمومی", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 17.sp)
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .alanGlassCard(cornerRadius = 12.dp)
+                    .clickable {
+                        onReplaceSettings(EngineSettings())
+                        savedMsg = "تنظیمات به حالت پیش‌فرض برگشت."
+                    }
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                Text("پیش‌فرض", color = p.accentGold, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp))
+                Text("پیش‌فرض", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
         }
 
         if (savedMsg.isNotBlank()) {
-            Text(savedMsg, color = p.emerald, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            Text(savedMsg, color = p.emerald, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
 
         SimpleSectionCard("متد عبور از فیلتر") {
-            AlanCustomSelectBox(
-                label = "انتخاب متد",
-                selectedValue = settings.manualVectorId,
-                options = methodOptions,
-                onSelect = { onPatchSettings(mapOf("manualVectorId" to it)) }
-            )
+            AlanCustomSelectBox("انتخاب متد", settings.manualVectorId, methodOptions, { onPatchSettings(mapOf("manualVectorId" to it)) })
 
-            Surface(
-                onClick = onAutoDetectBestMethod,
-                shape = RoundedCornerShape(11.dp),
-                color = if (isFindingBestMethod) p.danger else p.accentGold,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                    modifier = Modifier.padding(vertical = 11.dp, horizontal = 12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.AutoFixHigh,
-                        contentDescription = null,
-                        tint = if (isFindingBestMethod) Color.White else p.onAccent,
-                        modifier = Modifier.size(18.dp)
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alanGlassCard(
+                        cornerRadius = 14.dp,
+                        highlighted = !isFindingBestMethod,
+                        accentBorderColor = if(isFindingBestMethod) p.danger else p.accentGold
                     )
-                    Spacer(Modifier.width(7.dp))
+                    .clickable { onAutoDetectBestMethod() }
+                    .padding(vertical = 14.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Icon(Icons.Outlined.AutoFixHigh, null, tint = if (isFindingBestMethod) p.danger else p.accentGold, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = if (isFindingBestMethod) "توقف جستجوی متد" else "پیدا کردن خودکار بهترین متد",
-                        color = if (isFindingBestMethod) Color.White else p.onAccent,
+                        color = if(isFindingBestMethod) p.danger else p.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
-                        fontSize = 12.sp
+                        fontSize = 13.sp
                     )
                 }
             }
 
             if (autoMethodStatus.isNotBlank()) {
-                Text(
-                    text = autoMethodStatus,
-                    color = if (autoMethodStatus.contains("انتخاب شد")) p.emerald else p.accentGold,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Text(autoMethodStatus, color = if (autoMethodStatus.contains("انتخاب شد")) p.emerald else p.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
 
-            AlanCustomSelectBox(
-                label = "حالت کاری موتور",
-                selectedValue = settings.engineMode,
-                options = modeOptions,
-                onSelect = { onPatchSettings(mapOf("engineMode" to it)) }
-            )
+            AlanCustomSelectBox("حالت کاری موتور", settings.engineMode, modeOptions, { onPatchSettings(mapOf("engineMode" to it)) })
         }
 
         SimpleSectionCard("ظاهر برنامه") {
-            CleanSwitchItem(
-                title = "تم تیره (حالت شب)",
-                subtitle = "با خاموش کردن این گزینه، تم سفید فعال و برای همیشه ذخیره می‌شود",
-                checked = settings.darkTheme,
-                onChecked = { onPatchSettings(mapOf("darkTheme" to it)) }
-            )
+            CleanSwitchItem("تم تیره (حالت شب)", "با خاموش کردن این گزینه، تم سفید فعال می‌شود", settings.darkTheme, { onPatchSettings(mapOf("darkTheme" to it)) })
         }
 
         SimpleSectionCard("اتصال هوشمند") {
-            CleanSwitchItem(
-                title = "انتخاب خودکار متد هنگام اتصال",
-                subtitle = "تست خودکار متدها در زمان زدن دکمه اتصال",
-                checked = settings.autoPilot,
-                onChecked = { onPatchSettings(mapOf("autoPilot" to it)) }
-            )
-            CleanSwitchItem(
-                title = "تست پایداری یوتیوب",
-                subtitle = "اطمینان از قطع نشدن ارتباط بعد از چند ثانیه",
-                checked = settings.requireYoutube6s,
-                onChecked = { onPatchSettings(mapOf("requireYoutube6s" to it)) }
-            )
-            CleanSwitchItem(
-                title = "تست سلامت آپلود",
-                subtitle = "بررسی باز بودن مسیر ارسال داده",
-                checked = settings.verifyUploadStream,
-                onChecked = { onPatchSettings(mapOf("verifyUploadStream" to it)) }
-            )
-            CleanSwitchItem(
-                title = "تعمیر خودکار اتصال",
-                subtitle = "جایگزینی خودکار متد در صورت افت اینترنت",
-                checked = settings.selfHealingWatchdog,
-                onChecked = { onPatchSettings(mapOf("selfHealingWatchdog" to it)) }
-            )
+            CleanSwitchItem("تزریق خودکار IP تمیز روی کلادفلر", "جایگزینی خودکار IP تمیز", settings.autoCleanIpForCf, { onPatchSettings(mapOf("autoCleanIpForCf" to it)) })
+            CleanSwitchItem("انتخاب خودکار متد هنگام اتصال", "تست خودکار متدها", settings.autoPilot, { onPatchSettings(mapOf("autoPilot" to it)) })
+            CleanSwitchItem("تست پایداری یوتیوب", "اطمینان از قطع نشدن ارتباط", settings.requireYoutube6s, { onPatchSettings(mapOf("requireYoutube6s" to it)) })
+            CleanSwitchItem("تست سلامت آپلود", "بررسی باز بودن مسیر ارسال داده", settings.verifyUploadStream, { onPatchSettings(mapOf("verifyUploadStream" to it)) })
+            CleanSwitchItem("تعمیر خودکار اتصال", "جایگزینی خودکار متد در صورت افت اینترنت", settings.selfHealingWatchdog, { onPatchSettings(mapOf("selfHealingWatchdog" to it)) })
         }
 
         SimpleSectionCard("شبکه و پورت‌ها") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 AlanSheetTextField("MTU تونل", tunMtuText, { tunMtuText = it.filter(Char::isDigit) }, ltr = true, numeric = true, modifier = Modifier.weight(1f))
                 AlanSheetTextField("آدرس DNS", tunDnsText, { tunDnsText = it }, ltr = true, modifier = Modifier.weight(1.2f))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 AlanSheetTextField("پورت SOCKS5", socksPortText, { socksPortText = it.filter(Char::isDigit) }, ltr = true, numeric = true, modifier = Modifier.weight(1f))
                 AlanSheetTextField("پورت HTTP", httpPortText, { httpPortText = it.filter(Char::isDigit) }, ltr = true, numeric = true, modifier = Modifier.weight(1f))
             }
-            Surface(
-                onClick = {
-                    onPatchSettings(
-                        mapOf(
-                            "tunMtu" to (tunMtuText.toIntOrNull()?.coerceIn(1280, 9000) ?: settings.tunMtu),
-                            "tunDns" to tunDnsText.trim().ifBlank { "1.1.1.1" },
-                            "socksPort" to (socksPortText.toIntOrNull()?.coerceIn(1025, 65534) ?: settings.socksPort),
-                            "httpPort" to (httpPortText.toIntOrNull()?.coerceIn(1025, 65534) ?: settings.httpPort)
+            AlanSheetTextField("لینک فایل ساب‌نت", subnetsUrlText, { subnetsUrlText = it }, ltr = true)
+            
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alanGlassCard(cornerRadius = 14.dp, highlighted = true)
+                    .clickable {
+                        onPatchSettings(
+                            mapOf(
+                                "tunMtu" to (tunMtuText.toIntOrNull()?.coerceIn(1280, 9000) ?: settings.tunMtu),
+                                "tunDns" to tunDnsText.trim().ifBlank { "1.1.1.1" },
+                                "socksPort" to (socksPortText.toIntOrNull()?.coerceIn(1025, 65534) ?: settings.socksPort),
+                                "httpPort" to (httpPortText.toIntOrNull()?.coerceIn(1025, 65534) ?: settings.httpPort),
+                                "subnetsRepoUrl" to subnetsUrlText.trim()
+                            )
                         )
-                    )
-                    savedMsg = "تنظیمات شبکه ذخیره شد."
-                },
-                shape = RoundedCornerShape(11.dp),
-                color = p.accentGold,
-                modifier = Modifier.fillMaxWidth()
+                        savedMsg = "تنظیمات شبکه ذخیره شد."
+                    }
+                    .padding(vertical = 14.dp)
             ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 10.dp)) {
-                    Text("ذخیره تنظیمات شبکه", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
-                }
+                Text("ذخیره تنظیمات شبکه", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
             }
         }
     }
@@ -248,86 +200,64 @@ fun XraySettingsScreen(
     var savedMsg by remember { mutableStateOf("") }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
-        Text("تنظیمات Xray", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+        Text("تنظیمات Xray", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 17.sp)
         if (savedMsg.isNotBlank()) {
-            Text(savedMsg, color = p.emerald, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            Text(savedMsg, color = p.emerald, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
 
         SimpleSectionCard("تنظیمات TLS و مرورگر") {
-            AlanCustomSelectBox(
-                label = "شبیه‌سازی مرورگر (Fingerprint)",
-                selectedValue = settings.fingerprint,
-                options = listOf("chrome", "firefox", "safari", "ios", "edge", "randomized")
-                    .map { SelectOptionItem(it, it) },
-                onSelect = { onPatchSettings(mapOf("fingerprint" to it)) }
-            )
-            AlanCustomSelectBox(
-                label = "تنظیم ALPN",
-                selectedValue = settings.alpnOverride,
-                options = listOf("auto", "h2,http/1.1", "http/1.1", "h2")
-                    .map { SelectOptionItem(it, it) },
-                onSelect = { onPatchSettings(mapOf("alpnOverride" to it)) }
-            )
+            AlanCustomSelectBox("شبیه‌سازی مرورگر", settings.fingerprint, listOf("chrome", "firefox", "safari", "ios", "edge", "randomized").map { SelectOptionItem(it, it) }, { onPatchSettings(mapOf("fingerprint" to it)) })
+            AlanCustomSelectBox("تنظیم ALPN", settings.alpnOverride, listOf("auto", "h2,http/1.1", "http/1.1", "h2").map { SelectOptionItem(it, it) }, { onPatchSettings(mapOf("alpnOverride" to it)) })
             AlanSheetTextField("مقدار Early Data وب‌سوکت", earlyDataText, { earlyDataText = it.filter(Char::isDigit) }, ltr = true, numeric = true)
         }
 
         SimpleSectionCard("فرگمنت و برش پکت") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 AlanSheetTextField("طول گام برش (Bytes)", strideText, { strideText = it.filter(Char::isDigit) }, ltr = true, numeric = true, modifier = Modifier.weight(1f))
                 AlanSheetTextField("نوسان تصادفی (Jitter)", jitterText, { jitterText = it.filter(Char::isDigit) }, ltr = true, numeric = true, modifier = Modifier.weight(1f))
             }
 
-            CleanSwitchItem(
-                title = "فرگمنت داخلی Xray (در حالت دستی)",
-                subtitle = "خرد کردن پکت‌های هندشیک توسط هسته Xray",
-                checked = settings.fragmentEnabled,
-                onChecked = { onPatchSettings(mapOf("fragmentEnabled" to it)) }
-            )
+            CleanSwitchItem("فرگمنت داخلی Xray (در حالت دستی)", "خرد کردن پکت‌های هندشیک توسط هسته Xray", settings.fragmentEnabled, { onPatchSettings(mapOf("fragmentEnabled" to it)) })
 
             if (settings.fragmentEnabled) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                     AlanSheetTextField("طول تکه (Length)", fragLenText, { fragLenText = it }, ltr = true, modifier = Modifier.weight(1f))
                     AlanSheetTextField("وقفه (ms)", fragIntText, { fragIntText = it }, ltr = true, modifier = Modifier.weight(1f))
                 }
             }
 
-            CleanSwitchItem(
-                title = "ترکیب کانکشن‌ها (Mux)",
-                subtitle = "ارسال هم‌زمان چند درخواست در یک تونل",
-                checked = settings.muxEnabled,
-                onChecked = { onPatchSettings(mapOf("muxEnabled" to it)) }
-            )
+            CleanSwitchItem("ترکیب کانکشن‌ها (Mux)", "ارسال هم‌زمان چند درخواست در یک تونل", settings.muxEnabled, { onPatchSettings(mapOf("muxEnabled" to it)) })
             if (settings.muxEnabled) {
                 AlanSheetTextField("تعداد هم‌زمانی Mux", muxText, { muxText = it.filter(Char::isDigit) }, ltr = true, numeric = true)
             }
 
-            Surface(
-                onClick = {
-                    onPatchSettings(
-                        mapOf(
-                            "forwardStrideBytes" to (strideText.toIntOrNull()?.coerceIn(0, 4096) ?: settings.forwardStrideBytes),
-                            "strideJitterBytes" to (jitterText.toIntOrNull()?.coerceIn(0, 512) ?: settings.strideJitterBytes),
-                            "wsEarlyData" to (earlyDataText.toIntOrNull()?.coerceIn(0, 8192) ?: settings.wsEarlyData),
-                            "fragmentLength" to fragLenText.trim().ifBlank { "5-16" },
-                            "fragmentInterval" to fragIntText.trim().ifBlank { "2-3" },
-                            "muxConcurrency" to (muxText.toIntOrNull()?.coerceIn(1, 64) ?: settings.muxConcurrency)
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alanGlassCard(cornerRadius = 14.dp, highlighted = true)
+                    .clickable {
+                        onPatchSettings(
+                            mapOf(
+                                "forwardStrideBytes" to (strideText.toIntOrNull()?.coerceIn(0, 4096) ?: settings.forwardStrideBytes),
+                                "strideJitterBytes" to (jitterText.toIntOrNull()?.coerceIn(0, 512) ?: settings.strideJitterBytes),
+                                "wsEarlyData" to (earlyDataText.toIntOrNull()?.coerceIn(0, 8192) ?: settings.wsEarlyData),
+                                "fragmentLength" to fragLenText.trim().ifBlank { "5-16" },
+                                "fragmentInterval" to fragIntText.trim().ifBlank { "2-3" },
+                                "muxConcurrency" to (muxText.toIntOrNull()?.coerceIn(1, 64) ?: settings.muxConcurrency)
+                            )
                         )
-                    )
-                    savedMsg = "تنظیمات Xray ذخیره شد."
-                },
-                shape = RoundedCornerShape(11.dp),
-                color = p.accentGold,
-                modifier = Modifier.fillMaxWidth()
+                        savedMsg = "تنظیمات Xray ذخیره شد."
+                    }
+                    .padding(vertical = 14.dp)
             ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 10.dp)) {
-                    Text("ذخیره تنظیمات Xray", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
-                }
+                Text("ذخیره تنظیمات Xray", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
             }
         }
     }
@@ -340,13 +270,13 @@ private fun SimpleSectionCard(
 ) {
     val p = LocalAlanPalette.current
     Column(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .alanGlassCard(cornerRadius = 15.dp)
-            .padding(14.dp)
+            .alanGlassCard(cornerRadius = 20.dp)
+            .padding(18.dp)
     ) {
-        Text(title, color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+        Text(title, color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
         content()
     }
 }
@@ -364,17 +294,15 @@ private fun CleanSwitchItem(
         horizontalArrangement = Arrangement.SpaceBetween,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(11.dp))
-            .background(p.subtleBg)
-            .border(1.dp, p.cardBorder, RoundedCornerShape(11.dp))
+            .alanNeuInset(cornerRadius = 16.dp)
             .clickable { onChecked(!checked) }
-            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            Text(subtitle, color = p.textMuted, fontSize = 10.sp)
+            Text(title, color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text(subtitle, color = p.textMuted, fontSize = 11.sp)
         }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(12.dp))
         AlanPillSwitch(checked = checked, onCheckedChange = onChecked)
     }
 }
@@ -396,10 +324,10 @@ fun LogsTabScreen(
     }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -407,45 +335,46 @@ fun LogsTabScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column {
-                Text("لاگ‌ها", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                Text("لاگ‌ها", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 17.sp)
                 Text(
                     text = if (copied) "در کلیپ‌بورد کپی شد." else "${logs.size} خط ثبت شده",
                     color = if (copied) p.emerald else p.textMuted,
-                    fontSize = 11.sp
+                    fontSize = 12.sp
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Surface(
-                    onClick = {
-                        if (logs.isNotEmpty()) {
-                            copyPlainTextToClipboard(context, "Logs", logs.joinToString("\n"))
-                            copied = true
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(
+                    modifier = Modifier
+                        .alanGlassCard(cornerRadius = 12.dp)
+                        .clickable {
+                            if (logs.isNotEmpty()) {
+                                copyPlainTextToClipboard(context, "Logs", logs.joinToString("\n"))
+                                copied = true
+                            }
                         }
-                    },
-                    shape = RoundedCornerShape(9.dp),
-                    color = p.subtleBg,
-                    border = BorderStroke(1.dp, p.cardBorder)
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-                        Icon(Icons.Outlined.ContentCopy, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text("کپی", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.ContentCopy, null, tint = p.textPrimary, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("کپی", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
-                Surface(
-                    onClick = {
-                        copied = false
-                        onClearLogs()
-                    },
-                    shape = RoundedCornerShape(9.dp),
-                    color = p.danger.copy(alpha = 0.14f),
-                    border = BorderStroke(1.dp, p.danger.copy(alpha = 0.4f))
+
+                Box(
+                    modifier = Modifier
+                        .alanGlassCard(cornerRadius = 12.dp)
+                        .clickable {
+                            copied = false
+                            onClearLogs()
+                        }
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-                        Icon(Icons.Outlined.DeleteOutline, null, tint = p.danger, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("پاک کردن", color = p.danger, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.DeleteOutline, null, tint = p.danger, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("پاک کردن", color = p.danger, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
@@ -455,20 +384,18 @@ fun LogsTabScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color(0xFF05080E))
-                .border(1.dp, p.cardBorder, RoundedCornerShape(14.dp))
+                .alanNeuInset(cornerRadius = 18.dp)
         ) {
             if (logs.isEmpty()) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Text("لاگی ثبت نشده است.", color = p.textMuted, fontSize = 12.sp)
+                    Text("لاگی ثبت نشده است.", color = p.textMuted, fontSize = 13.sp)
                 }
             } else {
                 LtrContent {
                     LazyColumn(
                         state = listState,
-                        contentPadding = PaddingValues(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
                         itemsIndexed(logs, key = { idx, _ -> idx }) { _, line ->
@@ -477,17 +404,23 @@ fun LogsTabScreen(
                                 low.contains("error") || low.contains("fail") || low.contains("blocked") || low.contains("timeout") -> Color(0xFFF87171)
                                 low.contains("up:") || low.contains("verified") || low.contains("qualified") || low.contains("winner") -> Color(0xFF34D399)
                                 low.contains("vec-") || low.contains("stage") -> Color(0xFFF5C451)
-                                else -> Color(0xFFCBD5E1)
+                                else -> Color(0xFFCBD5E1) // Default Log Color in Dark
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Box(
                                     modifier = Modifier
                                         .padding(top = 6.dp)
-                                        .size(5.dp)
+                                        .size(6.dp)
                                         .clip(CircleShape)
                                         .background(col)
                                 )
-                                Text(line, color = col, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 16.sp)
+                                Text(
+                                    text = line,
+                                    color = col,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    lineHeight = 18.sp
+                                )
                             }
                         }
                     }
