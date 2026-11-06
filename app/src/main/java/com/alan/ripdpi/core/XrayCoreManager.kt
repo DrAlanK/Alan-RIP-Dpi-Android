@@ -10,10 +10,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
+@Suppress("unused")
 class XrayCoreManager(
     context: Context,
     private val statusLogger: ((String) -> Unit)? = null
 ) {
+    @Volatile var probeSilentMode: Boolean = false
+
 
     private val appContext = context.applicationContext
     private val lock = ReentrantLock()

@@ -484,55 +484,40 @@ object UriConfigCodec {
     }
 
     fun buildVectorPlan(profile: ProfileItem, settings: EngineSettings): List<BypassVector> {
-        val all = VectorCatalog.VECTOR_REGISTRY
-        val directVec = all.firstOrNull { it.vectorId == "VEC-00" } ?: all.last()
-        val spec = parseFullConfig(profile.uri)
-        val proto = (spec?.protocol ?: profile.protocol).uppercase()
+        val baseVectors = VectorCatalog.filterVectorsByMode(settings.engineMode).filter { it.family != "DIRECT" }
+        val directVec = VectorCatalog.findVector("VEC-00")
+        val uriLow = profile.uri.lowercase(java.util.Locale.US)
+        val protoUp = profile.protocol.uppercase(java.util.Locale.US)
+        val hostLow = profile.originalHost.ifBlank { profile.host }.lowercase(java.util.Locale.US).trim()
 
-        if (proto == "SHADOWSOCKS" || proto == "SS") {
+        if (protoUp in setOf("SHADOWSOCKS", "SS", "SOCKS")) {
             return listOf(directVec)
         }
 
-        val sec = (spec?.security ?: "tls").lowercase()
-        val net = (spec?.network ?: "tcp").lowercase()
-        val headerType = (spec?.headerType ?: "none").lowercase()
-        val isDomestic = profile.host.lowercase().endsWith(".ir")
-
-        val basePlan: List<BypassVector> = when {
-            isDomestic -> {
-                (listOf(directVec) + VectorCatalog.filterByMode(settings.engineMode)).distinctBy { it.vectorId }
-            }
-            sec == "reality" -> {
-                val tcpSafe = all.filter { it.family == "TCP_SNI" || it.family == "FRAGMENT" }
-                (tcpSafe + listOf(directVec)).distinctBy { it.vectorId }
-            }
-            sec == "none" || headerType == "http" -> {
-                val httpSafe = all.filter { it.family in setOf("TCP_SNI", "FRAGMENT", "PROPRIETARY") }
-                (httpSafe.take(6) + listOf(directVec)).distinctBy { it.vectorId }
-            }
-            net in setOf("ws", "httpupgrade", "xhttp", "splithttp", "grpc") -> {
-                val cdnOptimal = all.filter { it.family in setOf("TCP_SNI", "TLS_RECORD", "FRAGMENT") }
-                val oobTail = if (settings.engineMode == "proprietary_only") {
-                    all.filter { it.family == "PROPRIETARY" }
-                } else {
-                    emptyList()
-                }
-                (cdnOptimal + oobTail + listOf(directVec)).distinctBy { it.vectorId }
-            }
-            else -> {
-                val filtered = VectorCatalog.filterByMode(settings.engineMode).filter { it.vectorId != "VEC-00" }
-                (filtered + listOf(directVec)).distinctBy { it.vectorId }
-            }
+        if (uriLow.contains("security=reality")) {
+            val fragSubset = baseVectors.filter { it.family in setOf("COALESCE", "FRAGMENT") }.take(3)
+            return listOf(directVec) + fragSubset
         }
 
-        val prefId = profile.preferredVectorId.trim()
-        if (prefId.isNotEmpty() && !prefId.equals("AUTO", ignoreCase = true)) {
-            val prefVec = all.firstOrNull { it.vectorId == prefId }
-            if (prefVec != null) {
-                return (listOf(prefVec) + basePlan).distinctBy { it.vectorId }
-            }
+        val isTunnelOrPlain = hostLow.endsWith(".ir") ||
+            uriLow.contains("headertype=http") ||
+            uriLow.contains("security=none")
+        if (isTunnelOrPlain) {
+            return listOf(directVec) + baseVectors
         }
-        return basePlan
+
+        val ordered = baseVectors.toMutableList()
+        if (profile.cachedVectorId.isNotBlank() && !profile.cachedVectorId.equals("AUTO", true)) {
+            val cv = VectorCatalog.findVector(profile.cachedVectorId)
+            ordered.remove(cv)
+            ordered.add(0, cv)
+        }
+        if (profile.preferredVectorId.isNotBlank() && !profile.preferredVectorId.equals("AUTO", true)) {
+            val pv = VectorCatalog.findVector(profile.preferredVectorId)
+            ordered.remove(pv)
+            ordered.add(0, pv)
+        }
+        return ordered + directVec
     }
 
     fun compileXraySession(

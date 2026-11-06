@@ -1,5 +1,6 @@
 package com.alan.ripdpi.ui
 
+import android.graphics.BlurMaskFilter
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
@@ -44,7 +45,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,42 +83,42 @@ data class AlanPalette(
 
 private val DarkAlanPalette = AlanPalette(
     isDark = true,
-    rootBg = Color(0xFF070A10),
-    surfaceBg = Color(0xFF0D111A),
-    cardBg = Color(0xFF111723),
-    subtleBg = Color(0xFF0A0E16),
-    cardBorder = Color(0xFF1E2738),
-    glowBorder = Color(0x88F5C451),
+    rootBg = Color(0xFF1E222B),
+    surfaceBg = Color(0xFF1E222B),
+    cardBg = Color(0xFF1E222B),
+    subtleBg = Color(0xFF1E222B),
+    cardBorder = Color(0x00000000), // نامرئی در نئومورفیسم مگر در حالت highlight
+    glowBorder = Color(0x99F5C451),
     accentGold = Color(0xFFF5C451),
     accentAmber = Color(0xFFE59A1A),
-    accentSoftBg = Color(0x24F5C451),
-    onAccent = Color(0xFF090C12),
+    accentSoftBg = Color(0x1AF5C451),
+    onAccent = Color(0xFF1E222B),
     emerald = Color(0xFF10B981),
     cyan = Color(0xFF38BDF8),
     danger = Color(0xFFEF4444),
     textPrimary = Color(0xFFF3F6FC),
     textSecondary = Color(0xFFCBD5E1),
-    textMuted = Color(0xFF7B89A1)
+    textMuted = Color(0xFF8B9BB4)
 )
 
 private val LightAlanPalette = AlanPalette(
     isDark = false,
-    rootBg = Color(0xFFF4F6FB),
-    surfaceBg = Color(0xFFFFFFFF),
-    cardBg = Color(0xFFFFFFFF),
-    subtleBg = Color(0xFFEEF2F9),
-    cardBorder = Color(0xFFD8E1EE),
+    rootBg = Color(0xFFE6EBF2),
+    surfaceBg = Color(0xFFE6EBF2),
+    cardBg = Color(0xFFE6EBF2),
+    subtleBg = Color(0xFFE6EBF2),
+    cardBorder = Color(0x00000000), // نامرئی در نئومورفیسم
     glowBorder = Color(0x99D99B16),
-    accentGold = Color(0xFFC98A09),
+    accentGold = Color(0xFFD99B16),
     accentAmber = Color(0xFFB47806),
-    accentSoftBg = Color(0x22EAB308),
+    accentSoftBg = Color(0x1AD99B16),
     onAccent = Color(0xFFFFFFFF),
     emerald = Color(0xFF059669),
     cyan = Color(0xFF0284C7),
     danger = Color(0xFFDC2626),
-    textPrimary = Color(0xFF0F172A),
-    textSecondary = Color(0xFF334155),
-    textMuted = Color(0xFF64748B)
+    textPrimary = Color(0xFF1E222B),
+    textSecondary = Color(0xFF475569),
+    textMuted = Color(0xFF75859D)
 )
 
 val LocalAlanPalette = staticCompositionLocalOf { DarkAlanPalette }
@@ -163,26 +169,103 @@ fun Long.toAdaptiveColor(fallback: Color): Color {
     return Color(argb.toInt())
 }
 
+// Extruded Soft Shadow (Neumorphism Convex)
 fun Modifier.alanGlassCard(
     highlighted: Boolean = false,
     cornerRadius: Dp = 16.dp,
     accentBorderColor: Color? = null
 ): Modifier = composed {
     val p = LocalAlanPalette.current
-    val bg = when {
-        highlighted && p.isDark -> Color(0xFF151D2C)
-        highlighted && !p.isDark -> Color(0xFFFFFBEB)
-        else -> p.cardBg
+    val isDark = p.isDark
+    val lightShadowCol = if (isDark) Color(0xFF2A303D) else Color(0xFFFFFFFF)
+    val darkShadowCol = if (isDark) Color(0xFF12151B) else Color(0xFFC3C9D4)
+
+    this.drawBehind {
+        val cr = cornerRadius.toPx()
+        val blur = 14f
+        val offset = 7f
+
+        drawIntoCanvas { canvas ->
+            val darkPaint = Paint().apply {
+                color = darkShadowCol
+            }.asFrameworkPaint().apply {
+                maskFilter = BlurMaskFilter(blur, BlurMaskFilter.Blur.NORMAL)
+            }
+            canvas.nativeCanvas.drawRoundRect(
+                offset, offset, size.width + offset, size.height + offset, cr, cr, darkPaint
+            )
+
+            val lightPaint = Paint().apply {
+                color = lightShadowCol
+            }.asFrameworkPaint().apply {
+                maskFilter = BlurMaskFilter(blur, BlurMaskFilter.Blur.NORMAL)
+            }
+            canvas.nativeCanvas.drawRoundRect(
+                -offset, -offset, size.width - offset, size.height - offset, cr, cr, lightPaint
+            )
+        }
     }
-    val borderCol = accentBorderColor ?: if (highlighted) p.glowBorder else p.cardBorder
-    this
-        .clip(RoundedCornerShape(cornerRadius))
-        .background(bg)
-        .border(
-            width = if (highlighted) 1.3.dp else 1.dp,
-            color = borderCol,
-            shape = RoundedCornerShape(cornerRadius)
-        )
+    .clip(RoundedCornerShape(cornerRadius))
+    .background(p.cardBg)
+    .run {
+        if (highlighted) {
+            border(1.2.dp, accentBorderColor ?: p.glowBorder, RoundedCornerShape(cornerRadius))
+        } else this
+    }
+}
+
+// Inset Soft Shadow (Neumorphism Concave - Pressed State / Inputs)
+fun Modifier.alanNeuInset(cornerRadius: Dp = 12.dp): Modifier = composed {
+    val p = LocalAlanPalette.current
+    val isDark = p.isDark
+    val lightShadowCol = if (isDark) Color(0xFF2A303D) else Color(0xFFFFFFFF)
+    val darkShadowCol = if (isDark) Color(0xFF12151B) else Color(0xFFC3C9D4)
+
+    this.clip(RoundedCornerShape(cornerRadius))
+        .background(p.subtleBg)
+        .drawWithContent {
+            drawContent()
+            val cr = cornerRadius.toPx()
+            val strokeW = 4.dp.toPx()
+            val blur = 8f
+
+            drawIntoCanvas { canvas ->
+                canvas.save()
+                val path = android.graphics.Path().apply {
+                    addRoundRect(
+                        0f, 0f, size.width, size.height,
+                        floatArrayOf(cr, cr, cr, cr, cr, cr, cr, cr),
+                        android.graphics.Path.Direction.CW
+                    )
+                }
+                canvas.nativeCanvas.clipPath(path)
+
+                // Inner Dark Shadow (Top Left)
+                val darkPaint = Paint().apply {
+                    color = darkShadowCol
+                }.asFrameworkPaint().apply {
+                    style = android.graphics.Paint.Style.STROKE
+                    strokeWidth = strokeW
+                    maskFilter = BlurMaskFilter(blur, BlurMaskFilter.Blur.NORMAL)
+                }
+                canvas.nativeCanvas.drawRoundRect(
+                    -strokeW / 2, -strokeW / 2, size.width + strokeW, size.height + strokeW, cr, cr, darkPaint
+                )
+
+                // Inner Light Shadow (Bottom Right)
+                val lightPaint = Paint().apply {
+                    color = lightShadowCol
+                }.asFrameworkPaint().apply {
+                    style = android.graphics.Paint.Style.STROKE
+                    strokeWidth = strokeW
+                    maskFilter = BlurMaskFilter(blur, BlurMaskFilter.Blur.NORMAL)
+                }
+                canvas.nativeCanvas.drawRoundRect(
+                    -strokeW, -strokeW, size.width + strokeW / 2, size.height + strokeW / 2, cr, cr, lightPaint
+                )
+                canvas.restore()
+            }
+        }
 }
 
 @Composable
@@ -191,15 +274,15 @@ fun AlanPillSwitch(
     onCheckedChange: (Boolean) -> Unit
 ) {
     val p = LocalAlanPalette.current
-    val trackColor by animateColorAsState(
-        targetValue = if (checked) p.accentGold else p.subtleBg,
-        animationSpec = tween(180),
-        label = "swTrack"
-    )
     val thumbOffset by animateDpAsState(
         targetValue = if (checked) 18.dp else 2.dp,
-        animationSpec = tween(180),
+        animationSpec = tween(200),
         label = "swThumb"
+    )
+    val thumbColor by animateColorAsState(
+        targetValue = if (checked) p.accentGold else p.textMuted,
+        animationSpec = tween(200),
+        label = "swThumbCol"
     )
 
     LtrContent {
@@ -208,17 +291,17 @@ fun AlanPillSwitch(
             modifier = Modifier
                 .width(42.dp)
                 .height(24.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(trackColor)
-                .border(1.dp, if (checked) p.accentGold else p.cardBorder, RoundedCornerShape(12.dp))
+                .alanNeuInset(cornerRadius = 12.dp)
                 .clickable { onCheckedChange(!checked) }
         ) {
             Box(
                 modifier = Modifier
                     .offset(x = thumbOffset)
                     .size(18.dp)
+                    // The thumb is an extruded pill inside a concave track
+                    .alanGlassCard(cornerRadius = 9.dp)
                     .clip(CircleShape)
-                    .background(if (checked) p.onAccent else p.textMuted)
+                    .background(thumbColor)
             )
         }
     }
@@ -245,13 +328,14 @@ fun AlanCustomSelectBox(
             ?: SelectOptionItem(selectedValue, selectedValue)
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = modifier) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = modifier) {
         if (label.isNotBlank()) {
             Text(
                 text = label,
                 color = p.textMuted,
                 fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 4.dp)
             )
         }
 
@@ -260,11 +344,9 @@ fun AlanCustomSelectBox(
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(p.subtleBg)
-                .border(1.dp, p.cardBorder, RoundedCornerShape(12.dp))
+                .alanNeuInset(cornerRadius = 12.dp)
                 .clickable { if (options.isNotEmpty()) dialogOpen = true }
-                .padding(horizontal = 12.dp, vertical = 11.dp)
+                .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -299,14 +381,15 @@ fun AlanCustomSelectBox(
         Dialog(onDismissRequest = { dialogOpen = false }) {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                 Surface(
-                    shape = RoundedCornerShape(18.dp),
-                    color = p.surfaceBg,
-                    border = BorderStroke(1.2.dp, p.glowBorder),
+                    shape = RoundedCornerShape(22.dp),
+                    color = Color.Transparent,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(16.dp)
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier
+                            .alanGlassCard(cornerRadius = 22.dp, highlighted = true)
+                            .padding(18.dp)
                     ) {
                         Text(
                             text = label.ifBlank { "انتخاب گزینه" },
@@ -316,11 +399,12 @@ fun AlanCustomSelectBox(
                         )
 
                         Column(
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = 360.dp)
                                 .verticalScroll(rememberScrollState())
+                                .padding(vertical = 4.dp)
                         ) {
                             options.forEach { opt ->
                                 val isSel = opt.value == selectedValue
@@ -329,18 +413,12 @@ fun AlanCustomSelectBox(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(11.dp))
-                                        .background(if (isSel) p.accentSoftBg else p.subtleBg)
-                                        .border(
-                                            width = 1.dp,
-                                            color = if (isSel) p.accentGold else p.cardBorder,
-                                            shape = RoundedCornerShape(11.dp)
-                                        )
+                                        .then(if (isSel) Modifier.alanNeuInset(11.dp) else Modifier.alanGlassCard(cornerRadius = 11.dp))
                                         .clickable {
                                             dialogOpen = false
                                             onSelect(opt.value)
                                         }
-                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                        .padding(horizontal = 14.dp, vertical = 12.dp)
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
@@ -366,7 +444,7 @@ fun AlanCustomSelectBox(
                                             imageVector = Icons.Outlined.Check,
                                             contentDescription = null,
                                             tint = p.accentGold,
-                                            modifier = Modifier.size(17.dp)
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }

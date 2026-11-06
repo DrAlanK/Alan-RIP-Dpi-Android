@@ -1,5 +1,6 @@
 package com.alan.ripdpi.ui
 
+import android.graphics.BlurMaskFilter
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -9,7 +10,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -36,17 +36,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -67,7 +69,6 @@ fun FlagStripeBadge(
     width: Dp = 26.dp,
     height: Dp = 17.dp
 ) {
-    val p = LocalAlanPalette.current
     val iso = countryCode.trim().uppercase(Locale.US)
     val resolved = remember(stripeColors, iso) {
         val base = if (stripeColors.size >= 3) {
@@ -83,11 +84,17 @@ fun FlagStripeBadge(
         modifier = Modifier
             .width(width)
             .height(height)
-            .clip(RoundedCornerShape(4.dp))
-            .border(0.8.dp, p.cardBorder.copy(alpha = 0.95f), RoundedCornerShape(4.dp))
+            .alanGlassCard(cornerRadius = 4.dp)
     ) {
         val w = size.width
         val h = size.height
+        val clipPath = Path().apply {
+            addRoundRect(androidx.compose.ui.geometry.RoundRect(0f, 0f, w, h, androidx.compose.ui.geometry.CornerRadius(4.dp.toPx())))
+        }
+
+        drawIntoCanvas {
+            it.clipPath(clipPath)
+        }
 
         when (iso) {
             "FR", "IT", "BE", "IE", "RO" -> {
@@ -151,21 +158,6 @@ fun FlagStripeBadge(
                 drawRect(color = resolved[2], topLeft = Offset(0f, h3 * 2f), size = Size(w, h3))
             }
         }
-
-        // Subtle glossy diagonal glass highlight
-        drawRect(
-            brush = Brush.linearGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.22f),
-                    Color.Transparent,
-                    Color.Black.copy(alpha = 0.16f)
-                ),
-                start = Offset(0f, 0f),
-                end = Offset(w, h)
-            ),
-            topLeft = Offset(0f, 0f),
-            size = Size(w, h)
-        )
     }
 }
 
@@ -183,10 +175,8 @@ fun StatusPillBadge(status: String) {
 
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(col.copy(alpha = 0.14f))
-            .border(1.dp, col.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 9.dp, vertical = 3.dp)
+            .alanNeuInset(cornerRadius = 8.dp)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
         Text(
             text = label,
@@ -208,263 +198,202 @@ fun CenterPowerOrbButton(
     modifier: Modifier = Modifier
 ) {
     val p = LocalAlanPalette.current
-    val isError = uiPhase.equals("ERROR", ignoreCase = true)
-    val flagAccent = remember(accentColorLong, p.accentGold) {
-        accentColorLong.toAdaptiveColor(p.accentGold)
-    }
+    val isDark = (p.rootBg.red * 0.299f + p.rootBg.green * 0.587f + p.rootBg.blue * 0.114f) < 0.5f
+    val lightShadow = if (isDark) androidx.compose.ui.graphics.Color(0xFF2E3646) else androidx.compose.ui.graphics.Color(0xFFFFFFFF)
+    val darkShadow = if (isDark) androidx.compose.ui.graphics.Color(0xFF0F1218) else androidx.compose.ui.graphics.Color(0xFFB8C3D4)
 
-    val ringColor = when {
-        isConnected -> p.emerald
-        isConnecting -> p.accentGold
-        isError -> p.danger
-        else -> p.accentGold
-    }
-    val secondaryArcColor = when {
-        isConnected -> flagAccent
-        isConnecting -> p.emerald
-        isError -> p.accentAmber
-        else -> flagAccent.copy(alpha = 0.78f)
-    }
-
-    val inf = rememberInfiniteTransition(label = "kineticOrb")
-    // Continuous 360-degree clockwise rotation in ALL states (Idle, Connecting, Connected)
-    val primarySpin by inf.animateFloat(
+    val inf = androidx.compose.animation.core.rememberInfiniteTransition(label = "neuOrbSpin")
+    val sweepAngle by inf.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = when {
-                    isConnecting -> 1250
-                    isConnected -> 3800
-                    else -> 2800
-                },
-                easing = LinearEasing
-            )
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(1800, easing = androidx.compose.animation.core.LinearEasing)
         ),
-        label = "primarySpin"
+        label = "orbAngle"
     )
-    // Counter-rotating secondary orbital arc & compass dial
-    val counterSpin by inf.animateFloat(
-        initialValue = 360f,
-        targetValue = 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = if (isConnecting) 2100 else 5400,
-                easing = LinearEasing
-            )
+    val breathe by inf.animateFloat(
+        initialValue = 0.86f,
+        targetValue = 1.0f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(1400),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
         ),
-        label = "counterSpin"
+        label = "orbBreathe"
     )
-    // Expanding sonar wave ripple
-    val rippleFrac by inf.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = if (isConnecting) 1400 else 2600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "sonarRipple"
-    )
-    // Core energy breathing
-    val breath by inf.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.06f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "coreBreath"
+    val animPct by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = (progressPercent.coerceIn(0, 100)) / 100f,
+        animationSpec = androidx.compose.animation.core.tween(260),
+        label = "orbPct"
     )
 
-    val centerLabel = when {
-        isConnecting -> "لغو"
-        isConnected -> "قطع اتصال"
-        isError -> "تلاش مجدد"
-        else -> "اتصال"
+    val activeTint = when {
+        isConnected -> p.emerald
+        uiPhase.equals("ERROR", ignoreCase = true) -> p.danger
+        isConnecting -> p.accentGold
+        accentColorLong != 0L -> androidx.compose.ui.graphics.Color(accentColorLong)
+        else -> p.accentGold
     }
 
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = modifier
-            .size(224.dp)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
+    androidx.compose.foundation.layout.Box(
+        contentAlignment = androidx.compose.ui.Alignment.Center,
+        modifier = androidx.compose.ui.Modifier
+            .size(190.dp)
+            .then(modifier)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .clickable(onClick = onClick)
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            if (size.minDimension <= 4f) return@Canvas
+        androidx.compose.foundation.Canvas(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
             val cx = size.width / 2f
             val cy = size.height / 2f
+            val center = androidx.compose.ui.geometry.Offset(cx, cy)
             val maxR = size.minDimension / 2f
 
-            // 1. Breathing radial energy aura
+            // 1. Extruded outer Neumorphic circular chassis shadows
+            val shift = maxR * 0.065f
             drawCircle(
-                brush = Brush.radialGradient(
+                color = darkShadow.copy(alpha = if (isDark) 0.68f else 0.52f),
+                radius = maxR * 0.88f,
+                center = androidx.compose.ui.geometry.Offset(cx + shift, cy + shift)
+            )
+            drawCircle(
+                color = lightShadow.copy(alpha = if (isDark) 0.48f else 0.92f),
+                radius = maxR * 0.88f,
+                center = androidx.compose.ui.geometry.Offset(cx - shift * 0.85f, cy - shift * 0.85f)
+            )
+
+            // 2. Main matte Neumorphic platter
+            drawCircle(
+                color = p.cardBg,
+                radius = maxR * 0.87f,
+                center = center
+            )
+            drawCircle(
+                brush = androidx.compose.ui.graphics.Brush.linearGradient(
                     colors = listOf(
-                        ringColor.copy(alpha = if (isConnected) 0.28f else 0.18f),
-                        secondaryArcColor.copy(alpha = 0.08f),
-                        Color.Transparent
+                        lightShadow.copy(alpha = if (isDark) 0.65f else 0.95f),
+                        darkShadow.copy(alpha = if (isDark) 0.70f else 0.48f)
                     ),
-                    center = Offset(cx, cy),
-                    radius = maxR * breath
+                    start = androidx.compose.ui.geometry.Offset(cx - maxR, cy - maxR),
+                    end = androidx.compose.ui.geometry.Offset(cx + maxR, cy + maxR)
                 ),
-                radius = maxR
+                radius = maxR * 0.87f,
+                center = center,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.6.dp.toPx())
             )
 
-            // 2. Expanding Sonar Pulse Wave
-            val sonarR = maxR * (0.64f + 0.34f * rippleFrac)
+            // 3. Recessed concave LED groove ring
+            val grooveR = maxR * 0.73f
+            val grooveW = (maxR * 0.105f).coerceAtLeast(6.dp.toPx())
             drawCircle(
-                color = ringColor.copy(alpha = (1f - rippleFrac) * 0.36f),
-                radius = sonarR,
-                center = Offset(cx, cy),
-                style = Stroke(width = 1.6.dp.toPx())
+                color = p.subtleBg,
+                radius = grooveR,
+                center = center,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = grooveW)
             )
 
-            // 3. Counter-rotating 48-tick Cyber Compass Dial
-            val tickCount = 48
-            val innerTickR = maxR * 0.89f
-            val outerTickR = maxR * 0.95f
-            for (i in 0 until tickCount) {
-                val deg = i * (360f / tickCount) + counterSpin * 0.35f
-                val rad = deg * (PI / 180.0)
-                val major = i % 4 == 0
-                val tAlpha = if (major) 0.62f else 0.20f
-                val tCol = if (major && i % 8 == 0) secondaryArcColor else ringColor
-                drawLine(
-                    color = tCol.copy(alpha = tAlpha),
-                    start = Offset(
-                        cx + (cos(rad) * innerTickR).toFloat(),
-                        cy + (sin(rad) * innerTickR).toFloat()
-                    ),
-                    end = Offset(
-                        cx + (cos(rad) * (if (major) outerTickR + 2.dp.toPx() else outerTickR)).toFloat(),
-                        cy + (sin(rad) * (if (major) outerTickR + 2.dp.toPx() else outerTickR)).toFloat()
-                    ),
-                    strokeWidth = if (major) 2.dp.toPx() else 1.1.dp.toPx(),
-                    cap = StrokeCap.Round
-                )
-            }
+            val arcTopLeft = androidx.compose.ui.geometry.Offset(cx - grooveR, cy - grooveR)
+            val arcSize = androidx.compose.ui.geometry.Size(grooveR * 2f, grooveR * 2f)
 
-            // 4. Inner Dark/Light Reactor Base
-            drawCircle(
-                color = if (p.isDark) Color(0xFF0A0F19) else Color(0xFFFFFFFF),
-                radius = maxR * 0.77f,
-                center = Offset(cx, cy)
-            )
-            drawCircle(
-                color = ringColor.copy(alpha = 0.16f),
-                radius = maxR * 0.77f,
-                center = Offset(cx, cy),
-                style = Stroke(width = 3.2.dp.toPx())
-            )
-
-            // 5. Secondary Counter-Rotating Flag-Tinted Arc (outer orbit)
-            val subArcR = maxR * 0.83f
-            drawArc(
-                color = secondaryArcColor.copy(alpha = 0.72f),
-                startAngle = counterSpin,
-                sweepAngle = if (isConnecting) 110f else 78f,
-                useCenter = false,
-                topLeft = Offset(cx - subArcR, cy - subArcR),
-                size = Size(subArcR * 2f, subArcR * 2f),
-                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
-            )
-
-            // 6. Primary Continuously Spinning Sweep-Gradient Ring (The Circled Yellow Ring!)
-            val mainArcR = maxR * 0.77f
-            val mainSweep = when {
-                isConnecting -> 150f
-                isConnected -> 275f
-                else -> 235f
-            }
-            rotate(degrees = primarySpin, pivot = Offset(cx, cy)) {
+            if (isConnected) {
                 drawArc(
-                    brush = Brush.sweepGradient(
-                        0.00f to Color.Transparent,
-                        0.15f to ringColor.copy(alpha = 0.20f),
-                        0.55f to ringColor.copy(alpha = 0.85f),
-                        0.68f to ringColor,
-                        1.00f to Color.Transparent,
-                        center = Offset(cx, cy)
-                    ),
+                    color = activeTint.copy(alpha = 0.25f * breathe),
                     startAngle = 0f,
-                    sweepAngle = mainSweep,
+                    sweepAngle = 360f,
                     useCenter = false,
-                    topLeft = Offset(cx - mainArcR, cy - mainArcR),
-                    size = Size(mainArcR * 2f, mainArcR * 2f),
-                    style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round)
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = grooveW * 1.45f)
+                )
+                drawArc(
+                    color = activeTint,
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = grooveW * 0.68f,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                )
+            } else if (isConnecting) {
+                val pctSweep = (animPct * 300f).coerceAtLeast(68f)
+                drawArc(
+                    color = activeTint,
+                    startAngle = sweepAngle - 90f,
+                    sweepAngle = pctSweep,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = grooveW * 0.72f,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                )
+            } else {
+                drawArc(
+                    color = activeTint.copy(alpha = 0.42f),
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
                 )
             }
 
-            // Glowing Comet Head Dot at the leading tip of the spinning yellow/emerald arc
-            val headDeg = (primarySpin + mainSweep) * (PI / 180.0)
-            val headPos = Offset(
-                cx + (cos(headDeg) * mainArcR).toFloat(),
-                cy + (sin(headDeg) * mainArcR).toFloat()
+            // 4. Inner tactile convex push-button cap (pressed slightly inward when connected)
+            val btnR = maxR * 0.56f
+            val innerShift = if (isConnected) -shift * 0.35f else shift * 0.55f
+            drawCircle(
+                color = darkShadow.copy(alpha = if (isDark) 0.62f else 0.45f),
+                radius = btnR,
+                center = androidx.compose.ui.geometry.Offset(cx + innerShift, cy + innerShift)
             )
             drawCircle(
-                color = ringColor.copy(alpha = 0.38f),
-                radius = 7.5.dp.toPx(),
-                center = headPos
+                color = lightShadow.copy(alpha = if (isDark) 0.42f else 0.88f),
+                radius = btnR,
+                center = androidx.compose.ui.geometry.Offset(cx - innerShift, cy - innerShift)
             )
             drawCircle(
-                color = Color.White,
-                radius = 3.2.dp.toPx(),
-                center = headPos
-            )
-
-            // 7. Center Core Button Dome
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = if (p.isDark) {
-                        listOf(Color(0xFF172133), Color(0xFF0A0E17))
+                brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                    colors = if (isConnected) {
+                        listOf(p.subtleBg, p.cardBg)
                     } else {
-                        listOf(Color(0xFFFDFEFF), Color(0xFFEAF1FB))
+                        listOf(
+                            if (isDark) androidx.compose.ui.graphics.Color(0xFF252B37) else androidx.compose.ui.graphics.Color(0xFFF0F5FC),
+                            p.cardBg
+                        )
                     },
-                    center = Offset(cx, cy),
-                    radius = maxR * 0.65f
+                    start = androidx.compose.ui.geometry.Offset(cx - btnR, cy - btnR),
+                    end = androidx.compose.ui.geometry.Offset(cx + btnR, cy + btnR)
                 ),
-                radius = maxR * 0.65f,
-                center = Offset(cx, cy)
+                radius = btnR,
+                center = center
             )
-            drawCircle(
-                color = ringColor.copy(alpha = 0.32f),
-                radius = maxR * 0.65f,
-                center = Offset(cx, cy),
-                style = Stroke(width = 1.2.dp.toPx())
-            )
-        }
 
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.PowerSettingsNew,
-                contentDescription = centerLabel,
-                tint = ringColor,
-                modifier = Modifier.size(44.dp)
+            // 5. Crisp Power Glyph at center
+            val glyphR = btnR * 0.34f
+            val strokeGlyph = 3.2.dp.toPx()
+            drawArc(
+                color = activeTint,
+                startAngle = -52f,
+                sweepAngle = 284f,
+                useCenter = false,
+                topLeft = androidx.compose.ui.geometry.Offset(cx - glyphR, cy - glyphR),
+                size = androidx.compose.ui.geometry.Size(glyphR * 2f, glyphR * 2f),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                    width = strokeGlyph,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
             )
-            Spacer(Modifier.height(7.dp))
-            Text(
-                text = centerLabel,
-                color = ringColor,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 16.sp
+            drawLine(
+                color = activeTint,
+                start = androidx.compose.ui.geometry.Offset(cx, cy - glyphR * 1.18f),
+                end = androidx.compose.ui.geometry.Offset(cx, cy - glyphR * 0.12f),
+                strokeWidth = strokeGlyph,
+                cap = androidx.compose.ui.graphics.StrokeCap.Round
             )
-            if (isConnecting && progressPercent > 0) {
-                LtrContent {
-                    Text(
-                        text = "${progressPercent.coerceIn(1, 99)}%",
-                        color = p.textMuted,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 10.sp
-                    )
-                }
-            }
         }
     }
 }
@@ -483,32 +412,7 @@ fun JustifiedCountryFlagsBar(
     isConnecting: Boolean
 ) {
     val p = LocalAlanPalette.current
-    val iranGreen = Color(0xFF10B981)
-    val destAccent = remember(destAccentLong, p.accentGold) {
-        destAccentLong.toAdaptiveColor(p.accentGold)
-    }
-
-    val inf = rememberInfiniteTransition(label = "topologyLaser")
-    val photonPhase by inf.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = if (isConnecting) 1100 else 2200,
-                easing = LinearEasing
-            )
-        ),
-        label = "photonFlow"
-    )
-    val beaconPulse by inf.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "beaconPulse"
-    )
+    val destAccent = remember(destAccentLong, p.accentGold) { destAccentLong.toAdaptiveColor(p.accentGold) }
 
     val capsuleColor = when {
         isConnected -> p.emerald
@@ -522,182 +426,55 @@ fun JustifiedCountryFlagsBar(
         else -> "READY • DPI"
     }
 
-    val outerShape = RoundedCornerShape(18.dp)
-
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(outerShape)
-            .background(if (p.isDark) Color(0xFF0C121D) else p.cardBg)
-            .border(
-                width = 1.3.dp,
-                brush = Brush.horizontalGradient(
-                    colors = listOf(
-                        destAccent.copy(alpha = if (isConnected) 0.85f else 0.48f),
-                        capsuleColor.copy(alpha = 0.45f),
-                        iranGreen.copy(alpha = if (isConnected) 0.80f else 0.45f)
-                    )
-                ),
-                shape = outerShape
-            )
-            .drawBehind {
-                val w = size.width
-                val h = size.height
-                // Subtle Desktop-style Cyber-Grid Matrix
-                val step = 16.dp.toPx()
-                val gridCol = if (p.isDark) Color.White.copy(alpha = 0.03f) else Color.Black.copy(alpha = 0.03f)
-                var gx = step
-                while (gx < w) {
-                    drawLine(gridCol, Offset(gx, 0f), Offset(gx, h), strokeWidth = 1f)
-                    gx += step
-                }
-                var gy = step
-                while (gy < h) {
-                    drawLine(gridCol, Offset(0f, gy), Offset(w, gy), strokeWidth = 1f)
-                    gy += step
-                }
-                // Dual-Side Flag Ambient Glow (Right = Iran Emerald, Left = Destination Flag Accent)
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(iranGreen.copy(alpha = 0.16f), Color.Transparent),
-                        center = Offset(w * 0.88f, h * 0.5f),
-                        radius = w * 0.42f
-                    ),
-                    radius = w * 0.42f,
-                    center = Offset(w * 0.88f, h * 0.5f)
-                )
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(destAccent.copy(alpha = 0.20f), Color.Transparent),
-                        center = Offset(w * 0.12f, h * 0.5f),
-                        radius = w * 0.44f
-                    ),
-                    radius = w * 0.44f,
-                    center = Offset(w * 0.12f, h * 0.5f)
-                )
-            }
-            .padding(horizontal = 12.dp, vertical = 12.dp)
+            .alanGlassCard(cornerRadius = 18.dp)
+            .padding(horizontal = 14.dp, vertical = 14.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            // Top Justified Row: Origin Pod (Right) <--- Animated Laser Highway ---> Destination Pod (Left)
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // RIGHT POD: Origin (Iran) — 100% Start-Aligned in RTL
+                // Origin Pod (IRAN) - Concave Neumorphic Inset
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Start,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(13.dp))
-                        .background(
-                            if (p.isDark) Color(0xFF101927).copy(alpha = 0.88f)
-                            else p.subtleBg
-                        )
-                        .border(1.dp, iranGreen.copy(alpha = 0.42f), RoundedCornerShape(13.dp))
-                        .padding(horizontal = 9.dp, vertical = 8.dp)
+                        .alanNeuInset(cornerRadius = 13.dp)
+                        .padding(horizontal = 10.dp, vertical = 9.dp)
                 ) {
-                    Box(contentAlignment = Alignment.TopEnd) {
-                        FlagStripeBadge(
-                            stripeColors = CountryPaletteRegistry.IRAN_SPEC.stripeColors,
-                            countryCode = "IR",
-                            width = 34.dp,
-                            height = 22.dp
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(iranGreen.copy(alpha = beaconPulse))
-                        )
-                    }
+                    FlagStripeBadge(CountryPaletteRegistry.IRAN_SPEC.stripeColors, "IR", 32.dp, 20.dp)
                     Spacer(Modifier.width(8.dp))
-                    Column(horizontalAlignment = Alignment.Start) {
+                    Column {
                         Text(
                             text = "مبدا: ${originCountryName.ifBlank { "ایران" }}",
                             color = p.textPrimary,
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 11.sp,
-                            maxLines = 1
+                            fontSize = 11.sp
                         )
                         LtrContent {
-                            Text(
-                                text = "IR • LOCAL NODE",
-                                color = iranGreen,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 9.sp,
-                                maxLines = 1
-                            )
+                            Text("IR • LOCAL", color = p.emerald, fontFamily = FontFamily.Monospace, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
 
-                // CENTER ANIMATED LASER CONDUIT
+                // Laser path bridging the two inset pods
                 Box(
-                    contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .weight(1f)
-                        .height(38.dp)
-                        .padding(horizontal = 4.dp)
-                ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val w = size.width
-                        val cy = size.height / 2f
-                        if (w > 8f) {
-                            // Base dual fiber lines
-                            drawLine(
-                                brush = Brush.horizontalGradient(
-                                    listOf(destAccent.copy(alpha = 0.55f), iranGreen.copy(alpha = 0.55f))
-                                ),
-                                start = Offset(0f, cy - 3.dp.toPx()),
-                                end = Offset(w, cy - 3.dp.toPx()),
-                                strokeWidth = 1.4.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-                            drawLine(
-                                brush = Brush.horizontalGradient(
-                                    listOf(destAccent.copy(alpha = 0.35f), iranGreen.copy(alpha = 0.35f))
-                                ),
-                                start = Offset(0f, cy + 3.dp.toPx()),
-                                end = Offset(w, cy + 3.dp.toPx()),
-                                strokeWidth = 1.4.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
+                        .height(2.dp)
+                        .padding(horizontal = 8.dp)
+                        .background(p.textMuted.copy(alpha = 0.2f))
+                )
 
-                            // Streaming Bidirectional Photons (3 Uplink R->L, 3 Downlink L->R)
-                            for (k in 0..2) {
-                                val prog = (photonPhase + k / 3f) % 1f
-                                val xUp = w * (1f - prog)
-                                val xDown = w * prog
-                                drawCircle(
-                                    color = p.accentGold,
-                                    radius = 2.6.dp.toPx(),
-                                    center = Offset(xUp, cy - 3.dp.toPx())
-                                )
-                                drawCircle(
-                                    color = if (isConnected) p.emerald else destAccent,
-                                    radius = 2.6.dp.toPx(),
-                                    center = Offset(xDown, cy + 3.dp.toPx())
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // LEFT POD: Destination Country — 100% End-Aligned in RTL
+                // Destination Pod - Concave Neumorphic Inset
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.End,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(13.dp))
-                        .background(
-                            if (p.isDark) Color(0xFF101927).copy(alpha = 0.88f)
-                            else p.subtleBg
-                        )
-                        .border(1.dp, destAccent.copy(alpha = 0.65f), RoundedCornerShape(13.dp))
-                        .padding(horizontal = 9.dp, vertical = 8.dp)
+                        .alanNeuInset(cornerRadius = 13.dp)
+                        .padding(horizontal = 10.dp, vertical = 9.dp)
                 ) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
@@ -705,47 +482,24 @@ fun JustifiedCountryFlagsBar(
                             color = p.textPrimary,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                             textAlign = TextAlign.End
                         )
                         LtrContent {
                             Text(
-                                text = if (isConnected && egressIp.isNotBlank() && egressIp != "—") {
-                                    egressIp
-                                } else {
-                                    "${destCountryCode.uppercase(Locale.US)} • REMOTE"
-                                },
+                                text = if (isConnected && egressIp.isNotBlank() && egressIp != "—") egressIp else "${destCountryCode.uppercase(Locale.US)} • REMOTE",
                                 color = destAccent,
                                 fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.ExtraBold,
                                 fontSize = 9.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
                     Spacer(Modifier.width(8.dp))
-                    Box(contentAlignment = Alignment.TopStart) {
-                        FlagStripeBadge(
-                            stripeColors = destStripeColors,
-                            countryCode = destCountryCode,
-                            width = 34.dp,
-                            height = 22.dp
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    (if (isConnected) p.emerald else destAccent).copy(alpha = beaconPulse)
-                                )
-                        )
-                    }
+                    FlagStripeBadge(destStripeColors, destCountryCode, 32.dp, 20.dp)
                 }
             }
 
-            // Bottom Justified Status & Encrypted Capsule Strip (Desktop-style footer inside topology card)
+            // Bottom Capsule
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -755,33 +509,19 @@ fun JustifiedCountryFlagsBar(
                     text = if (isConnected) "مسیر رمزنگاری‌شده دوطرفه فعال" else "آماده برقراری تونل ضد DPI",
                     color = p.textMuted,
                     fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1
+                    fontWeight = FontWeight.SemiBold
                 )
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(capsuleColor.copy(alpha = 0.14f))
-                        .border(1.dp, capsuleColor.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
-                        .padding(horizontal = 10.dp, vertical = 3.dp)
+                        .alanNeuInset(cornerRadius = 20.dp)
+                        .padding(horizontal = 12.dp, vertical = 5.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Lock,
-                        contentDescription = null,
-                        tint = capsuleColor,
-                        modifier = Modifier.size(11.dp)
-                    )
+                    Icon(Icons.Outlined.Lock, null, tint = capsuleColor, modifier = Modifier.size(12.dp))
                     LtrContent {
-                        Text(
-                            text = capsuleText,
-                            color = capsuleColor,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 10.sp
-                        )
+                        Text(capsuleText, color = capsuleColor, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.ExtraBold, fontSize = 10.sp)
                     }
                 }
             }
@@ -816,7 +556,6 @@ fun LiveSparklineCanvas(
         val h = size.height
         val baselineY = h - 3f
 
-        // Living animated oscilloscope wave when idle or before traffic arrives
         if (!isConnected || samples.size < 2 || samples.all { it <= 0.01f }) {
             val idlePath = Path()
             val segments = 32
@@ -832,7 +571,6 @@ fun LiveSparklineCanvas(
                 color = lineColor.copy(alpha = if (isConnected) 0.55f else 0.32f),
                 style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
             )
-            // Moving scanner dot on wave
             val dotFrac = (wavePhase / (2f * PI.toFloat())).coerceIn(0f, 1f)
             val dotX = dotFrac * w
             val dotY = (h * 0.62f) + sin(dotFrac * 4.5f * PI.toFloat() - wavePhase) * (if (isConnected) 3.2.dp.toPx() else 1.8.dp.toPx())
@@ -876,10 +614,6 @@ fun LiveSparklineCanvas(
             color = lineColor,
             style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
-        drawCircle(
-            color = lineColor,
-            radius = 3.2.dp.toPx(),
-            center = lastPt
-        )
+        drawCircle(color = lineColor, radius = 3.2.dp.toPx(), center = lastPt)
     }
 }

@@ -1,493 +1,546 @@
 package com.alan.ripdpi.core
 
 import android.os.ParcelFileDescriptor
-import android.system.Os
-import android.system.OsConstants
 import com.alan.ripdpi.model.BypassVector
 import com.alan.ripdpi.model.VectorCatalog
 import com.alan.ripdpi.vpn.AlanVpnService
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
-import java.io.EOFException
-import java.io.FileDescriptor
 import java.io.InputStream
 import java.net.Inet4Address
-import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.Collections
-import java.util.concurrent.ExecutorService
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.SocketFactory
 
 class FullDuplexMutatorBridge(
-    private val listenPort: Int,
-    initialRemoteHost: String,
-    initialRemotePort: Int,
-    initialVector: BypassVector = VectorCatalog.VECTOR_REGISTRY.last(),
-    initialCustomStride: Int = 0,
+    val listenPort: Int = 20809,
+    initialRemoteHost: String = "",
+    initialRemotePort: Int = 443,
+    initialVector: BypassVector = VectorCatalog.VECTOR_REGISTRY.first(),
+    initialCustomStride: Int = 400,
     initialJitterBytes: Int = 20,
-    @Suppress("UNUSED_PARAMETER")
-    private val protectSocket: ((Socket) -> Boolean)? = null
+    initialRawPassthrough: Boolean = false,
+    private val protectSocket: ((Socket) -> Boolean)? = null,
+    private val onLog: ((String) -> Unit)? = null
 ) {
+
     companion object {
-        private const val SOCKET_BUF_SIZE = 2 * 1024 * 1024
+        private const val SOCKET_BUFFER_SIZE = 4 * 1024 * 1024
         private const val STREAM_CHUNK_SIZE = 65536
-        private const val INITIAL_FLIGHT_TIMEOUT_MS = 6000
-        private const val CONNECT_TIMEOUT_MS = 6500L
-    }
+        private const val UPLINK_SHIELD_WINDOW_BYTES = 16384
+        private const val CONNECT_TIMEOUT_MS = 6000
+        private const val HANDSHAKE_READ_TIMEOUT_MS = 6500
 
-    private class PosixRemoteHandle(val fd: FileDescriptor) {
-        private val refCount = AtomicInteger(1)
-        private val closedOnce = AtomicBoolean(false)
-        val connected = AtomicBoolean(false)
+        private val dohResolutionCache = ConcurrentHashMap<String, InetAddress>()
 
-        fun retain(): Boolean {
-            while (true) {
-                val cur = refCount.get()
-                if (cur <= 0) return false
-                if (refCount.compareAndSet(cur, cur + 1)) return true
+        private val dohSocketFactory = object : SocketFactory() {
+            private val base = getDefault()
+            override fun createSocket(): Socket = base.createSocket().also { s ->
+                try { s.bind(InetSocketAddress(0)) } catch (_: Throwable) {}
+                AlanVpnService.protectRawSocket(s)
             }
+            override fun createSocket(h: String?, p: Int): Socket = createSocket().apply { connect(InetSocketAddress(h, p), 2500) }
+            override fun createSocket(h: String?, p: Int, lh: InetAddress?, lp: Int): Socket = base.createSocket(h, p, lh, lp)
+            override fun createSocket(h: InetAddress?, p: Int): Socket = createSocket().apply { connect(InetSocketAddress(h, p), 2500) }
+            override fun createSocket(a: InetAddress?, p: Int, la: InetAddress?, lp: Int): Socket = base.createSocket(a, p, la, lp)
         }
 
-        fun shutdownNow() {
-            if (!fd.valid()) return
-            try {
-                Os.shutdown(fd, OsConstants.SHUT_RDWR)
-            } catch (_: Throwable) {
-            }
-        }
+        private val dohClient = OkHttpClient.Builder()
+            .socketFactory(dohSocketFactory)
+            .connectTimeout(2000, TimeUnit.MILLISECONDS)
+            .readTimeout(2000, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(false)
+            .build()
 
-        fun shutdownWrite() {
-            if (!fd.valid()) return
-            try {
-                Os.shutdown(fd, OsConstants.SHUT_WR)
-            } catch (_: Throwable) {
-            }
-        }
-
-        fun release() {
-            if (refCount.decrementAndGet() == 0 && closedOnce.compareAndSet(false, true)) {
-                try {
-                    if (fd.valid()) {
-                        Os.close(fd)
-                    }
-                } catch (_: Throwable) {
-                }
-            }
+        fun isPoisonedIp(ip: String): Boolean {
+            val v = ip.trim()
+            return v.isEmpty() ||
+                v.startsWith("10.10.34.") ||
+                v.startsWith("10.10.") ||
+                v == "0.0.0.0" ||
+                v.startsWith("127.") ||
+                v.startsWith("198.18.") ||
+                v == "::" ||
+                v == "::1"
         }
     }
 
-    val txBytesTotal = AtomicLong(0L)
-    val rxBytesTotal = AtomicLong(0L)
-    val activeConnectionsCount = AtomicInteger(0)
+    private data class RouteConfig(
+        val remoteHost: String,
+        val remotePort: Int,
+        val vector: BypassVector,
+        val customStride: Int,
+        val jitterBytes: Int,
+        val rawPassthrough: Boolean
+    )
 
-    private val running = AtomicBoolean(false)
-    private val activeVectorRef = AtomicReference(initialVector)
-    private val remoteTargetRef = AtomicReference(initialRemoteHost to initialRemotePort)
+    private val routeRef = AtomicReference(
+        RouteConfig(
+            remoteHost = initialRemoteHost.trim().removePrefix("[").removeSuffix("]"),
+            remotePort = initialRemotePort,
+            vector = initialVector,
+            customStride = initialCustomStride,
+            jitterBytes = initialJitterBytes,
+            rawPassthrough = initialRawPassthrough || initialVector.family == "DIRECT"
+        )
+    )
     private val cachedAddressRef = AtomicReference<Pair<String, InetAddress>?>(null)
-    private val customStrideRef = AtomicInteger(initialCustomStride)
-    private val jitterBytesRef = AtomicInteger(initialJitterBytes)
-
+    private val running = AtomicBoolean(false)
+    private val sessionSeq = AtomicInteger(0)
     private var serverSocket: ServerSocket? = null
-    private var pool: ExecutorService? = null
-    private var watchdogScheduler: ScheduledExecutorService? = null
-    private val liveClientSockets = Collections.synchronizedSet(HashSet<Socket>())
-    private val liveRemoteHandles = Collections.synchronizedSet(HashSet<PosixRemoteHandle>())
 
-    fun updateVector(
-        vector: BypassVector,
-        customStride: Int = customStrideRef.get(),
-        jitterBytes: Int = jitterBytesRef.get()
-    ) {
-        activeVectorRef.set(vector)
-        customStrideRef.set(customStride)
-        jitterBytesRef.set(jitterBytes)
+    private val liveSockets = Collections.newSetFromMap(ConcurrentHashMap<Socket, Boolean>())
+    val txBytesTotal: AtomicLong = AtomicLong(0L)
+    val rxBytesTotal: AtomicLong = AtomicLong(0L)
+
+    private val ioPool = Executors.newCachedThreadPool { r ->
+        Thread(r, "AlanMutatorBridge").apply { isDaemon = true }
     }
 
-    fun updateRemoteTarget(host: String, port: Int) {
-        remoteTargetRef.set(host to port)
-        cachedAddressRef.set(null)
-    }
+    @Volatile
+    var boundPort: Int = listenPort
+        private set
 
-    fun getCurrentVector(): BypassVector = activeVectorRef.get()
+    val totalTxBytes: Long get() = txBytesTotal.get()
+    val totalRxBytes: Long get() = rxBytesTotal.get()
+    val txBytes: Long get() = txBytesTotal.get()
+    val rxBytes: Long get() = rxBytesTotal.get()
+    val activeSessionCount: Int get() = (liveSockets.size / 2).coerceAtLeast(0)
+    val activeSessions: Int get() = activeSessionCount
+
+    fun getCurrentVector(): BypassVector = routeRef.get().vector
 
     fun resetCounters() {
         txBytesTotal.set(0L)
         rxBytesTotal.set(0L)
     }
 
-    fun start() {
-        if (!running.compareAndSet(false, true)) return
-        val srv = ServerSocket()
-        srv.reuseAddress = true
-        srv.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), listenPort), 256)
-        serverSocket = srv
+    fun updateVector(
+        vector: BypassVector,
+        customStride: Int = 400,
+        jitterBytes: Int = 20,
+        rawPassthrough: Boolean = false
+    ) {
+        val cur = routeRef.get()
+        routeRef.set(
+            cur.copy(
+                vector = vector,
+                customStride = customStride,
+                jitterBytes = jitterBytes,
+                rawPassthrough = rawPassthrough || vector.family == "DIRECT"
+            )
+        )
+    }
 
-        val exec = Executors.newCachedThreadPool { r ->
-            Thread({
-                try {
-                    r.run()
-                } catch (_: Throwable) {
-                }
-            }, "AlanMutatorBridge-$listenPort").apply { isDaemon = true }
+    fun updateRoute(
+        remoteHost: String,
+        remotePort: Int,
+        vector: BypassVector,
+        customStride: Int = 400,
+        jitterBytes: Int = 20,
+        rawPassthrough: Boolean = false,
+        flushExistingPool: Boolean = false
+    ) {
+        val cleanHost = remoteHost.trim().removePrefix("[").removeSuffix("]")
+        val prev = routeRef.get()
+        if (prev.remoteHost != cleanHost) {
+            cachedAddressRef.set(null)
         }
-        pool = exec
-        watchdogScheduler = Executors.newSingleThreadScheduledExecutor { r ->
-            Thread({
-                try {
-                    r.run()
-                } catch (_: Throwable) {
-                }
-            }, "AlanConnectTimer-$listenPort").apply { isDaemon = true }
+        val effectivePass = rawPassthrough || vector.family == "DIRECT"
+        routeRef.set(
+            RouteConfig(
+                remoteHost = cleanHost,
+                remotePort = remotePort,
+                vector = vector,
+                customStride = customStride,
+                jitterBytes = jitterBytes,
+                rawPassthrough = effectivePass
+            )
+        )
+        if (flushExistingPool) {
+            dropActiveConnections()
         }
+    }
 
-        exec.execute {
-            while (running.get()) {
-                try {
-                    val client = srv.accept()
-                    exec.execute {
-                        try {
-                            handleSession(client)
-                        } catch (_: Throwable) {
-                            closeQuietly(client)
-                        }
-                    }
-                } catch (_: Throwable) {
-                    if (!running.get()) break
-                }
-            }
-        }
+    fun updateEndpoint(remoteHost: String, remotePort: Int, flushExisting: Boolean = true) {
+        val cur = routeRef.get()
+        updateRoute(remoteHost, remotePort, cur.vector, cur.customStride, cur.jitterBytes, cur.rawPassthrough, flushExisting)
     }
 
     fun dropActiveConnections() {
-        val clients = synchronized(liveClientSockets) { liveClientSockets.toList() }
-        for (c in clients) {
-            closeQuietly(c)
+        val snapshot = liveSockets.toList()
+        liveSockets.clear()
+        for (s in snapshot) {
+            try { s.shutdownInput() } catch (_: Throwable) {}
+            try { s.shutdownOutput() } catch (_: Throwable) {}
+            try { s.close() } catch (_: Throwable) {}
         }
-        val remotes = synchronized(liveRemoteHandles) { liveRemoteHandles.toList() }
-        for (h in remotes) {
-            h.shutdownNow()
-        }
+    }
+
+    fun start(): Int {
+        if (!running.compareAndSet(false, true)) return boundPort
+        AlanNativeSocket.ensureLoaded()
+        val srv = ServerSocket()
+        srv.reuseAddress = true
+        srv.bind(InetSocketAddress("127.0.0.1", listenPort), 256)
+        boundPort = srv.localPort
+        serverSocket = srv
+        ioPool.execute { acceptLoop(srv) }
+        return boundPort
     }
 
     fun stop() {
-        if (!running.compareAndSet(true, false)) return
-        try {
-            serverSocket?.close()
-        } catch (_: Throwable) {
-        }
+        running.set(false)
+        try { serverSocket?.close() } catch (_: Throwable) {}
         serverSocket = null
         dropActiveConnections()
-        watchdogScheduler?.shutdownNow()
-        watchdogScheduler = null
-        pool?.shutdownNow()
-        pool = null
+        try { ioPool.shutdownNow() } catch (_: Throwable) {}
     }
 
-    private fun configureClientSocket(sock: Socket) {
-        try {
-            sock.tcpNoDelay = true
-            sock.keepAlive = true
-            sock.sendBufferSize = SOCKET_BUF_SIZE
-            sock.receiveBufferSize = SOCKET_BUF_SIZE
-        } catch (_: Throwable) {
+    private fun acceptLoop(srv: ServerSocket) {
+        while (running.get() && !srv.isClosed) {
+            try {
+                val clientSock = srv.accept()
+                val sid = sessionSeq.incrementAndGet() % 10000
+                ioPool.execute { handleSession(clientSock, sid) }
+            } catch (_: Throwable) {
+                if (!running.get()) break
+            }
         }
     }
 
     private fun resolveTargetAddress(host: String): InetAddress {
-        val cached = cachedAddressRef.get()
-        if (cached != null && cached.first == host) {
-            return cached.second
+        val clean = host.trim().removePrefix("[").removeSuffix("]")
+        cachedAddressRef.get()?.let { (h, addr) ->
+            if (h == clean) return addr
         }
-        val addresses = InetAddress.getAllByName(host)
-        val picked = addresses.firstOrNull { it is Inet4Address } ?: addresses.first()
-        cachedAddressRef.set(host to picked)
-        return picked
-    }
+        dohResolutionCache[clean]?.let { cached ->
+            cachedAddressRef.set(clean to cached)
+            return cached
+        }
 
-    private fun openProtectedPosixRemote(host: String, port: Int): PosixRemoteHandle {
-        val targetAddr = resolveTargetAddress(host)
-        val domain = if (targetAddr is Inet6Address) OsConstants.AF_INET6 else OsConstants.AF_INET
-        val rawFd = Os.socket(domain, OsConstants.SOCK_STREAM, OsConstants.IPPROTO_TCP)
-        val handle = PosixRemoteHandle(rawFd)
+        if (clean.all { it.isDigit() || it == '.' } || clean.contains(":")) {
+            val numeric = InetAddress.getByName(clean)
+            cachedAddressRef.set(clean to numeric)
+            return numeric
+        }
 
         try {
-            try {
-                ParcelFileDescriptor.dup(rawFd).use { dupPfd ->
-                    AlanVpnService.protectRawFd(dupPfd.fd)
-                }
-            } catch (_: Throwable) {
+            val all = InetAddress.getAllByName(clean)
+            val valid = all.filter { !isPoisonedIp(it.hostAddress.orEmpty()) }
+            val picked = valid.firstOrNull { it is Inet4Address } ?: valid.firstOrNull()
+            if (picked != null) {
+                dohResolutionCache[clean] = picked
+                cachedAddressRef.set(clean to picked)
+                return picked
             }
-
-            try {
-                Os.setsockoptInt(rawFd, OsConstants.IPPROTO_TCP, OsConstants.TCP_NODELAY, 1)
-                Os.setsockoptInt(rawFd, OsConstants.SOL_SOCKET, OsConstants.SO_KEEPALIVE, 1)
-                Os.setsockoptInt(rawFd, OsConstants.SOL_SOCKET, OsConstants.SO_SNDBUF, SOCKET_BUF_SIZE)
-                Os.setsockoptInt(rawFd, OsConstants.SOL_SOCKET, OsConstants.SO_RCVBUF, SOCKET_BUF_SIZE)
-            } catch (_: Throwable) {
-            }
-
-            liveRemoteHandles.add(handle)
-            val timerFuture = watchdogScheduler?.schedule({
-                if (!handle.connected.get()) {
-                    handle.shutdownNow()
-                }
-            }, CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-
-            try {
-                Os.connect(rawFd, targetAddr, port)
-                handle.connected.set(true)
-            } finally {
-                timerFuture?.cancel(false)
-            }
-            return handle
-        } catch (e: Throwable) {
-            liveRemoteHandles.remove(handle)
-            handle.shutdownNow()
-            handle.release()
-            throw e
+        } catch (_: Throwable) {
         }
-    }
 
-    private fun handleSession(clientSock: Socket) {
-        liveClientSockets.add(clientSock)
-        activeConnectionsCount.incrementAndGet()
-        var remoteHandle: PosixRemoteHandle? = null
-
-        try {
-            configureClientSocket(clientSock)
-            val (remoteHost, remotePort) = remoteTargetRef.get()
-            val handle = openProtectedPosixRemote(remoteHost, remotePort)
-            remoteHandle = handle
-
-            val vec = activeVectorRef.get()
-            val stride = customStrideRef.get()
-            val jitter = jitterBytesRef.get()
-            val passthrough = vec.family.equals("DIRECT", ignoreCase = true) || vec.vectorId == "VEC-00"
-
-            val clientIn = clientSock.getInputStream()
-
-            if (!passthrough) {
-                val initialFlight = readExactInitialFlight(clientSock, clientIn)
-                if (initialFlight.isEmpty()) {
-                    return
-                }
-                if (TlsByteMutator.isTlsClientHello(initialFlight)) {
-                    TlsByteMutator.transmitClientHello(
-                        remoteFd = handle.fd,
-                        chRecord = initialFlight,
-                        vector = vec,
-                        customStride = stride,
-                        jitterBytes = jitter
-                    )
-                } else if (TlsByteMutator.isPlainHttpRequest(initialFlight)) {
-                    TlsByteMutator.transmitPlainHttp(
-                        remoteFd = handle.fd,
-                        httpBuf = initialFlight,
-                        vector = vec,
-                        customStride = stride,
-                        jitterBytes = jitter
-                    )
-                } else {
-                    TlsByteMutator.writeAllFd(handle.fd, initialFlight)
-                }
-                txBytesTotal.addAndGet(initialFlight.size.toLong())
-            }
-
-            val exec = pool
-            if (exec != null && handle.retain()) {
-                try {
-                    exec.execute {
-                        try {
-                            downlinkPump(handle, clientSock)
-                        } catch (_: Throwable) {
-                        } finally {
-                            closeQuietly(clientSock)
-                            handle.shutdownNow()
-                            handle.release()
+        for (dohUrl in listOf(
+            "https://1.1.1.1/dns-query?name=$clean&type=A",
+            "https://8.8.8.8/resolve?name=$clean&type=A",
+            "https://9.9.9.9:5053/dns-query?name=$clean&type=A"
+        )) {
+            try {
+                val req = Request.Builder().url(dohUrl).header("Accept", "application/dns-json").get().build()
+                dohClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val ans = JSONObject(resp.body?.string().orEmpty()).optJSONArray("Answer")
+                        if (ans != null) {
+                            for (i in 0 until ans.length()) {
+                                val rec = ans.getJSONObject(i)
+                                if (rec.optInt("type") == 1) {
+                                    val ipStr = rec.optString("data", "").trim()
+                                    if (!isPoisonedIp(ipStr)) {
+                                        val resolved = InetAddress.getByName(ipStr)
+                                        dohResolutionCache[clean] = resolved
+                                        cachedAddressRef.set(clean to resolved)
+                                        return resolved
+                                    }
+                                }
+                            }
                         }
                     }
-                } catch (t: Throwable) {
-                    handle.release()
-                    throw t
                 }
-            }
-
-            uplinkPump(
-                clientSock = clientSock,
-                remoteHandle = handle,
-                vec = vec,
-                passthrough = passthrough
-            )
-        } catch (_: Throwable) {
-        } finally {
-            liveClientSockets.remove(clientSock)
-            closeQuietly(clientSock)
-            if (remoteHandle != null) {
-                liveRemoteHandles.remove(remoteHandle)
-                remoteHandle.shutdownNow()
-                remoteHandle.release()
-            }
-            activeConnectionsCount.decrementAndGet()
-        }
-    }
-
-    private fun readExactInitialFlight(sock: Socket, input: InputStream): ByteArray {
-        val prevTimeout = sock.soTimeout
-        try {
-            sock.soTimeout = INITIAL_FLIGHT_TIMEOUT_MS
-            val hdr = ByteArray(5)
-            var got = 0
-            while (got < 5) {
-                val n = input.read(hdr, got, 5 - got)
-                if (n < 0) {
-                    return if (got > 0) hdr.copyOf(got) else ByteArray(0)
-                }
-                got += n
-            }
-
-            if ((hdr[0].toInt() and 0xFF) != 0x16) {
-                val out = ByteArrayOutputStream(2048)
-                out.write(hdr)
-                try {
-                    sock.soTimeout = 40
-                    val extra = ByteArray(16384)
-                    val extraRead = input.read(extra, 0, extra.size)
-                    if (extraRead > 0) {
-                        out.write(extra, 0, extraRead)
-                    }
-                } catch (_: SocketTimeoutException) {
-                }
-                return out.toByteArray()
-            }
-
-            val bodyLen = TlsByteMutator.readUint16BE(hdr, 3)
-            if (bodyLen <= 0 || bodyLen > 32768) {
-                return hdr
-            }
-
-            val fullRecord = ByteArray(5 + bodyLen)
-            System.arraycopy(hdr, 0, fullRecord, 0, 5)
-            var bodyGot = 0
-            while (bodyGot < bodyLen) {
-                val n = input.read(fullRecord, 5 + bodyGot, bodyLen - bodyGot)
-                if (n < 0) throw EOFException("Incomplete TLS ClientHello record")
-                bodyGot += n
-            }
-            return fullRecord
-        } finally {
-            try {
-                sock.soTimeout = prevTimeout
             } catch (_: Throwable) {
             }
         }
+
+        return InetAddress.getByName(clean)
     }
 
-    private fun uplinkPump(
-        clientSock: Socket,
-        remoteHandle: PosixRemoteHandle,
-        vec: BypassVector,
-        passthrough: Boolean
-    ) {
-        val clientIn = clientSock.getInputStream()
-        val buf = ByteArray(STREAM_CHUNK_SIZE)
-        var flightNum = if (passthrough) 0 else 1
+    private fun readExactInitialFlight(sock: Socket, timeoutMs: Int = HANDSHAKE_READ_TIMEOUT_MS): ByteArray {
+        sock.soTimeout = timeoutMs
+        val ins = sock.getInputStream()
+        val hdr = ByteArray(5)
+        var hdrRead = 0
+        while (hdrRead < 5) {
+            val n = ins.read(hdr, hdrRead, 5 - hdrRead)
+            if (n <= 0) {
+                return if (hdrRead > 0) hdr.copyOf(hdrRead) else ByteArray(0)
+            }
+            hdrRead += n
+        }
 
-        while (running.get() && !clientSock.isClosed && remoteHandle.fd.valid()) {
-            val n = clientIn.read(buf)
+        val recLen = ((hdr[3].toInt() and 0xFF) shl 8) or (hdr[4].toInt() and 0xFF)
+        if ((hdr[0].toInt() and 0xFF) != 0x16 || recLen <= 0 || recLen > 16384) {
+            val out = ByteArrayOutputStream(1024)
+            out.write(hdr)
+            sock.soTimeout = 45
+            val tmp = ByteArray(16384)
+            try {
+                val extra = ins.read(tmp)
+                if (extra > 0) out.write(tmp, 0, extra)
+            } catch (_: SocketTimeoutException) {
+            } catch (_: Throwable) {
+            }
+            return out.toByteArray()
+        }
+
+        val full = ByteArray(5 + recLen)
+        System.arraycopy(hdr, 0, full, 0, 5)
+        var bodyRead = 0
+        while (bodyRead < recLen) {
+            val n = ins.read(full, 5 + bodyRead, minOf(16384, recLen - bodyRead))
             if (n <= 0) break
-            flightNum++
-
-            val payload: ByteArray
-            val payloadLen: Int
-
-            if (!passthrough && flightNum == 2 && vec.coalesceFlight2 && n <= 180) {
-                val merged = ByteArrayOutputStream(n + 4096)
-                merged.write(buf, 0, n)
-                val prevTimeout = clientSock.soTimeout
-                try {
-                    clientSock.soTimeout = 22
-                    val extraBuf = ByteArray(16384)
-                    val extraRead = clientIn.read(extraBuf)
-                    if (extraRead > 0) {
-                        merged.write(extraBuf, 0, extraRead)
-                    }
-                } catch (_: SocketTimeoutException) {
-                } finally {
-                    try {
-                        clientSock.soTimeout = prevTimeout
-                    } catch (_: Throwable) {
-                    }
-                }
-                payload = merged.toByteArray()
-                payloadLen = payload.size
-            } else {
-                payload = buf
-                payloadLen = n
-            }
-
-            if (
-                !passthrough &&
-                vec.family.equals("FRAGMENT", ignoreCase = true) &&
-                vec.fragFlights > 1 &&
-                flightNum <= vec.fragFlights &&
-                vec.fragSliceMax > 0
-            ) {
-                val exactSlice = if (payload === buf) payload.copyOfRange(0, payloadLen) else payload
-                TlsByteMutator.transmitFragmentedBuffer(
-                    remoteFd = remoteHandle.fd,
-                    buf = exactSlice,
-                    sliceMin = vec.fragSliceMin,
-                    sliceMax = vec.fragSliceMax,
-                    delayMinMs = vec.fragDelayMinMs,
-                    delayMaxMs = vec.fragDelayMaxMs
-                )
-            } else {
-                TlsByteMutator.writeAllFd(remoteHandle.fd, payload, 0, payloadLen)
-            }
-
-            txBytesTotal.addAndGet(payloadLen.toLong())
+            bodyRead += n
         }
-
-        remoteHandle.shutdownWrite()
+        return if (bodyRead == recLen) full else full.copyOf(5 + bodyRead)
     }
 
-    private fun downlinkPump(remoteHandle: PosixRemoteHandle, clientSock: Socket) {
+    private fun handleSession(clientSock: Socket, sid: Int) {
+        val cfg = routeRef.get()
+        if (cfg.remoteHost.isBlank()) {
+            try { clientSock.close() } catch (_: Throwable) {}
+            return
+        }
+
+        val remoteSock = Socket()
+        liveSockets.add(clientSock)
+        liveSockets.add(remoteSock)
+
+        var clientPfd: ParcelFileDescriptor? = null
+        var remotePfd: ParcelFileDescriptor? = null
+
         try {
-            if (clientSock.isClosed) return
-            val clientOut = clientSock.getOutputStream()
-            val buf = ByteArray(STREAM_CHUNK_SIZE)
-            while (running.get() && !clientSock.isClosed && remoteHandle.fd.valid()) {
-                val n = Os.read(remoteHandle.fd, buf, 0, buf.size)
-                if (n <= 0) break
-                clientOut.write(buf, 0, n)
-                clientOut.flush()
-                rxBytesTotal.addAndGet(n.toLong())
+            clientSock.tcpNoDelay = true
+            clientSock.keepAlive = true
+
+            val targetAddr = resolveTargetAddress(cfg.remoteHost)
+            if (targetAddr is Inet4Address) {
+                try { remoteSock.bind(InetSocketAddress(0)) } catch (_: Throwable) {}
+            }
+            try { protectSocket?.invoke(remoteSock) } catch (_: Throwable) {}
+            AlanVpnService.protectRawSocket(remoteSock)
+            remoteSock.tcpNoDelay = true
+            remoteSock.keepAlive = true
+
+            val t0 = System.nanoTime()
+            remoteSock.connect(InetSocketAddress(targetAddr, cfg.remotePort), CONNECT_TIMEOUT_MS)
+            val tcpMs = ((System.nanoTime() - t0) / 1_000_000L).toInt().coerceAtLeast(1)
+
+            // Re-affirm fwmark protection after connect in case IPv6/dual-stack created FD during connect
+            AlanVpnService.protectRawSocket(remoteSock)
+
+            clientPfd = try { ParcelFileDescriptor.fromSocket(clientSock) } catch (_: Throwable) { null }
+            remotePfd = try { ParcelFileDescriptor.fromSocket(remoteSock) } catch (_: Throwable) { null }
+            val clientFd = clientPfd?.fd ?: -1
+            val remoteFd = remotePfd?.fd ?: -1
+
+            AlanNativeSocket.tuneTcpSocket(clientFd, SOCKET_BUFFER_SIZE)
+            AlanNativeSocket.tuneTcpSocket(remoteFd, SOCKET_BUFFER_SIZE)
+
+            val remoteOut = remoteSock.getOutputStream()
+
+            if (!cfg.rawPassthrough) {
+                val firstData = readExactInitialFlight(clientSock, timeoutMs = HANDSHAKE_READ_TIMEOUT_MS)
+                if (firstData.isEmpty()) return
+
+                val isTlsHello = firstData.size >= 44 &&
+                    (firstData[0].toInt() and 0xFF) == 0x16 &&
+                    (firstData[5].toInt() and 0xFF) == 0x01
+
+                val isHttpReq = firstData.size >= 5 && (
+                    startsWithAscii(firstData, "GET ") ||
+                        startsWithAscii(firstData, "POST ") ||
+                        startsWithAscii(firstData, "HEAD ") ||
+                        startsWithAscii(firstData, "PUT ") ||
+                        startsWithAscii(firstData, "OPTIONS ") ||
+                        startsWithAscii(firstData, "DELETE ")
+                    )
+
+                val sentBytes = when {
+                    isTlsHello -> {
+                        val (sent, trace) = TlsByteMutator.transmitClientHello(
+                            sock = remoteSock,
+                            out = remoteOut,
+                            nativeFd = remoteFd,
+                            chRecord = firstData,
+                            vector = cfg.vector,
+                            customStride = cfg.customStride,
+                            jitterBytes = cfg.jitterBytes
+                        )
+                        onLog?.invoke("[S#%04d] TCP=%dms | %s: %s".format(sid, tcpMs, cfg.vector.vectorId, trace))
+                        sent
+                    }
+                    isHttpReq -> {
+                        val (sent, trace) = TlsByteMutator.transmitPlainHttp(
+                            sock = remoteSock,
+                            out = remoteOut,
+                            nativeFd = remoteFd,
+                            httpPayload = firstData,
+                            vector = cfg.vector,
+                            customStride = cfg.customStride,
+                            jitterBytes = cfg.jitterBytes
+                        )
+                        onLog?.invoke("[S#%04d] TCP=%dms | %s: %s".format(sid, tcpMs, cfg.vector.vectorId, trace))
+                        sent
+                    }
+                    else -> {
+                        remoteOut.write(firstData)
+                        remoteOut.flush()
+                        firstData.size
+                    }
+                }
+                txBytesTotal.addAndGet(sentBytes.toLong())
+            }
+
+            remoteSock.soTimeout = 0
+            clientSock.soTimeout = 0
+
+            val downDone = AtomicBoolean(false)
+            ioPool.execute {
+                val buf = ByteArray(STREAM_CHUNK_SIZE)
+                try {
+                    val rIn = remoteSock.getInputStream()
+                    val cOut = clientSock.getOutputStream()
+                    while (running.get()) {
+                        val n = rIn.read(buf)
+                        if (n <= 0) break
+                        cOut.write(buf, 0, n)
+                        cOut.flush()
+                        rxBytesTotal.addAndGet(n.toLong())
+                    }
+                } catch (_: Throwable) {
+                } finally {
+                    try { clientSock.shutdownOutput() } catch (_: Throwable) {}
+                    downDone.set(true)
+                }
+            }
+
+            var flightNum = if (cfg.rawPassthrough) 0 else 1
+            var uplinkAppBytes = 0
+            var oobShieldDone = false
+            val upBuf = ByteArray(STREAM_CHUNK_SIZE)
+            val cIn: InputStream = clientSock.getInputStream()
+
+            try {
+                while (running.get()) {
+                    val n = cIn.read(upBuf)
+                    if (n <= 0) break
+                    flightNum++
+
+                    var dataArr = upBuf
+                    var dataLen = n
+
+                    if (!cfg.rawPassthrough && flightNum == 2 && cfg.vector.coalesceFlight2 && n <= 180) {
+                        if (AlanNativeSocket.waitReadable(clientFd, 18)) {
+                            val extraBuf = ByteArray(STREAM_CHUNK_SIZE)
+                            val extraN = try { cIn.read(extraBuf) } catch (_: Throwable) { -1 }
+                            if (extraN > 0) {
+                                val merged = ByteArray(n + extraN)
+                                System.arraycopy(upBuf, 0, merged, 0, n)
+                                System.arraycopy(extraBuf, 0, merged, n, extraN)
+                                dataArr = merged
+                                dataLen = merged.size
+                            }
+                        }
+                    }
+
+                    val vec = cfg.vector
+                    val isMultiFrag = !cfg.rawPassthrough &&
+                        vec.family == "FRAGMENT" &&
+                        vec.fragFlights > 1 &&
+                        flightNum <= vec.fragFlights &&
+                        vec.fragSliceMax > 0
+
+                    val useShield = !cfg.rawPassthrough &&
+                        ((vec.uplinkOobShield && !oobShieldDone) || vec.uplinkMssClamp > 0) &&
+                        uplinkAppBytes < UPLINK_SHIELD_WINDOW_BYTES
+
+                    if (isMultiFrag) {
+                        val sentFrag = TlsByteMutator.transmitFragmentedBuffer(
+                            out = remoteOut,
+                            payload = dataArr,
+                            payloadLen = dataLen,
+                            minLen = vec.fragSliceMin,
+                            maxLen = vec.fragSliceMax,
+                            minDelayMs = vec.fragDelayMinMs,
+                            maxDelayMs = vec.fragDelayMaxMs
+                        )
+                        txBytesTotal.addAndGet(sentFrag.toLong())
+                        uplinkAppBytes += dataLen
+                    } else if (useShield) {
+                        val wantOob = vec.uplinkOobShield && !oobShieldDone && (dataArr[0].toInt() and 0xFF) == 0x17
+                        if (wantOob) oobShieldDone = true
+                        val sentSh = TlsByteMutator.transmitUplinkShieldFrame(
+                            sock = remoteSock,
+                            out = remoteOut,
+                            nativeFd = remoteFd,
+                            payload = dataArr,
+                            payloadLen = dataLen,
+                            injectOob = wantOob,
+                            mssClamp = vec.uplinkMssClamp
+                        )
+                        txBytesTotal.addAndGet(sentSh.toLong())
+                        uplinkAppBytes += dataLen
+                    } else {
+                        remoteOut.write(dataArr, 0, dataLen)
+                        remoteOut.flush()
+                        txBytesTotal.addAndGet(dataLen.toLong())
+                        uplinkAppBytes += dataLen
+                    }
+                }
+            } catch (_: Throwable) {
+            } finally {
+                try { remoteSock.shutdownOutput() } catch (_: Throwable) {}
+            }
+
+            var waitedMs = 0
+            while (!downDone.get() && waitedMs < 18000 && running.get()) {
+                try { Thread.sleep(50L) } catch (_: InterruptedException) { break }
+                waitedMs += 50
             }
         } catch (_: Throwable) {
         } finally {
-            try {
-                if (!clientSock.isClosed) {
-                    clientSock.shutdownOutput()
-                }
-            } catch (_: Throwable) {
-            }
+            liveSockets.remove(clientSock)
+            liveSockets.remove(remoteSock)
+            try { clientPfd?.close() } catch (_: Throwable) {}
+            try { remotePfd?.close() } catch (_: Throwable) {}
+            try { clientSock.close() } catch (_: Throwable) {}
+            try { remoteSock.close() } catch (_: Throwable) {}
         }
     }
 
-    private fun closeQuietly(sock: Socket?) {
-        if (sock == null) return
-        try {
-            sock.close()
-        } catch (_: Throwable) {
+    private fun startsWithAscii(buf: ByteArray, prefix: String): Boolean {
+        if (buf.size < prefix.length) return false
+        for (i in prefix.indices) {
+            if (buf[i] != prefix[i].code.toByte()) return false
         }
+        return true
     }
 }
