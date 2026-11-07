@@ -208,7 +208,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         startTelemetryTicker()
         startSelfHealingWatchdog()
         triggerInstantGeoLocationProbes(_profiles.value.filter { it.countryCode == "UN" }, allowMicroTunnelForCdn = false)
-        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.0.0] Core Ready (${xrayCoreManager.getXrayVersion()})") }
+        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.4.2] Core Ready (${xrayCoreManager.getXrayVersion()})") }
     }
 
     fun bindVpnPermissionRequester(requester: ((() -> Unit) -> Unit)?) {
@@ -1974,7 +1974,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             return
         }
 
-        // Filter by user's desired country from the Auto-Repo Location Menu!
         val filteredByCountry = if (targetCountry != "AUTO") {
             repoNodes.filter { it.countryCode.equals(targetCountry, ignoreCase = true) }
         } else {
@@ -1983,13 +1982,13 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val activePool = if (filteredByCountry.isNotEmpty()) {
             filteredByCountry
         } else {
-            appendLog("[AutoPool] No servers found for $targetCountry in current repo; falling back to all locations.")
+            appendLog("[AutoPool] No servers for $targetCountry in repo; using all locations.")
             repoNodes
         }
 
         updateStageState(1, "DONE", "${detectNetworkOperatorLabel()} • ${activePool.size} سرور ($targetBanner)", "${activePool.size}")
 
-        // Step 1: Fast-Resume on top prior verified winner matching target country
+        // Step 1: Try prior verified winner for this location first
         val priorWinners = activePool
             .filter { it.status == "VERIFIED" && it.cachedVectorId.isNotBlank() }
             .sortedBy { if (it.pingMs > 0) it.pingMs else 99999 }
@@ -2030,20 +2029,31 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     if (!isGenValid(gen)) return@async
                     tcpSem.withPermit {
                         if (!isGenValid(gen)) return@withPermit
-                        val ep = if (cleanIpEngine.isCloudflareEdgeProfile(nd) && portEdgeCache.containsKey(nd.port)) {
-                            portEdgeCache[nd.port]!!.first()
+                        val orig = nd.originalHost.ifBlank { nd.host }
+                        val directIp = if (nd.host != orig && !CleanIpScannerEngine.isPoisonedIranIp(nd.host)) {
+                            nd.host
                         } else {
-                            val orig = nd.originalHost.ifBlank { nd.host }
-                            if (nd.host != orig && !CleanIpScannerEngine.isPoisonedIranIp(nd.host)) {
-                                nd.host
-                            } else {
-                                cleanIpEngine.resolveUnpoisonedIpv4Blocking(orig, 1200)
+                            cleanIpEngine.resolveUnpoisonedIpv4Blocking(orig, 1300)
+                        }
+                        var bestEp = ""
+                        var bestMs = -1
+                        if (directIp.isNotEmpty()) {
+                            val ms = cleanIpEngine.fastTcpPingBlocking(directIp, nd.port, 1200)
+                            if (ms >= 0) {
+                                bestEp = directIp
+                                bestMs = ms
                             }
                         }
-                        if (ep.isEmpty()) return@withPermit
-                        val ms = cleanIpEngine.fastTcpPingBlocking(ep, nd.port, 1100)
-                        if (ms >= 0) {
-                            reachablePool.add(Triple(ms, nd, ep))
+                        if (bestMs < 0 && cleanIpEngine.isCloudflareEdgeProfile(nd) && portEdgeCache.containsKey(nd.port)) {
+                            val cfEp = portEdgeCache[nd.port]!!.first()
+                            val ms = cleanIpEngine.fastTcpPingBlocking(cfEp, nd.port, 1200)
+                            if (ms >= 0) {
+                                bestEp = cfEp
+                                bestMs = ms
+                            }
+                        }
+                        if (bestMs >= 0 && bestEp.isNotEmpty()) {
+                            reachablePool.add(Triple(bestMs, nd, bestEp))
                         }
                     }
                 }
@@ -2074,9 +2084,10 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
         val cfg = _settings.value
         val candidateBatches = shortlist.chunked(6)
-        val roundVecIds = listOf("VEC-21", "VEC-17", "VEC-11")
+        val roundVecIds = listOf("VEC-11", "VEC-17", "VEC-21", "VEC-23", "VEC-01")
+        var huntWinner: Triple<Long, Triple<Int, ProfileItem, String>, BypassVector>? = null
 
-        for ((bIdx, batch) in candidateBatches.withIndex()) {
+        outerBatchLoop@ for ((bIdx, batch) in candidateBatches.withIndex()) {
             if (!isGenValid(gen)) return
             val laneSpecs = batch.map { it.second to it.third }
             val multiSession = try {
@@ -2108,11 +2119,11 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 }
 
                 if (!xrayCoreManager.startCore(multiSession.configJson)) continue
-                waitLocalHttpReady(multiSession.lanes.first().httpPort, 450L)
+                waitLocalHttpReady(multiSession.lanes.first().httpPort, 500L)
 
                 for ((rIdx, roundVid) in roundVecIds.withIndex()) {
                     if (!isGenValid(gen)) return
-                    val pct = (42 + (((bIdx * roundVecIds.size + rIdx + 1) * 50) / (candidateBatches.size * roundVecIds.size).coerceAtLeast(1))).coerceIn(42, 94)
+                    val pct = (42 + (((bIdx * roundVecIds.size + rIdx + 1) * 48) / (candidateBatches.size * roundVecIds.size).coerceAtLeast(1))).coerceIn(42, 92)
                     val msg = "مسابقه همزمان ${batch.size} سرور ($targetBanner) • موج ${rIdx + 1}..."
                     _telemetry.update { it.copy(progressPercent = pct, statusDetail = msg) }
                     _taskProgress.value = TaskProgressState(active = true, percent = pct, message = msg)
@@ -2145,7 +2156,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                         multiSession.lanes.mapIndexed { lIdx, lane ->
                             async(Dispatchers.IO) {
                                 if (!isGenValid(gen)) return@async null
-                                val fp = TunnelStreamVerifier.fastProbe(lane.httpPort, 2200L)
+                                val fp = TunnelStreamVerifier.fastProbe(lane.httpPort, 3400L)
                                 if (!fp.ok) return@async null
                                 val rtt = fp.latencyMs.coerceAtLeast(1L)
                                 Triple(rtt, batch[lIdx], activeVecs[lIdx])
@@ -2154,26 +2165,39 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     }.filterNotNull().sortedBy { it.first }
 
                     if (roundWinners.isNotEmpty()) {
-                        val (winMs, winTriple, winVec) = roundWinners.first()
-                        xrayCoreManager.stopCore()
-                        bridges.forEach { it.stop() }
-                        xrayCoreManager.probeSilentMode = false
-                        finalizeAndLockWinnerUnlocked(
-                            gen = gen,
-                            baseNode = winTriple.second,
-                            endpointIp = winTriple.third,
-                            vec = winVec,
-                            pingMs = winMs,
-                            isHiddenAutoNode = true,
-                            rawUriForMeta = winTriple.second.uri
-                        )
-                        return
+                        huntWinner = roundWinners.first()
+                        break@outerBatchLoop
                     }
                 }
             } finally {
+                // CRITICAL: Always stop temporary probe core & bridges BEFORE exiting try/finally!
                 xrayCoreManager.stopCore()
                 bridges.forEach { it.stop() }
                 xrayCoreManager.probeSilentMode = false
+            }
+        }
+
+        // CRITICAL: Call finalizeAndLockWinnerUnlocked STRICTLY OUTSIDE the try/finally block so production Xray is NEVER stopped!
+        if (huntWinner != null && isGenValid(gen)) {
+            val (winMs, winTriple, winVec) = huntWinner!!
+            finalizeAndLockWinnerUnlocked(
+                gen = gen,
+                baseNode = winTriple.second,
+                endpointIp = winTriple.third,
+                vec = winVec,
+                pingMs = winMs,
+                isHiddenAutoNode = true,
+                rawUriForMeta = winTriple.second.uri
+            )
+            return
+        }
+
+        // Fallback: Deep 12-vector single-node pipeline on top 2 servers of the chosen location
+        for (topCand in shortlist.take(2)) {
+            if (!isGenValid(gen)) return
+            val candNode = topCand.second.copy(host = topCand.third)
+            if (executeSingleNodePipelineUnlocked(gen, candNode, maxVectors = 12, isHiddenAutoNode = true, rawUriForMeta = topCand.second.uri)) {
+                return
             }
         }
 
@@ -2190,6 +2214,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             )
         }
     }
+
 
 
 
@@ -4843,6 +4868,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     private fun appendLog(msg: String) {
+        if (xrayCoreManager.probeSilentMode && (msg.contains("Started successfully") || msg.contains("Core stopped"))) return
         val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
         val line = "[$stamp] $msg"
         synchronized(logLinesBuffer) {
