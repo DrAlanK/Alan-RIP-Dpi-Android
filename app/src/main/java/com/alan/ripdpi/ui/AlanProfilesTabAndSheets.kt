@@ -1,7 +1,14 @@
 package com.alan.ripdpi.ui
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -27,22 +34,30 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.NetworkCheck
+import androidx.compose.material.icons.outlined.QrCode2
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Radar
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -59,7 +74,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.alan.ripdpi.model.CountryPaletteRegistry
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.MultiFormatReader
+import com.google.zxing.RGBLuminanceSource
+import com.google.zxing.common.HybridBinarizer
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import java.util.Locale
 
 @Composable
@@ -69,14 +91,21 @@ fun ProfilesTabScreen(
     vectors: List<VectorSpec>,
     onSelectConfig: (Int) -> Unit,
     onImportFromClipboard: () -> Unit,
+    onImportConfigsRaw: (String) -> Unit = {},
+    onImportQrPayload: (String) -> Int = { 0 },
     onHuntBest: () -> Unit,
     onQuickPingAll: () -> Unit,
+    onRealTunnelPingConfigs: (selectedIndices: List<Int>, autoRenameWithLocation: Boolean) -> Unit = { _, _ -> onQuickPingAll() },
+    onPingSingleConfig: (index: Int, realTunnelPing: Boolean) -> Unit = { _, _ -> onQuickPingAll() },
+    onAutoRenameConfigsWithLocation: (onlySelectedIndices: List<Int>) -> Unit = {},
     onSortConfigs: (String) -> Unit,
     onDeduplicate: () -> Unit,
     onRemoveDead: () -> Unit,
     onExportVerifiedEarlyData: () -> String,
+    onShareOrExportSelected: (indices: List<Int>, asBase64Sub: Boolean) -> String = { _, _ -> "" },
     onClearAll: () -> Unit,
     onDeleteConfig: (Int) -> Unit,
+    onDeleteSelectedConfigs: (List<Int>) -> Unit = { list -> list.sortedDescending().forEach(onDeleteConfig) },
     onGetEditable: (Int) -> EditableConfigFields,
     onSaveEditable: (Int, EditableConfigFields) -> Unit,
     onSendToMethodScanner: (Int) -> Unit,
@@ -87,28 +116,67 @@ fun ProfilesTabScreen(
 ) {
     val p = LocalAlanPalette.current
     val context = LocalContext.current
-    val isFa = LocalAlanLang.current == AlanLang.FA
 
     var feedback by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     var countryFilter by remember { mutableStateOf("ALL") }
     var activeModalMenu by remember { mutableStateOf("") }
     var showSubsSheet by remember { mutableStateOf(false) }
+    var showBatchImportDialog by remember { mutableStateOf(false) }
     var editingIndex by remember { mutableStateOf<Int?>(null) }
     var cloneTargetIdx by remember { mutableStateOf<Int?>(null) }
+    var itemMoreMenuIdx by remember { mutableStateOf<Int?>(null) }
+    var qrPreviewProfile by remember { mutableStateOf<ProfileItem?>(null) }
 
-    val availableCountries = remember(profiles) {
-        profiles
-            .map { it.countryCode.uppercase(Locale.US) }
-            .distinct()
-            .filter { it.isNotBlank() && it != "UN" }
+    var multiSelectMode by remember { mutableStateOf(false) }
+    val selectedIndices = remember { mutableStateListOf<Int>() }
+
+    // 1. Camera QR Code Scanner Launcher (ZXing Embedded)
+    val qrCameraLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val qrText = result.contents?.trim().orEmpty()
+        if (qrText.isNotEmpty()) {
+            val count = onImportQrPayload(qrText)
+            feedback = "اسکن QR انجام شد ($count مورد اضافه شد)."
+        } else {
+            feedback = "اسکن QR لغو شد."
+        }
+    }
+
+    // 2. Gallery Image QR Code Reader Launcher (GetContent + ZXing MultiFormatReader)
+    val qrGalleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) {
+            val decoded = decodeQrFromGalleryUri(context, uri)
+            if (!decoded.isNullOrBlank()) {
+                val count = onImportQrPayload(decoded)
+                feedback = "کد QR از تصویر خوانده شد ($count مورد اضافه شد)."
+            } else {
+                feedback = "کد QR معتبری در تصویر انتخابی پیدا نشد."
+            }
+        }
+    }
+
+    // Group user's profiles by country for filter chips
+    val countryCounts = remember(profiles) {
+        profiles.groupBy {
+            val code = it.countryCode.trim().uppercase(Locale.US)
+            if (code.isBlank() || code == "UN") {
+                CountryPaletteRegistry.detectCountry(it.name, it.host, it.sni, it.countryCode).code
+            } else {
+                code
+            }
+        }
     }
 
     val indexedFiltered = remember(profiles, searchQuery, countryFilter) {
         val q = searchQuery.trim().lowercase(Locale.ROOT)
         profiles.mapIndexedNotNull { idx, item ->
-            val matchCountry = countryFilter == "ALL" || item.countryCode.equals(countryFilter, ignoreCase = true)
-            if (!matchCountry) {
+            val resolvedCode = item.countryCode.trim().uppercase(Locale.US).let { c ->
+                if (c.isBlank() || c == "UN") {
+                    CountryPaletteRegistry.detectCountry(item.name, item.host, item.sni, item.countryCode).code
+                } else c
+            }
+            val matchesCountry = countryFilter == "ALL" || resolvedCode.equals(countryFilter, ignoreCase = true)
+            if (!matchesCountry) {
                 null
             } else if (q.isEmpty()) {
                 idx to item
@@ -125,114 +193,211 @@ fun ProfilesTabScreen(
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        // Top Header & Actions Bar
+        // Top Tactile Neumorphic Toolbar
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier
                 .fillMaxWidth()
-                .alanGlassCard(cornerRadius = 15.dp)
+                .alanGlassCard(cornerRadius = 18.dp)
                 .padding(horizontal = 13.dp, vertical = 10.dp)
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = tr("کانفیگ‌ها (${profiles.size})", "Profiles (${profiles.size})"),
+                    text = "کانفیگ‌ها (${profiles.size})",
                     color = p.textPrimary,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 15.sp
                 )
                 Text(
                     text = feedback.ifBlank {
-                        tr("برای انتخاب روی سرور بزنید", "Tap any server to select")
+                        if (multiSelectMode) "${selectedIndices.size} کانفیگ انتخاب شده"
+                        else "مدیریت کانفیگ، پینگ واقعی و QR"
                     },
                     color = if (feedback.isNotBlank()) p.emerald else p.textSecondary,
-                    fontSize = 11.sp,
+                    fontSize = 10.5.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TopIconBtn(Icons.Outlined.Add, accent = true) { activeModalMenu = "ADD" }
-                TopIconBtn(Icons.Outlined.NetworkCheck) {
-                    onQuickPingAll()
-                    feedback = if (isFa) "تست پینگ آغاز شد..." else "Pinging all configs..."
-                }
-                TopIconBtn(Icons.Outlined.Sort) { activeModalMenu = "SORT" }
-                TopIconBtn(Icons.Outlined.MoreVert) { activeModalMenu = "MORE" }
+                AlanNeuIconButton(
+                    icon = Icons.Outlined.Add,
+                    tint = p.accentGold,
+                    size = 38.dp,
+                    onClick = { activeModalMenu = "ADD" }
+                )
+                AlanNeuIconButton(
+                    icon = Icons.Outlined.Bolt,
+                    tint = p.emerald,
+                    size = 38.dp,
+                    onClick = { activeModalMenu = "PING" }
+                )
+                AlanNeuIconButton(
+                    icon = Icons.Outlined.Sort,
+                    tint = p.textPrimary,
+                    size = 38.dp,
+                    onClick = { activeModalMenu = "SORT" }
+                )
+                AlanNeuIconButton(
+                    icon = Icons.Outlined.Checklist,
+                    tint = if (multiSelectMode) p.accentGold else p.textPrimary,
+                    size = 38.dp,
+                    isPressed = multiSelectMode,
+                    onClick = {
+                        multiSelectMode = !multiSelectMode
+                        if (!multiSelectMode) selectedIndices.clear()
+                    }
+                )
+                AlanNeuIconButton(
+                    icon = Icons.Outlined.MoreVert,
+                    tint = p.textPrimary,
+                    size = 38.dp,
+                    onClick = { activeModalMenu = "MORE" }
+                )
             }
         }
 
-        // Aligned 48.dp Search + Paste + Quick Clean-IP Clone Row
+        // Multi-Select Batch Action Bar
+        AnimatedVisibility(visible = multiSelectMode) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alanNeuInset(cornerRadius = 15.dp, accented = true)
+                    .padding(horizontal = 11.dp, vertical = 8.dp)
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .height(32.dp)
+                            .alanGlassCard(cornerRadius = 9.dp)
+                            .clickable {
+                                selectedIndices.clear()
+                                selectedIndices.addAll(indexedFiltered.map { it.first })
+                            }
+                            .padding(horizontal = 10.dp)
+                    ) {
+                        Text("انتخاب همه", color = p.accentGold, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .height(32.dp)
+                            .alanGlassCard(cornerRadius = 9.dp)
+                            .clickable { selectedIndices.clear() }
+                            .padding(horizontal = 9.dp)
+                    ) {
+                        Text("لغو", color = p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // Real Ping Selected
+                    AlanNeuIconButton(
+                        icon = Icons.Outlined.Bolt,
+                        tint = p.emerald,
+                        size = 34.dp,
+                        onClick = {
+                            if (selectedIndices.isNotEmpty()) {
+                                onRealTunnelPingConfigs(selectedIndices.toList(), true)
+                                feedback = "تست پینگ واقعی ${selectedIndices.size} کانفیگ آغاز شد..."
+                            }
+                        }
+                    )
+                    // Copy Selected as Links / Base64
+                    AlanNeuIconButton(
+                        icon = Icons.Outlined.ContentCopy,
+                        tint = p.accentGold,
+                        size = 34.dp,
+                        onClick = {
+                            if (selectedIndices.isNotEmpty()) {
+                                val exported = onShareOrExportSelected(selectedIndices.toList(), false)
+                                if (exported.isNotBlank()) {
+                                    copyPlainTextToClipboard(context, "SelectedConfigs", exported)
+                                    feedback = "${selectedIndices.size} کانفیگ در کلیپ‌بورد کپی شد."
+                                }
+                            }
+                        }
+                    )
+                    // Share Selected
+                    AlanNeuIconButton(
+                        icon = Icons.Outlined.Share,
+                        tint = p.textPrimary,
+                        size = 34.dp,
+                        onClick = {
+                            if (selectedIndices.isNotEmpty()) {
+                                val exported = onShareOrExportSelected(selectedIndices.toList(), false)
+                                if (exported.isNotBlank()) {
+                                    sharePlainText(context, "Alan-RIP-Dpi Configs", exported)
+                                }
+                            }
+                        }
+                    )
+                    // Delete Selected
+                    AlanNeuIconButton(
+                        icon = Icons.Outlined.DeleteOutline,
+                        tint = p.danger,
+                        size = 34.dp,
+                        onClick = {
+                            if (selectedIndices.isNotEmpty()) {
+                                val cnt = selectedIndices.size
+                                onDeleteSelectedConfigs(selectedIndices.toList())
+                                selectedIndices.clear()
+                                multiSelectMode = false
+                                feedback = "$cnt کانفیگ انتخابی حذف شد."
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        // Concave Search Row + Quick QR Scan + Quick Clipboard Paste
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             AlanSheetTextField(
-                label = tr("جستجوی کانفیگ...", "Search configs..."),
+                label = "جستجوی نام، آدرس، SNI یا کشور...",
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 ltr = false,
                 modifier = Modifier.weight(1f)
             )
 
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .height(48.dp)
-                    .alanGlassCard(cornerRadius = 12.dp)
-                    .clickable {
-                        onImportFromClipboard()
-                        feedback = if (isFa) "کلیپ‌بورد بررسی شد." else "Imported from clipboard."
+            AlanNeuIconButton(
+                icon = Icons.Outlined.QrCodeScanner,
+                tint = p.accentGold,
+                size = 48.dp,
+                onClick = {
+                    val options = ScanOptions().apply {
+                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        setPrompt("اسکن QR کانفیگ یا لینک اشتراک")
+                        setBeepEnabled(false)
+                        setOrientationLocked(true)
                     }
-                    .padding(horizontal = 11.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(Icons.Outlined.ContentPaste, null, tint = p.accentGold, modifier = Modifier.size(16.dp))
-                    Text(
-                        text = tr("کلیپ‌بورد", "Paste"),
-                        color = p.textPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.5.sp
-                    )
+                    qrCameraLauncher.launch(options)
                 }
-            }
+            )
 
-            if (profiles.isNotEmpty()) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .height(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(p.accentGold)
-                        .clickable {
-                            val selIdx = profiles.indexOfFirst { it.isSelected }.let { if (it >= 0) it else 0 }
-                            cloneTargetIdx = selIdx
-                        }
-                        .padding(horizontal = 11.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(Icons.Outlined.Bolt, null, tint = p.onAccent, modifier = Modifier.size(16.dp))
-                        Text(
-                            text = tr("کلون IP", "Clean IP"),
-                            color = p.onAccent,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 11.5.sp
-                        )
-                    }
+            AlanNeuIconButton(
+                icon = Icons.Outlined.ContentPaste,
+                tint = p.textPrimary,
+                size = 48.dp,
+                onClick = {
+                    onImportFromClipboard()
+                    feedback = "محتوای کلیپ‌بورد بررسی و وارد شد."
                 }
-            }
+            )
         }
 
-        // Country Location Filter Chips (Auto-shown when 2+ countries exist)
-        if (availableCountries.size >= 2) {
+        // Location Filter Chips Row (همه + کشورهای موجود با پرچم و تعداد)
+        if (profiles.isNotEmpty()) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 modifier = Modifier
@@ -243,60 +408,60 @@ fun ProfilesTabScreen(
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .height(32.dp)
+                        .height(34.dp)
                         .then(
                             if (allSelected) {
-                                Modifier
-                                    .alanNeuInset(10.dp)
-                                    .border(1.dp, p.accentGold, RoundedCornerShape(10.dp))
+                                Modifier.alanNeuInset(cornerRadius = 11.dp, accented = true)
                             } else {
-                                Modifier.alanGlassCard(cornerRadius = 10.dp)
+                                Modifier.alanGlassCard(cornerRadius = 11.dp)
                             }
                         )
                         .clickable { countryFilter = "ALL" }
-                        .padding(horizontal = 11.dp)
+                        .padding(horizontal = 12.dp)
                 ) {
                     Text(
-                        text = tr("همه لوکیشن‌ها", "All Locations"),
+                        text = "همه (${profiles.size})",
                         color = if (allSelected) p.accentGold else p.textSecondary,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.ExtraBold,
                         fontSize = 11.sp
                     )
                 }
 
-                availableCountries.forEach { code ->
-                    val spec = CountryPaletteRegistry.resolveByCode(code)
-                    val sel = countryFilter.equals(code, ignoreCase = true)
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .height(32.dp)
-                            .then(
-                                if (sel) {
-                                    Modifier
-                                        .alanNeuInset(10.dp)
-                                        .border(1.dp, p.accentGold, RoundedCornerShape(10.dp))
-                                } else {
-                                    Modifier.alanGlassCard(cornerRadius = 10.dp)
+                countryCounts.entries
+                    .sortedByDescending { it.value.size }
+                    .forEach { (code, listForCountry) ->
+                        val spec = CountryPaletteRegistry.resolveByCode(code)
+                        val isSel = countryFilter.equals(code, ignoreCase = true)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .height(34.dp)
+                                .then(
+                                    if (isSel) {
+                                        Modifier.alanNeuInset(cornerRadius = 11.dp, accented = true)
+                                    } else {
+                                        Modifier.alanGlassCard(cornerRadius = 11.dp)
+                                    }
+                                )
+                                .clickable {
+                                    countryFilter = if (isSel) "ALL" else code
                                 }
+                                .padding(horizontal = 11.dp)
+                        ) {
+                            FlagStripeBadge(spec.stripeColors, spec.code, 19.dp, 13.dp)
+                            Text(
+                                text = "${spec.flagEmoji} ${spec.nameFa} (${listForCountry.size})",
+                                color = if (isSel) p.accentGold else p.textSecondary,
+                                fontWeight = if (isSel) FontWeight.ExtraBold else FontWeight.Bold,
+                                fontSize = 11.sp
                             )
-                            .clickable { countryFilter = if (sel) "ALL" else code }
-                            .padding(horizontal = 10.dp)
-                    ) {
-                        FlagStripeBadge(spec.stripeColors, code, 18.dp, 12.dp)
-                        Text(
-                            text = if (isFa) spec.nameFa else spec.nameEn,
-                            color = if (sel) p.accentGold else p.textSecondary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp
-                        )
+                        }
                     }
-                }
             }
         }
 
-        // Profiles List
+        // Profiles LazyColumn
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(9.dp),
             contentPadding = PaddingValues(bottom = 20.dp),
@@ -311,17 +476,14 @@ fun ProfilesTabScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 36.dp)
-                            .alanNeuInset(cornerRadius = 16.dp)
+                            .alanNeuInset(cornerRadius = 18.dp)
                             .padding(24.dp)
                     ) {
                         Text(
                             text = if (profiles.isEmpty()) {
-                                tr(
-                                    "کانفیگی ثبت نشده است؛ از دکمه + یا کلیپ‌بورد اضافه کنید.",
-                                    "No configs yet. Tap + or Paste to add servers."
-                                )
+                                "کانفیگی ثبت نشده است؛ از دکمه + یا اسکنر QR اضافه کنید."
                             } else {
-                                tr("موردی مطابق جستجو یافت نشد.", "No matching configs found.")
+                                "کانفیگی مطابق فیلتر یا جستجوی فعلی یافت نشد."
                             },
                             color = p.textMuted,
                             fontSize = 12.sp
@@ -333,83 +495,190 @@ fun ProfilesTabScreen(
                     items = indexedFiltered,
                     key = { idx, pair -> "$idx-${pair.first}-${pair.second.uid}" }
                 ) { _, (origIdx, item) ->
+                    val isChecked = origIdx in selectedIndices
                     V2ServerRowCard(
                         item = item,
-                        onSelect = { onSelectConfig(origIdx) },
-                        onCloneCleanIp = { cloneTargetIdx = origIdx },
-                        onScan = { onSendToMethodScanner(origIdx) },
-                        onEdit = { editingIndex = origIdx },
-                        onCopy = {
-                            copyPlainTextToClipboard(context, item.name, item.uri)
-                            feedback = if (isFa) "لینک سرور کپی شد." else "Server URI copied."
+                        multiSelectMode = multiSelectMode,
+                        isChecked = isChecked,
+                        onSelect = {
+                            if (multiSelectMode) {
+                                if (isChecked) selectedIndices.remove(origIdx) else selectedIndices.add(origIdx)
+                            } else {
+                                onSelectConfig(origIdx)
+                            }
                         },
-                        onDelete = { onDeleteConfig(origIdx) }
+                        onPingSingle = {
+                            onPingSingleConfig(origIdx, true)
+                            feedback = "تست پینگ واقعی «${item.name.take(18)}» آغاز شد..."
+                        },
+                        onShowQr = { qrPreviewProfile = item },
+                        onOpenActions = { itemMoreMenuIdx = origIdx }
                     )
                 }
             }
         }
     }
 
+    // Top Toolbar Action Menus (ADD, PING, SORT, MORE)
     if (activeModalMenu.isNotEmpty()) {
         val actions: List<Pair<String, () -> Unit>> = when (activeModalMenu) {
             "ADD" -> listOf(
-                tr("وارد کردن از کلیپ‌بورد", "Import from Clipboard") to {
-                    onImportFromClipboard()
-                    feedback = if (isFa) "از کلیپ‌بورد وارد شد." else "Imported from clipboard."
+                "اسکن QR Code با دوربین" to {
+                    val options = ScanOptions().apply {
+                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        setPrompt("اسکن QR کانفیگ یا لینک اشتراک")
+                        setBeepEnabled(false)
+                        setOrientationLocked(true)
+                    }
+                    qrCameraLauncher.launch(options)
                 },
-                tr("ساخت کانفیگ دستی", "Create Custom Config") to { editingIndex = -1 },
-                tr("مدیریت لینک‌های اشتراک (Sub)", "Manage Subscriptions") to { showSubsSheet = true }
+                "خواندن QR Code از تصویر گالری" to {
+                    qrGalleryLauncher.launch("image/*")
+                },
+                "افزودن از کلیپ‌بورد" to {
+                    onImportFromClipboard()
+                    feedback = "از کلیپ‌بورد وارد شد."
+                },
+                "وارد کردن متنی / لینک گروهی" to {
+                    showBatchImportDialog = true
+                },
+                "ساخت کانفیگ دستی" to {
+                    editingIndex = -1
+                },
+                "مدیریت لینک‌های اشتراک (Subscriptions)" to {
+                    showSubsSheet = true
+                }
+            )
+            "PING" -> listOf(
+                "⚡ پینگ واقعی تونل + تشخیص لوکیشن و نام‌گذاری خودکار" to {
+                    val targets = if (multiSelectMode && selectedIndices.isNotEmpty()) selectedIndices.toList() else emptyList()
+                    onRealTunnelPingConfigs(targets, true)
+                    feedback = "پینگ واقعی تونل و نام‌گذاری هوشمند آغاز شد..."
+                },
+                "پینگ سریع TCP همه کانفیگ‌ها" to {
+                    onQuickPingAll()
+                    feedback = "پینگ سریع TCP آغاز شد..."
+                },
+                "نام‌گذاری مرتب همه کانفیگ‌ها با پرچم و کشور" to {
+                    val targets = if (multiSelectMode && selectedIndices.isNotEmpty()) selectedIndices.toList() else emptyList()
+                    onAutoRenameConfigsWithLocation(targets)
+                    feedback = "نام‌گذاری کانفیگ‌ها با پرچم و لوکیشن انجام شد."
+                }
             )
             "SORT" -> listOf(
-                tr("مرتب‌سازی بر اساس پینگ", "Sort by Ping") to {
+                "مرتب‌سازی بر اساس پینگ (سریع‌ترین)" to {
                     onSortConfigs("ping")
-                    feedback = if (isFa) "بر اساس پینگ مرتب شد." else "Sorted by ping."
+                    feedback = "بر اساس پینگ مرتب شد."
                 },
-                tr("مرتب‌سازی بر اساس کشور", "Sort by Country") to {
+                "مرتب‌سازی بر اساس کشور و لوکیشن" to {
                     onSortConfigs("country")
-                    feedback = if (isFa) "بر اساس کشور مرتب شد." else "Sorted by country."
+                    feedback = "بر اساس کشور مرتب شد."
                 },
-                tr("مرتب‌سازی بر اساس نام", "Sort by Name") to {
+                "مرتب‌سازی بر اساس نام" to {
                     onSortConfigs("name")
-                    feedback = if (isFa) "بر اساس نام مرتب شد." else "Sorted by name."
+                    feedback = "بر اساس نام مرتب شد."
+                },
+                "مرتب‌سازی بر اساس پروتکل" to {
+                    onSortConfigs("protocol")
+                    feedback = "بر اساس پروتکل مرتب شد."
                 }
             )
             else -> listOf(
-                tr("بروزرسانی اشتراک‌ها (${subscriptions.size})", "Update Subscriptions (${subscriptions.size})") to {
+                "بروزرسانی لینک‌های اشتراک (${subscriptions.size})" to {
                     onRefreshSubscriptions()
-                    feedback = if (isFa) "در حال بروزرسانی اشتراک‌ها..." else "Updating subscriptions..."
+                    feedback = "در حال بروزرسانی اشتراک‌ها..."
                 },
-                tr("شکار بهترین کانفیگ و اتصال", "Hunt Best & Connect") to { onHuntBest() },
-                tr("حذف کانفیگ‌های تکراری", "Remove Duplicates") to {
+                "شکار بهترین کانفیگ و اتصال هوشمند" to {
+                    onHuntBest()
+                },
+                "حذف کانفیگ‌های تکراری" to {
                     onDeduplicate()
-                    feedback = if (isFa) "تکراری‌ها حذف شدند." else "Duplicates removed."
+                    feedback = "کانفیگ‌های تکراری حذف شدند."
                 },
-                tr("پاک کردن سرورهای بدون پینگ", "Remove Dead Configs") to {
+                "حذف کانفیگ‌های ازکارافتاده (DEAD)" to {
                     onRemoveDead()
-                    feedback = if (isFa) "سرورهای بدون پینگ حذف شدند." else "Dead configs removed."
+                    feedback = "سرورهای ازکارافتاده حذف شدند."
                 },
-                tr("کپی همه کانفیگ‌های سالم", "Export Verified Configs") to {
+                "کپی همه کانفیگ‌های سالم" to {
                     val out = onExportVerifiedEarlyData()
                     if (out.isNotBlank()) {
-                        copyPlainTextToClipboard(context, "Configs", out)
-                        feedback = if (isFa) "کانفیگ‌های سالم کپی شدند." else "Verified configs copied."
+                        copyPlainTextToClipboard(context, "VerifiedConfigs", out)
+                        feedback = "کانفیگ‌های سالم در کلیپ‌بورد کپی شدند."
                     }
                 },
-                tr("حذف همه کانفیگ‌ها", "Clear All Configs") to {
+                "خروجی Base64 همه کانفیگ‌ها" to {
+                    val b64 = onShareOrExportSelected(emptyList(), true)
+                    if (b64.isNotBlank()) {
+                        copyPlainTextToClipboard(context, "Base64Sub", b64)
+                        feedback = "خروجی Base64 در کلیپ‌بورد کپی شد."
+                    }
+                },
+                "حذف همه کانفیگ‌ها" to {
                     onClearAll()
-                    feedback = if (isFa) "همه کانفیگ‌ها پاک شدند." else "All configs cleared."
+                    feedback = "تمام کانفیگ‌ها پاک شدند."
                 }
             )
         }
 
         DarkActionMenuDialog(
             title = when (activeModalMenu) {
-                "ADD" -> tr("افزودن کانفیگ", "Add Config")
-                "SORT" -> tr("مرتب‌سازی لیست", "Sort Profiles")
-                else -> tr("ابزارهای مخزن", "Profile Tools")
+                "ADD" -> "افزودن کانفیگ یا اشتراک"
+                "PING" -> "تست پینگ هوشمند و نام‌گذاری"
+                "SORT" -> "مرتب‌سازی لیست کانفیگ‌ها"
+                else -> "ابزارها و پاک‌سازی مخزن"
             },
             actions = actions,
             onDismiss = { activeModalMenu = "" }
+        )
+    }
+
+    // Per-Item Context Menu Dialog
+    val menuTargetIdx = itemMoreMenuIdx
+    if (menuTargetIdx != null && menuTargetIdx in profiles.indices) {
+        val targetItem = profiles[menuTargetIdx]
+        DarkActionMenuDialog(
+            title = targetItem.name.take(28),
+            actions = listOf(
+                "ویرایش کامل کانفیگ" to { editingIndex = menuTargetIdx },
+                "کلون سریع با IP تمیز کلادفلر" to { cloneTargetIdx = menuTargetIdx },
+                "ارسال به آزمایشگاه متد ضد DPI" to { onSendToMethodScanner(menuTargetIdx) },
+                "نمایش QR Code کانفیگ" to { qrPreviewProfile = targetItem },
+                "کپی لینک کانفیگ" to {
+                    copyPlainTextToClipboard(context, targetItem.name, targetItem.uri)
+                    feedback = "لینک کانفیگ کپی شد."
+                },
+                "اشتراک‌گذاری متنی" to {
+                    sharePlainText(context, targetItem.name, targetItem.uri)
+                },
+                "حذف کانفیگ" to {
+                    onDeleteConfig(menuTargetIdx)
+                    feedback = "کانفیگ حذف شد."
+                }
+            ),
+            onDismiss = { itemMoreMenuIdx = null }
+        )
+    }
+
+    // QR Code Display Dialog
+    val qrTarget = qrPreviewProfile
+    if (qrTarget != null) {
+        QrCodeDisplayDialog(
+            title = qrTarget.name,
+            subtitle = "${qrTarget.protocol} • ${qrTarget.host}:${qrTarget.port}",
+            qrContent = qrTarget.uri.ifBlank { "${qrTarget.protocol.lowercase()}://${qrTarget.host}:${qrTarget.port}#${qrTarget.name}" },
+            onDismiss = { qrPreviewProfile = null }
+        )
+    }
+
+    // Batch Text / Links Import Dialog
+    if (showBatchImportDialog) {
+        BatchTextImportDialog(
+            onDismiss = { showBatchImportDialog = false },
+            onImport = { rawText ->
+                showBatchImportDialog = false
+                onImportConfigsRaw(rawText)
+                feedback = "لینک‌های گروهی بررسی و وارد شدند."
+            }
         )
     }
 
@@ -427,22 +696,19 @@ fun ProfilesTabScreen(
     if (quickCloneIdx != null && quickCloneIdx in profiles.indices) {
         val targetProf = profiles[quickCloneIdx]
         DarkActionMenuDialog(
-            title = tr(
-                "کلون با IP تمیز: ${targetProf.name.take(22)}",
-                "Clean IP Clone: ${targetProf.name.take(22)}"
-            ),
+            title = "تزریق IP تمیز و کلون: ${targetProf.name.take(22)}",
             actions = listOf(
-                tr("شکار ۳ آی‌پی تمیز و ساخت ۳ کلون", "Hunt 3 Clean IPs & Clone x3") to {
+                "شکار ۳ آی‌پی تمیز و ساخت ۳ کلون" to {
                     onQuickCloneCleanIp(quickCloneIdx, 3)
-                    feedback = if (isFa) "در حال ساخت ۳ کلون با IP تمیز..." else "Cloning x3 with Clean IPs..."
+                    feedback = "در حال ساخت ۳ کلون مجهز به IP تمیز..."
                 },
-                tr("شکار ۵ آی‌پی تمیز و ساخت ۵ کلون", "Hunt 5 Clean IPs & Clone x5") to {
+                "شکار ۵ آی‌پی تمیز و ساخت ۵ کلون" to {
                     onQuickCloneCleanIp(quickCloneIdx, 5)
-                    feedback = if (isFa) "در حال ساخت ۵ کلون با IP تمیز..." else "Cloning x5 with Clean IPs..."
+                    feedback = "در حال ساخت ۵ کلون مجهز به IP تمیز..."
                 },
-                tr("شکار ۸ آی‌پی تمیز و ساخت ۸ کلون", "Hunt 8 Clean IPs & Clone x8") to {
+                "شکار ۸ آی‌پی تمیز و ساخت ۸ کلون" to {
                     onQuickCloneCleanIp(quickCloneIdx, 8)
-                    feedback = if (isFa) "در حال ساخت ۸ کلون با IP تمیز..." else "Cloning x8 with Clean IPs..."
+                    feedback = "در حال ساخت ۸ کلون مجهز به IP تمیز..."
                 }
             ),
             onDismiss = { cloneTargetIdx = null }
@@ -460,39 +726,8 @@ fun ProfilesTabScreen(
             onSave = { fields ->
                 onSaveEditable(editIdx, fields)
                 editingIndex = null
-                feedback = if (isFa) "کانفیگ ذخیره شد." else "Config saved."
+                feedback = "کانفیگ با موفقیت ذخیره شد."
             }
-        )
-    }
-}
-
-@Composable
-private fun TopIconBtn(
-    icon: ImageVector,
-    accent: Boolean = false,
-    onClick: () -> Unit
-) {
-    val p = LocalAlanPalette.current
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(36.dp)
-            .then(
-                if (accent) {
-                    Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(p.accentGold)
-                } else {
-                    Modifier.alanNeuInset(cornerRadius = 10.dp)
-                }
-            )
-            .clickable(onClick = onClick)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = if (accent) p.onAccent else p.textPrimary,
-            modifier = Modifier.size(18.dp)
         )
     }
 }
@@ -500,25 +735,29 @@ private fun TopIconBtn(
 @Composable
 private fun V2ServerRowCard(
     item: ProfileItem,
+    multiSelectMode: Boolean,
+    isChecked: Boolean,
     onSelect: () -> Unit,
-    onCloneCleanIp: () -> Unit,
-    onScan: () -> Unit,
-    onEdit: () -> Unit,
-    onCopy: () -> Unit,
-    onDelete: () -> Unit
+    onPingSingle: () -> Unit,
+    onShowQr: () -> Unit,
+    onOpenActions: () -> Unit
 ) {
     val p = LocalAlanPalette.current
+    val countrySpec = remember(item.countryCode, item.name, item.host, item.sni) {
+        CountryPaletteRegistry.detectCountry(item.name, item.host, item.sni, item.countryCode)
+    }
     val flagAccent = item.accentPrimaryColor.toThemeAwareAccent(p.accentGold)
+
     val pingColor = when {
         item.status.equals("DEAD", true) || item.pingMs < 0 -> p.danger
-        item.pingMs in 1..260 -> p.emerald
-        item.pingMs > 260 -> p.accentGold
+        item.pingMs in 1..250 -> p.emerald
+        item.pingMs > 250 -> p.accentGold
         else -> p.textMuted
     }
     val pingText = when {
         item.status.equals("DEAD", true) || item.pingMs < 0 -> "Timeout"
         item.pingMs > 0 -> "${item.pingMs} ms"
-        else -> "—"
+        else -> "تست‌نشده"
     }
     val vectorTag = item.cachedVectorId.ifBlank { item.preferredVectorId.ifBlank { "AUTO" } }
 
@@ -528,21 +767,20 @@ private fun V2ServerRowCard(
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
             .then(
-                if (item.isSelected) {
-                    Modifier
-                        .alanNeuInset(15.dp)
-                        .border(1.3.dp, p.accentGold, RoundedCornerShape(15.dp))
+                if (item.isSelected || isChecked) {
+                    Modifier.alanNeuInset(cornerRadius = 16.dp, accented = true)
                 } else {
-                    Modifier.alanGlassCard(cornerRadius = 15.dp)
+                    Modifier.alanGlassCard(cornerRadius = 16.dp)
                 }
             )
             .clickable(onClick = onSelect)
     ) {
+        // Left/Right Accent Bar
         Box(
             modifier = Modifier
-                .width(if (item.isSelected) 5.dp else 3.5.dp)
+                .width(if (item.isSelected || isChecked) 5.5.dp else 3.5.dp)
                 .fillMaxHeight()
-                .background(if (item.isSelected) p.accentGold else flagAccent.copy(alpha = 0.7f))
+                .background(if (item.isSelected || isChecked) p.accentGold else flagAccent.copy(alpha = 0.72f))
         )
 
         Column(
@@ -551,6 +789,7 @@ private fun V2ServerRowCard(
                 .weight(1f)
                 .padding(horizontal = 12.dp, vertical = 11.dp)
         ) {
+            // Top Row: Multi-select checkbox (if active) + Location Badge + Config Name + Colored Ping
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -558,17 +797,56 @@ private fun V2ServerRowCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    FlagStripeBadge(item.flagStripeColors, item.countryCode, 23.dp, 15.dp)
+                    if (multiSelectMode) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(21.dp)
+                                .then(
+                                    if (isChecked) {
+                                        Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(p.accentGold)
+                                    } else {
+                                        Modifier.alanNeuInset(cornerRadius = 6.dp)
+                                    }
+                                )
+                        ) {
+                            if (isChecked) {
+                                Icon(Icons.Outlined.Check, null, tint = p.onAccent, modifier = Modifier.size(14.dp))
+                            }
+                        }
+                    }
+
+                    // Country Pill Badge (🇩🇪 آلمان)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier
+                            .alanNeuInset(cornerRadius = 8.dp)
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                    ) {
+                        FlagStripeBadge(countrySpec.stripeColors, countrySpec.code, 18.dp, 12.dp)
+                        Text(
+                            text = "${countrySpec.flagEmoji} ${countrySpec.nameFa}",
+                            color = p.textSecondary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 9.5.sp,
+                            maxLines = 1
+                        )
+                    }
+
                     Text(
                         text = item.name,
                         color = p.textPrimary,
                         fontWeight = if (item.isSelected) FontWeight.ExtraBold else FontWeight.Bold,
-                        fontSize = 13.sp,
+                        fontSize = 12.5.sp,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
                 }
 
@@ -580,11 +858,12 @@ private fun V2ServerRowCard(
                         color = pingColor,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.ExtraBold,
-                        fontSize = 12.sp
+                        fontSize = 11.5.sp
                     )
                 }
             }
 
+            // Bottom Row: Protocol & Anti-DPI Vector Tags + Host + Quick Actions (Single Ping, QR, Menu)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -595,6 +874,22 @@ private fun V2ServerRowCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.weight(1f)
                 ) {
+                    Box(
+                        modifier = Modifier
+                            .alanNeuInset(cornerRadius = 6.dp)
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        LtrContent {
+                            Text(
+                                text = item.protocol.uppercase(Locale.US),
+                                color = p.emerald,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 9.sp
+                            )
+                        }
+                    }
+
                     Box(
                         modifier = Modifier
                             .alanNeuInset(cornerRadius = 6.dp)
@@ -613,7 +908,7 @@ private fun V2ServerRowCard(
 
                     LtrContent {
                         Text(
-                            text = "${item.protocol} • ${item.host}:${item.port}",
+                            text = "${item.host}:${item.port}",
                             color = p.textMuted,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 10.sp,
@@ -623,14 +918,12 @@ private fun V2ServerRowCard(
                     }
                 }
 
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(6.dp))
 
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SmallIconAct(Icons.Outlined.Bolt, p.emerald, onCloneCleanIp)
-                    SmallIconAct(Icons.Outlined.Radar, p.accentGold, onScan)
-                    SmallIconAct(Icons.Outlined.Edit, p.textSecondary, onEdit)
-                    SmallIconAct(Icons.Outlined.ContentCopy, p.textSecondary, onCopy)
-                    SmallIconAct(Icons.Outlined.DeleteOutline, p.danger, onDelete)
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    SmallTactileActionBtn(Icons.Outlined.NetworkCheck, p.emerald, onPingSingle)
+                    SmallTactileActionBtn(Icons.Outlined.QrCode2, p.accentGold, onShowQr)
+                    SmallTactileActionBtn(Icons.Outlined.MoreVert, p.textSecondary, onOpenActions)
                 }
             }
         }
@@ -638,15 +931,103 @@ private fun V2ServerRowCard(
 }
 
 @Composable
-private fun SmallIconAct(icon: ImageVector, tint: Color, onClick: () -> Unit) {
+private fun SmallTactileActionBtn(
+    icon: ImageVector,
+    tint: Color,
+    onClick: () -> Unit
+) {
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(30.dp)
-            .alanNeuInset(cornerRadius = 8.dp)
+            .size(31.dp)
+            .alanNeuInset(cornerRadius = 9.dp)
             .clickable(onClick = onClick)
     ) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size(15.dp))
+        Icon(icon, null, tint = tint, modifier = Modifier.size(16.dp))
+    }
+}
+
+@Composable
+private fun BatchTextImportDialog(
+    onDismiss: () -> Unit,
+    onImport: (String) -> Unit
+) {
+    val p = LocalAlanPalette.current
+    var rawLinks by remember { mutableStateOf("") }
+
+    Dialog(onDismissRequest = onDismiss) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = p.surfaceBg,
+                border = BorderStroke(1.2.dp, p.cardBorder),
+                shadowElevation = 10.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "وارد کردن لینک یا متن گروهی",
+                            color = p.accentGold,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp
+                        )
+                        AlanNeuIconButton(
+                            icon = Icons.Outlined.Close,
+                            tint = p.textSecondary,
+                            size = 32.dp,
+                            onClick = onDismiss
+                        )
+                    }
+
+                    AlanSheetTextField(
+                        label = "لینک‌های vless / vmess / trojan / ss یا متن Base64...",
+                        value = rawLinks,
+                        onValueChange = { rawLinks = it },
+                        ltr = true,
+                        singleLine = false
+                    )
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .alanNeuInset(cornerRadius = 12.dp)
+                                .clickable { onDismiss() }
+                        ) {
+                            Text("انصراف", color = p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+                        }
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1.3f)
+                                .height(42.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(p.accentGold)
+                                .clickable {
+                                    if (rawLinks.isNotBlank()) {
+                                        onImport(rawLinks.trim())
+                                    }
+                                }
+                        ) {
+                            Text("افزودن به مخزن", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 12.5.sp)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -660,7 +1041,6 @@ fun SubscriptionManagerSheet(
     onDelete: (Int) -> Unit
 ) {
     val p = LocalAlanPalette.current
-    val layoutDir = if (LocalAlanLang.current == AlanLang.FA) LayoutDirection.Rtl else LayoutDirection.Ltr
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var subTitle by remember { mutableStateOf("") }
     var subUrl by remember { mutableStateOf("") }
@@ -672,7 +1052,7 @@ fun SubscriptionManagerSheet(
         contentColor = p.textPrimary,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {
-        CompositionLocalProvider(LocalLayoutDirection provides layoutDir) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             Column(
                 verticalArrangement = Arrangement.spacedBy(11.dp),
                 modifier = Modifier
@@ -686,7 +1066,7 @@ fun SubscriptionManagerSheet(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = tr("لینک‌های اشتراک", "Subscriptions"),
+                        text = "مدیریت لینک‌های اشتراک (Sub)",
                         color = p.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 15.sp
@@ -700,7 +1080,7 @@ fun SubscriptionManagerSheet(
                             .padding(horizontal = 12.dp)
                     ) {
                         Text(
-                            text = tr("بروزرسانی همه", "Refresh All"),
+                            text = "بروزرسانی همه",
                             color = p.accentGold,
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.5.sp
@@ -709,13 +1089,13 @@ fun SubscriptionManagerSheet(
                 }
 
                 AlanSheetTextField(
-                    label = tr("نام اشتراک", "Subscription Title"),
+                    label = "عنوان اشتراک",
                     value = subTitle,
                     onValueChange = { subTitle = it },
                     ltr = false
                 )
                 AlanSheetTextField(
-                    label = "URL (https://...)",
+                    label = "لینک اشتراک (https://...)",
                     value = subUrl,
                     onValueChange = { subUrl = it },
                     ltr = true
@@ -730,14 +1110,14 @@ fun SubscriptionManagerSheet(
                         .background(p.accentGold)
                         .clickable {
                             if (subUrl.isNotBlank()) {
-                                onAdd(subUrl.trim(), subTitle.trim().ifBlank { "Sub" })
+                                onAdd(subUrl.trim(), subTitle.trim().ifBlank { "Subscription" })
                                 subUrl = ""
                                 subTitle = ""
                             }
                         }
                 ) {
                     Text(
-                        text = tr("افزودن لینک اشتراک", "Add Subscription"),
+                        text = "افزودن لینک اشتراک",
                         color = p.onAccent,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 13.sp
@@ -750,7 +1130,7 @@ fun SubscriptionManagerSheet(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .alanNeuInset(cornerRadius = 12.dp)
+                            .alanNeuInset(cornerRadius = 13.dp)
                             .padding(12.dp)
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
@@ -767,7 +1147,7 @@ fun SubscriptionManagerSheet(
                             }
                         }
                         Spacer(Modifier.width(8.dp))
-                        SmallIconAct(Icons.Outlined.DeleteOutline, p.danger) { onDelete(idx) }
+                        SmallTactileActionBtn(Icons.Outlined.DeleteOutline, p.danger) { onDelete(idx) }
                     }
                 }
                 Spacer(Modifier.height(10.dp))
@@ -786,7 +1166,6 @@ fun ConfigEditorSheet(
     onSave: (EditableConfigFields) -> Unit
 ) {
     val p = LocalAlanPalette.current
-    val layoutDir = if (LocalAlanLang.current == AlanLang.FA) LayoutDirection.Rtl else LayoutDirection.Ltr
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var name by remember { mutableStateOf(initial.name) }
@@ -809,7 +1188,7 @@ fun ConfigEditorSheet(
     var useRawUri by remember { mutableStateOf(initial.useRawUri) }
 
     val vectorOptions = remember(vectors) {
-        listOf(SelectOptionItem("AUTO", "AUTO")) +
+        listOf(SelectOptionItem("AUTO", "خودکار (Auto)")) +
             vectors.map { SelectOptionItem(it.id, it.name) }
     }
 
@@ -820,7 +1199,7 @@ fun ConfigEditorSheet(
         contentColor = p.textPrimary,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {
-        CompositionLocalProvider(LocalLayoutDirection provides layoutDir) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             Column(
                 verticalArrangement = Arrangement.spacedBy(11.dp),
                 modifier = Modifier
@@ -830,7 +1209,7 @@ fun ConfigEditorSheet(
                     .padding(horizontal = 18.dp, vertical = 10.dp)
             ) {
                 Text(
-                    text = if (index < 0) tr("ساخت کانفیگ جدید", "New Config") else tr("ویرایش کانفیگ", "Edit Config"),
+                    text = if (index < 0) "ساخت کانفیگ جدید" else "ویرایش کامل کانفیگ",
                     color = p.textPrimary,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 15.sp
@@ -841,12 +1220,12 @@ fun ConfigEditorSheet(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .alanNeuInset(cornerRadius = 12.dp)
+                        .alanNeuInset(cornerRadius = 13.dp)
                         .clickable { useRawUri = !useRawUri }
                         .padding(horizontal = 13.dp, vertical = 11.dp)
                 ) {
                     Text(
-                        text = tr("وارد کردن مستقیم لینک خام", "Direct Raw URI Mode"),
+                        text = "وارد کردن مستقیم لینک خام",
                         color = p.textPrimary,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp
@@ -856,7 +1235,7 @@ fun ConfigEditorSheet(
 
                 if (useRawUri) {
                     AlanSheetTextField(
-                        label = "URI (vless / vmess / trojan / ss)",
+                        label = "لینک کانفیگ (vless / vmess / trojan / ss)",
                         value = rawUri,
                         onValueChange = { rawUri = it },
                         ltr = true,
@@ -864,7 +1243,7 @@ fun ConfigEditorSheet(
                     )
                 } else {
                     AlanSheetTextField(
-                        label = tr("نام سرور", "Remarks / Name"),
+                        label = "نام سرور",
                         value = name,
                         onValueChange = { name = it },
                         ltr = false
@@ -872,14 +1251,14 @@ fun ConfigEditorSheet(
 
                     Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
                         AlanCustomSelectBox(
-                            label = tr("پروتکل", "Protocol"),
+                            label = "پروتکل",
                             selectedValue = protocol,
                             options = listOf("vless", "vmess", "trojan", "ss").map { SelectOptionItem(it, it.uppercase()) },
                             onSelect = { protocol = it },
                             modifier = Modifier.weight(1f)
                         )
                         AlanCustomSelectBox(
-                            label = tr("نوع شبکه", "Network"),
+                            label = "نوع شبکه",
                             selectedValue = network,
                             options = listOf("ws", "tcp", "grpc", "httpupgrade", "xhttp").map { SelectOptionItem(it, it.uppercase()) },
                             onSelect = { network = it },
@@ -889,14 +1268,14 @@ fun ConfigEditorSheet(
 
                     Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
                         AlanSheetTextField(
-                            label = tr("آدرس سرور", "Address"),
+                            label = "آدرس سرور",
                             value = address,
                             onValueChange = { address = it },
                             ltr = true,
                             modifier = Modifier.weight(1.6f)
                         )
                         AlanSheetTextField(
-                            label = tr("پورت", "Port"),
+                            label = "پورت",
                             value = portText,
                             onValueChange = { portText = it.filter(Char::isDigit) },
                             ltr = true,
@@ -906,7 +1285,7 @@ fun ConfigEditorSheet(
                     }
 
                     AlanSheetTextField(
-                        label = tr("شناسه UUID / رمز عبور", "UUID / Password"),
+                        label = "شناسه UUID / رمز عبور",
                         value = uuidOrPassword,
                         onValueChange = { uuidOrPassword = it },
                         ltr = true
@@ -914,14 +1293,14 @@ fun ConfigEditorSheet(
 
                     Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
                         AlanCustomSelectBox(
-                            label = tr("امنیت", "Security"),
+                            label = "امنیت",
                             selectedValue = security,
                             options = listOf("tls", "reality", "none").map { SelectOptionItem(it, it.uppercase()) },
                             onSelect = { security = it },
                             modifier = Modifier.weight(1f)
                         )
                         AlanCustomSelectBox(
-                            label = tr("متد عبور", "DPI Vector"),
+                            label = "متد عبور ضد DPI",
                             selectedValue = preferredVectorId,
                             options = vectorOptions,
                             onSelect = { preferredVectorId = it },
@@ -935,7 +1314,7 @@ fun ConfigEditorSheet(
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
-                        AlanSheetTextField("Path", path, { path = it }, ltr = true, modifier = Modifier.weight(1.2f))
+                        AlanSheetTextField("مسیر (Path)", path, { path = it }, ltr = true, modifier = Modifier.weight(1.2f))
                         AlanCustomSelectBox(
                             label = "Fingerprint",
                             selectedValue = fingerprint,
@@ -962,7 +1341,7 @@ fun ConfigEditorSheet(
                             .clickable { onDismiss() }
                     ) {
                         Text(
-                            text = tr("انصراف", "Cancel"),
+                            text = "انصراف",
                             color = p.textSecondary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp
@@ -1001,7 +1380,7 @@ fun ConfigEditorSheet(
                             }
                     ) {
                         Text(
-                            text = tr("ذخیره", "Save"),
+                            text = "ذخیره تغییرات",
                             color = p.onAccent,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 13.sp
@@ -1010,5 +1389,29 @@ fun ConfigEditorSheet(
                 }
             }
         }
+    }
+}
+
+private fun decodeQrFromGalleryUri(context: Context, uri: Uri): String? {
+    return try {
+        val stream = context.contentResolver.openInputStream(uri) ?: return null
+        val opts = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val bitmap = BitmapFactory.decodeStream(stream, null, opts)
+        stream.close()
+        if (bitmap == null) return null
+
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        val source = RGBLuminanceSource(width, height, pixels)
+        val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
+        val result = MultiFormatReader().decode(binaryBitmap)
+        result.text?.trim()
+    } catch (_: Throwable) {
+        null
     }
 }

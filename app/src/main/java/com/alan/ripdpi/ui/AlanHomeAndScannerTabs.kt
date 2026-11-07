@@ -1,15 +1,19 @@
 package com.alan.ripdpi.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +29,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -37,13 +40,20 @@ import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Route
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -57,6 +67,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -68,7 +80,8 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import kotlinx.coroutines.delay
+import com.alan.ripdpi.model.CountryPaletteRegistry
+import java.util.Locale
 
 @Composable
 fun HomeTabScreen(
@@ -77,44 +90,35 @@ fun HomeTabScreen(
     liveVectorProbes: List<LiveVectorProbeItem>,
     profiles: List<ProfileItem>,
     settings: EngineSettings,
+    availableRepoLocations: List<RepoLocationOption> = emptyList(),
+    repoScanReport: RepoScanReportSummary = RepoScanReportSummary(),
     onToggleConnection: () -> Unit,
     onActivateAutoMode: (connectNow: Boolean) -> Unit,
+    onSelectAutoRepoCountry: (countryCode: String, reconnectIfActive: Boolean) -> Unit = { _, _ -> },
+    onRefreshAutoRepoCatalog: () -> Unit = {},
     onImportFromClipboard: () -> Unit,
     onSelectProfile: (Int) -> Unit
 ) {
     val p = LocalAlanPalette.current
-    val isFa = LocalAlanLang.current == AlanLang.FA
-    val layoutDir = if (isFa) LayoutDirection.Rtl else LayoutDirection.Ltr
-
-    var showServerPicker by remember { mutableStateOf(false) }
+    var showAutoLocationSheet by remember { mutableStateOf(false) }
+    var showManualServerPicker by remember { mutableStateOf(false) }
     var showLiveRouteModal by remember { mutableStateOf(false) }
 
-    // Floating route notification toast: appears on connect, stays briefly after connected/error, then auto-dismisses
-    val isErrorPhase = telemetry.uiPhase.equals("ERROR", ignoreCase = true)
-    var routeToastVisible by remember { mutableStateOf(false) }
+    val isPureAutoMode = settings.autoPilot || telemetry.activeProfileUid == "__SMART_AUTO__"
+    val preferredAutoCode = settings.preferredAutoCountry.uppercase(Locale.US)
 
-    LaunchedEffect(telemetry.isConnecting, telemetry.isConnected, isErrorPhase) {
-        when {
-            telemetry.isConnecting -> {
-                routeToastVisible = true
-            }
-            telemetry.isConnected -> {
-                routeToastVisible = true
-                delay(4200)
-                routeToastVisible = false
-            }
-            isErrorPhase -> {
-                routeToastVisible = true
-                delay(5200)
-                routeToastVisible = false
-            }
-            else -> {
-                routeToastVisible = false
-            }
-        }
+    val selectedAutoLocation = remember(availableRepoLocations, preferredAutoCode) {
+        availableRepoLocations.firstOrNull {
+            it.countryCode.equals(preferredAutoCode, ignoreCase = true)
+        } ?: availableRepoLocations.firstOrNull() ?: RepoLocationOption(
+            countryCode = "AUTO",
+            countryNameFa = "سریع‌ترین (همه لوکیشن‌ها)",
+            flagEmoji = "⚡",
+            serverCount = profiles.size.coerceAtLeast(12),
+            avgPingMs = 148
+        )
     }
 
-    val isPureAutoMode = settings.autoPilot || telemetry.activeProfileUid == "__SMART_AUTO__"
     val activeIdx = remember(profiles, telemetry.selectedIndex, isPureAutoMode) {
         if (isPureAutoMode) {
             -1
@@ -129,486 +133,399 @@ fun HomeTabScreen(
     }
     val activeProfile = if (isPureAutoMode) null else profiles.getOrNull(activeIdx)
 
+    val autoSpec = remember(selectedAutoLocation.countryCode) {
+        if (selectedAutoLocation.countryCode == "AUTO") null
+        else CountryPaletteRegistry.resolveByCode(selectedAutoLocation.countryCode)
+    }
+
     val resolvedCountryCode = when {
         telemetry.isConnected && telemetry.countryCode.isNotBlank() -> telemetry.countryCode
         activeProfile != null && activeProfile.countryCode.isNotBlank() -> activeProfile.countryCode
+        autoSpec != null -> autoSpec.code
         telemetry.countryCode.isNotBlank() -> telemetry.countryCode
         else -> "UN"
     }
     val resolvedCountryName = when {
         telemetry.isConnected && telemetry.countryName.isNotBlank() -> telemetry.countryName
         activeProfile != null && activeProfile.countryName.isNotBlank() -> activeProfile.countryName
+        autoSpec != null -> autoSpec.nameFa
         else -> "خودکار"
     }
-    val resolvedFlagEmoji = activeProfile?.flagEmoji ?: telemetry.flagEmoji
+    val resolvedFlagEmoji = when {
+        activeProfile != null -> activeProfile.flagEmoji
+        autoSpec != null -> autoSpec.flagEmoji
+        else -> telemetry.flagEmoji
+    }
     val resolvedStripes = when {
         telemetry.isConnected && telemetry.flagStripeColors.size >= 3 -> telemetry.flagStripeColors
         activeProfile != null && activeProfile.flagStripeColors.size >= 3 -> activeProfile.flagStripeColors
+        autoSpec != null && autoSpec.stripeColors.size >= 3 -> autoSpec.stripeColors
         else -> telemetry.flagStripeColors
     }
     val resolvedAccent = when {
         telemetry.isConnected && telemetry.accentPrimaryColor != 0L -> telemetry.accentPrimaryColor
         activeProfile != null && activeProfile.accentPrimaryColor != 0L -> activeProfile.accentPrimaryColor
+        autoSpec != null -> autoSpec.accentPrimary
         telemetry.accentPrimaryColor != 0L -> telemetry.accentPrimaryColor
         else -> 0xFFF5C451L
     }
 
+    val isErrorPhase = telemetry.uiPhase.equals("ERROR", ignoreCase = true)
+
     val cleanHeadline = when {
-        telemetry.isConnected -> tr("متصل شد", "Connected")
-        telemetry.isConnecting -> tr("در حال اتصال...", "Connecting...")
-        isErrorPhase -> tr("خطا در اتصال", "Connection Failed")
-        else -> tr("آماده اتصال", "Disconnected")
+        telemetry.isConnected -> "متصل شد"
+        telemetry.isConnecting -> "در حال اتصال..."
+        isErrorPhase -> "خطا در اتصال"
+        else -> "آماده اتصال"
     }
 
     val cleanSubtitle = when {
-        telemetry.isConnected -> tr("مدت اتصال: ${telemetry.uptimeLabel}", "Uptime: ${telemetry.uptimeLabel}")
-        telemetry.isConnecting -> if (isFa) {
-            telemetry.statusDetail.ifBlank { "در حال اسکن و قفل بهترین مسیر..." }
-        } else {
-            "Scanning & locking optimal anti-DPI route..."
-        }
-        isErrorPhase -> if (isFa) {
-            telemetry.statusDetail.ifBlank { "مسیر برقرار نشد؛ دوباره تلاش کنید" }
-        } else {
-            "Tunnel failed; tap to retry"
-        }
-        isPureAutoMode -> tr("حالت خودکار فعال است • دکمه اتصال را بزنید", "Smart Auto active • Tap Connect")
-        else -> tr("برای برقراری تونل امن دکمه اتصال را بزنید", "Tap Connect to start encrypted tunnel")
+        telemetry.isConnected -> "زمان اتصال: ${telemetry.uptimeLabel}"
+        telemetry.isConnecting -> telemetry.statusDetail.ifBlank { "در حال اسکن و قفل بهترین مسیر..." }
+        isErrorPhase -> telemetry.statusDetail.ifBlank { "مسیر برقرار نشد؛ دوباره تلاش کنید" }
+        isPureAutoMode -> "ریپازیتوری هوشمند (${selectedAutoLocation.countryNameFa}) آماده اتصال"
+        else -> "برای برقراری تونل امن دکمه اتصال را بزنید"
     }
 
-    val selectorLabel = when {
-        activeProfile != null -> activeProfile.name
-        telemetry.isConnected -> "Alan Smart Auto"
-        else -> tr("مخزن هوشمند خودکار", "Smart Auto Repository")
-    }
+    // Show Live Route Card ONLY when connecting, connected, or error
+    val showRouteBox = telemetry.isConnecting || telemetry.isConnected || isErrorPhase
 
-    // Root Box: Base layout is 100% locked with ZERO scroll; Floating notification sits on top without shifting layout!
-    Box(
+    // Zero-Scroll Single-Screen Layout using BoxWithConstraints
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 6.dp)
     ) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val orbSize = (maxHeight * 0.27f).coerceIn(124.dp, 182.dp)
-            val compactVertical = maxHeight < 610.dp
+        val compactScreen = maxHeight < 630.dp
+        val orbSize = when {
+            showRouteBox && compactScreen -> (maxHeight * 0.22f).coerceIn(118.dp, 152.dp)
+            showRouteBox -> (maxHeight * 0.24f).coerceIn(128.dp, 168.dp)
+            compactScreen -> (maxHeight * 0.27f).coerceIn(134.dp, 174.dp)
+            else -> (maxHeight * 0.29f).coerceIn(148.dp, 192.dp)
+        }
 
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            // 1. Conditional Live Stepper Route Card
+            AnimatedVisibility(
+                visible = showRouteBox,
+                enter = fadeIn(tween(220)) + expandVertically(tween(220)),
+                exit = fadeOut(tween(180)) + shrinkVertically(tween(180))
+            ) {
+                LiveStepperHeaderCard(
+                    telemetry = telemetry,
+                    stages = connectionStages,
+                    autoPilot = settings.autoPilot,
+                    onOpenModal = { showLiveRouteModal = true }
+                )
+            }
+
+            // 2. Center Responsive Hero Area (Power Orb + Status + Auto Mode & Location Capsule)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxSize()
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
             ) {
-                // Top & Center Hero Section (Takes remaining height cleanly, never scrolls)
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
+                CenterPowerOrbButton(
+                    isConnected = telemetry.isConnected,
+                    isConnecting = telemetry.isConnecting,
+                    uiPhase = telemetry.uiPhase,
+                    progressPercent = telemetry.progressPercent,
+                    accentColorLong = resolvedAccent,
+                    onClick = onToggleConnection,
+                    modifier = Modifier.size(orbSize)
+                )
+
+                Spacer(Modifier.height(if (compactScreen) 5.dp else 8.dp))
+
+                Text(
+                    text = cleanHeadline,
+                    color = when {
+                        telemetry.isConnected -> p.emerald
+                        isErrorPhase -> p.danger
+                        telemetry.isConnecting -> p.accentGold
+                        else -> p.textPrimary
+                    },
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = if (compactScreen) 16.5.sp else 18.5.sp,
+                    maxLines = 1
+                )
+
+                Spacer(Modifier.height(2.dp))
+
+                Text(
+                    text = cleanSubtitle,
+                    color = p.textSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+
+                Spacer(Modifier.height(if (compactScreen) 8.dp else 13.dp))
+
+                // Tactile Neumorphic Mode & Smart Location Capsule Bar
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    CenterPowerOrbButton(
-                        isConnected = telemetry.isConnected,
-                        isConnecting = telemetry.isConnecting,
-                        uiPhase = telemetry.uiPhase,
-                        progressPercent = telemetry.progressPercent,
-                        accentColorLong = resolvedAccent,
-                        onClick = onToggleConnection,
-                        modifier = Modifier.size(orbSize)
-                    )
-
-                    Spacer(Modifier.height(if (compactVertical) 6.dp else 10.dp))
-
-                    Text(
-                        text = cleanHeadline,
-                        color = when {
-                            telemetry.isConnected -> p.emerald
-                            isErrorPhase -> p.danger
-                            telemetry.isConnecting -> p.accentGold
-                            else -> p.textPrimary
-                        },
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = if (compactVertical) 17.sp else 19.sp,
-                        maxLines = 1
-                    )
-
-                    Spacer(Modifier.height(2.dp))
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
+                    // Raised "حالت خودکار" Button with Live LED Indicator
+                    Box(
+                        contentAlignment = Alignment.Center,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable(enabled = telemetry.isConnecting || telemetry.isConnected || isErrorPhase) {
-                                showLiveRouteModal = true
+                            .height(46.dp)
+                            .then(
+                                if (isPureAutoMode) {
+                                    Modifier.alanGlassCard(
+                                        highlighted = true,
+                                        cornerRadius = 15.dp,
+                                        accentBorderColor = p.accentGold
+                                    )
+                                } else {
+                                    Modifier.alanGlassCard(cornerRadius = 15.dp)
+                                }
+                            )
+                            .clickable {
+                                if (!isPureAutoMode) {
+                                    onActivateAutoMode(false)
+                                } else {
+                                    showAutoLocationSheet = true
+                                }
                             }
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                            .padding(horizontal = 13.dp)
                     ) {
-                        Text(
-                            text = cleanSubtitle,
-                            color = p.textSecondary,
-                            fontSize = 11.5.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Center
-                        )
-                        if (telemetry.isConnected || telemetry.isConnecting) {
-                            Spacer(Modifier.width(5.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when {
+                                            isPureAutoMode && telemetry.isConnected -> p.emerald
+                                            isPureAutoMode -> p.accentGold
+                                            else -> p.textMuted.copy(alpha = 0.45f)
+                                        }
+                                    )
+                            )
                             Icon(
-                                imageVector = Icons.Outlined.Route,
-                                contentDescription = null,
-                                tint = p.accentGold,
-                                modifier = Modifier.size(13.dp)
+                                imageVector = Icons.Outlined.AutoFixHigh,
+                                contentDescription = "حالت خودکار",
+                                tint = if (isPureAutoMode) p.accentGold else p.textSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "حالت خودکار",
+                                color = if (isPureAutoMode) p.accentGold else p.textPrimary,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.5.sp,
+                                maxLines = 1
                             )
                         }
                     }
 
-                    Spacer(Modifier.height(if (compactVertical) 10.dp else 16.dp))
-
-                    // Control Bar: Exact 44.dp matched heights for Auto Mode Button & Server Selector Pill
+                    // Smart Location / Server Selector Capsule
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .height(44.dp)
-                                .then(
-                                    if (isPureAutoMode) {
-                                        Modifier
-                                            .alanNeuInset(13.dp)
-                                            .border(1.2.dp, p.accentGold, RoundedCornerShape(13.dp))
-                                    } else {
-                                        Modifier.alanGlassCard(cornerRadius = 13.dp)
-                                    }
-                                )
-                                .clickable {
-                                    if (!isPureAutoMode) {
-                                        onActivateAutoMode(false)
-                                    } else if (!telemetry.isConnected && !telemetry.isConnecting) {
-                                        onActivateAutoMode(true)
-                                    }
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                            .alanNeuInset(cornerRadius = 15.dp, accented = isPureAutoMode)
+                            .clickable {
+                                if (isPureAutoMode) {
+                                    showAutoLocationSheet = true
+                                } else {
+                                    showManualServerPicker = true
                                 }
-                                .padding(horizontal = 13.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.AutoFixHigh,
-                                    contentDescription = null,
-                                    tint = if (isPureAutoMode) p.accentGold else p.textSecondary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = tr("حالت خودکار", "Auto Mode"),
-                                    color = if (isPureAutoMode) p.accentGold else p.textPrimary,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 11.5.sp,
-                                    maxLines = 1
-                                )
                             }
-                        }
-
+                            .padding(horizontal = 12.dp)
+                    ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(44.dp)
-                                .alanGlassCard(cornerRadius = 13.dp)
-                                .clickable { showServerPicker = true }
-                                .padding(horizontal = 12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
+                            if (isPureAutoMode) {
+                                if (selectedAutoLocation.countryCode == "AUTO") {
+                                    Text(
+                                        text = "⚡",
+                                        fontSize = 14.sp
+                                    )
+                                } else {
+                                    FlagStripeBadge(
+                                        stripeColors = selectedAutoLocation.flagStripeColors,
+                                        countryCode = selectedAutoLocation.countryCode,
+                                        width = 22.dp,
+                                        height = 14.dp
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = if (selectedAutoLocation.countryCode == "AUTO") {
+                                            "سریع‌ترین (همه لوکیشن‌ها)"
+                                        } else {
+                                            "${selectedAutoLocation.flagEmoji} ${selectedAutoLocation.countryNameFa}"
+                                        },
+                                        color = p.textPrimary,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 11.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "انتخاب لوکیشن خودکار • ${selectedAutoLocation.serverCount} سرور",
+                                        color = p.textMuted,
+                                        fontSize = 9.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            } else {
                                 if (activeProfile != null) {
                                     FlagStripeBadge(
                                         stripeColors = activeProfile.flagStripeColors,
                                         countryCode = activeProfile.countryCode,
-                                        width = 20.dp,
-                                        height = 13.dp
+                                        width = 22.dp,
+                                        height = 14.dp
                                     )
                                 } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(if (telemetry.isConnected) p.emerald else p.accentGold)
+                                    Icon(
+                                        imageVector = Icons.Outlined.Dns,
+                                        contentDescription = null,
+                                        tint = p.accentGold,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
-                                Text(
-                                    text = selectorLabel,
-                                    color = p.textPrimary,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = activeProfile?.name ?: "انتخاب سرور دستی",
+                                        color = p.textPrimary,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 11.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = if (activeProfile != null) {
+                                            "${activeProfile.countryName} • ${activeProfile.protocol}"
+                                        } else {
+                                            "${profiles.size} کانفیگ شخصی"
+                                        },
+                                        color = p.textMuted,
+                                        fontSize = 9.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
-                            Icon(
-                                imageVector = Icons.Outlined.KeyboardArrowDown,
-                                contentDescription = null,
-                                tint = p.accentGold,
-                                modifier = Modifier.size(18.dp)
-                            )
                         }
-                    }
-                }
 
-                // Bottom Fixed Telemetry Section: Country Flags Bar + Speed Cards
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    JustifiedCountryFlagsBar(
-                        originCountryName = telemetry.originCountryName,
-                        destCountryCode = resolvedCountryCode,
-                        destCountryName = resolvedCountryName,
-                        destFlagEmoji = resolvedFlagEmoji,
-                        destStripeColors = resolvedStripes,
-                        destAccentLong = resolvedAccent,
-                        egressIp = telemetry.egressIp,
-                        pingMs = telemetry.pingMs,
-                        isConnected = telemetry.isConnected,
-                        isConnecting = telemetry.isConnecting
-                    )
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        SpeedMetricCard(
-                            title = tr("دانلود", "Download"),
-                            rateLabel = if (telemetry.isConnected) telemetry.rxRateLabel else "0 B/s",
-                            icon = Icons.Outlined.ArrowDownward,
-                            accent = p.accentGold,
-                            samples = telemetry.rxHistory,
-                            isConnected = telemetry.isConnected,
-                            modifier = Modifier.weight(1f)
-                        )
-                        SpeedMetricCard(
-                            title = tr("آپلود", "Upload"),
-                            rateLabel = if (telemetry.isConnected) telemetry.txRateLabel else "0 B/s",
-                            icon = Icons.Outlined.ArrowUpward,
-                            accent = p.emerald,
-                            samples = telemetry.txHistory,
-                            isConnected = telemetry.isConnected,
-                            modifier = Modifier.weight(1f)
+                        Icon(
+                            imageVector = Icons.Outlined.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = p.accentGold,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
             }
-        }
 
-        // Layer 2: Compact Floating Notification Pill (Does NOT shift or occupy layout space!)
-        AnimatedVisibility(
-            visible = routeToastVisible,
-            enter = slideInVertically(initialOffsetY = { -it - 24 }, animationSpec = tween(260)) + fadeIn(tween(220)),
-            exit = slideOutVertically(targetOffsetY = { -it - 24 }, animationSpec = tween(240)) + fadeOut(tween(200)),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 4.dp)
-        ) {
-            FloatingRouteToastPill(
-                telemetry = telemetry,
-                stages = connectionStages,
-                autoPilot = settings.autoPilot,
-                onClick = { showLiveRouteModal = true },
-                onDismiss = { routeToastVisible = false }
-            )
+            // 3. Bottom Fixed Stack: Origin/Destination Flags Bar + Live Upload/Download Speed Cards
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                JustifiedCountryFlagsBar(
+                    originCountryName = telemetry.originCountryName,
+                    destCountryCode = resolvedCountryCode,
+                    destCountryName = resolvedCountryName,
+                    destFlagEmoji = resolvedFlagEmoji,
+                    destStripeColors = resolvedStripes,
+                    destAccentLong = resolvedAccent,
+                    egressIp = telemetry.egressIp,
+                    pingMs = telemetry.pingMs,
+                    isConnected = telemetry.isConnected,
+                    isConnecting = telemetry.isConnecting
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    SpeedMetricCard(
+                        title = "دانلود زنده",
+                        rateLabel = if (telemetry.isConnected) telemetry.rxRateLabel else "0 B/s",
+                        icon = Icons.Outlined.ArrowDownward,
+                        accent = p.accentGold,
+                        samples = telemetry.rxHistory,
+                        isConnected = telemetry.isConnected,
+                        modifier = Modifier.weight(1f)
+                    )
+                    SpeedMetricCard(
+                        title = "آپلود زنده",
+                        rateLabel = if (telemetry.isConnected) telemetry.txRateLabel else "0 B/s",
+                        icon = Icons.Outlined.ArrowUpward,
+                        accent = p.emerald,
+                        samples = telemetry.txHistory,
+                        isConnected = telemetry.isConnected,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
         }
     }
 
-    if (showServerPicker) {
-        Dialog(onDismissRequest = { showServerPicker = false }) {
-            CompositionLocalProvider(LocalLayoutDirection provides layoutDir) {
-                Surface(
-                    shape = RoundedCornerShape(22.dp),
-                    color = p.surfaceBg,
-                    border = BorderStroke(1.2.dp, p.cardBorder),
-                    shadowElevation = 10.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = tr("انتخاب منبع اتصال", "Select Connection Source"),
-                                color = p.accentGold,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 14.sp
-                            )
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(30.dp)
-                                    .alanNeuInset(cornerRadius = 15.dp)
-                                    .clickable { showServerPicker = false }
-                            ) {
-                                Icon(Icons.Outlined.Close, null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
-                            }
-                        }
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(40.dp)
-                                    .alanGlassCard(cornerRadius = 11.dp)
-                                    .clickable {
-                                        showServerPicker = false
-                                        onImportFromClipboard()
-                                    }
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Outlined.ContentPaste, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
-                                    Spacer(Modifier.width(5.dp))
-                                    Text(
-                                        text = tr("افزودن کلیپ‌بورد", "Paste Clipboard"),
-                                        color = p.textPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp
-                                    )
-                                }
-                            }
-
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .weight(1.1f)
-                                    .height(40.dp)
-                                    .clip(RoundedCornerShape(11.dp))
-                                    .background(p.accentGold)
-                                    .clickable {
-                                        showServerPicker = false
-                                        onActivateAutoMode(true)
-                                    }
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Outlined.Bolt, null, tint = p.onAccent, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text(
-                                        text = tr("اسکن خودکار و اتصال", "Auto Hunt & Connect"),
-                                        color = p.onAccent,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 11.sp
-                                    )
-                                }
-                            }
-                        }
-
-                        // Pure Auto Mode Option
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .then(
-                                    if (isPureAutoMode) {
-                                        Modifier
-                                            .alanNeuInset(12.dp)
-                                            .border(1.1.dp, p.accentGold, RoundedCornerShape(12.dp))
-                                    } else {
-                                        Modifier.alanGlassCard(cornerRadius = 12.dp)
-                                    }
-                                )
-                                .clickable {
-                                    showServerPicker = false
-                                    onActivateAutoMode(false)
-                                }
-                                .padding(horizontal = 12.dp, vertical = 11.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(Icons.Outlined.AutoFixHigh, null, tint = p.accentGold, modifier = Modifier.size(17.dp))
-                                Text(
-                                    text = tr("حالت خودکار (مخزن هوشمند)", "Smart Auto Mode (Repository)"),
-                                    color = if (isPureAutoMode) p.accentGold else p.textPrimary,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 12.sp
-                                )
-                            }
-                        }
-
-                        if (profiles.isNotEmpty()) {
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(7.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(max = 260.dp)
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                profiles.forEachIndexed { idx, item ->
-                                    val sel = idx == activeIdx
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .then(
-                                                if (sel) {
-                                                    Modifier
-                                                        .alanNeuInset(11.dp)
-                                                        .border(1.1.dp, p.accentGold, RoundedCornerShape(11.dp))
-                                                } else {
-                                                    Modifier.alanGlassCard(cornerRadius = 11.dp)
-                                                }
-                                            )
-                                            .clickable {
-                                                showServerPicker = false
-                                                onSelectProfile(idx)
-                                            }
-                                            .padding(horizontal = 12.dp, vertical = 10.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            FlagStripeBadge(item.flagStripeColors, item.countryCode, 22.dp, 14.dp)
-                                            Text(
-                                                text = item.name,
-                                                color = if (sel) p.accentGold else p.textPrimary,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 12.sp,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                        LtrContent {
-                                            Text(
-                                                text = if (item.pingMs > 0) "${item.pingMs} ms" else item.protocol,
-                                                color = if (item.pingMs in 1..280) p.emerald else p.textMuted,
-                                                fontFamily = FontFamily.Monospace,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 10.5.sp
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+    // Smart Auto-Repo Location Picker Sheet
+    if (showAutoLocationSheet) {
+        SmartRepoLocationPickerSheet(
+            locations = availableRepoLocations,
+            selectedCode = preferredAutoCode,
+            report = repoScanReport,
+            isConnected = telemetry.isConnected,
+            onDismiss = { showAutoLocationSheet = false },
+            onRefreshCatalog = onRefreshAutoRepoCatalog,
+            onSelectLocation = { code ->
+                showAutoLocationSheet = false
+                onSelectAutoRepoCountry(code, telemetry.isConnected)
+            },
+            onSwitchToManualList = {
+                showAutoLocationSheet = false
+                showManualServerPicker = true
             }
-        }
+        )
+    }
+
+    // Manual Personal Configs Picker Dialog
+    if (showManualServerPicker) {
+        ManualServerPickerDialog(
+            profiles = profiles,
+            activeIdx = activeIdx,
+            isPureAutoMode = isPureAutoMode,
+            onDismiss = { showManualServerPicker = false },
+            onImportFromClipboard = {
+                showManualServerPicker = false
+                onImportFromClipboard()
+            },
+            onSwitchToAutoRepo = {
+                showManualServerPicker = false
+                onActivateAutoMode(false)
+                showAutoLocationSheet = true
+            },
+            onSelectProfile = { idx ->
+                showManualServerPicker = false
+                onSelectProfile(idx)
+            }
+        )
     }
 
     if (showLiveRouteModal) {
@@ -620,127 +537,562 @@ fun HomeTabScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FloatingRouteToastPill(
+private fun SmartRepoLocationPickerSheet(
+    locations: List<RepoLocationOption>,
+    selectedCode: String,
+    report: RepoScanReportSummary,
+    isConnected: Boolean,
+    onDismiss: () -> Unit,
+    onRefreshCatalog: () -> Unit,
+    onSelectLocation: (String) -> Unit,
+    onSwitchToManualList: () -> Unit
+) {
+    val p = LocalAlanPalette.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = p.surfaceBg,
+        contentColor = p.textPrimary,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)
+    ) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 8.dp)
+                    .padding(bottom = 16.dp)
+            ) {
+                // Sheet Header
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(9.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .alanGlassCard(highlighted = true, cornerRadius = 12.dp)
+                        ) {
+                            Icon(Icons.Outlined.Public, null, tint = p.accentGold, modifier = Modifier.size(20.dp))
+                        }
+                        Column {
+                            Text(
+                                text = "انتخاب لوکیشن ریپازیتوری هوشمند",
+                                color = p.textPrimary,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 14.5.sp
+                            )
+                            Text(
+                                text = if (isConnected) {
+                                    "با انتخاب هر کشور، تونل فوراً به آن لوکیشن سوییچ می‌شود"
+                                } else {
+                                    "انتخاب لوکیشن هدف برای اتصال هوشمند گیت‌هاب"
+                                },
+                                color = p.textMuted,
+                                fontSize = 10.5.sp
+                            )
+                        }
+                    }
+
+                    AlanNeuIconButton(
+                        icon = Icons.Outlined.Close,
+                        tint = p.textSecondary,
+                        size = 34.dp,
+                        onClick = onDismiss
+                    )
+                }
+
+                // Sunken Concave Scan Report Box (repoScanReport + Refresh Button)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .alanNeuInset(cornerRadius = 15.dp, accented = true)
+                        .padding(horizontal = 13.dp, vertical = 11.dp)
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(p.emerald)
+                            )
+                            Text(
+                                text = "گزارش اسکن مخزن: ${report.totalVerified} سرور سالم از ${report.totalScanned}",
+                                color = p.textPrimary,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.5.sp
+                            )
+                        }
+                        Text(
+                            text = "آخرین بروزرسانی: ${report.updatedAtLabel} • ${report.activeLocationsCount} کشور فعال",
+                            color = p.textMuted,
+                            fontSize = 10.sp
+                        )
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .height(36.dp)
+                            .alanGlassCard(cornerRadius = 11.dp)
+                            .clickable { onRefreshCatalog() }
+                            .padding(horizontal = 11.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(Icons.Outlined.Refresh, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
+                            Text(
+                                text = "بروزرسانی",
+                                color = p.accentGold,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+
+                // Locations List
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 330.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    locations.forEach { loc ->
+                        val isSelected = loc.countryCode.equals(selectedCode, ignoreCase = true) ||
+                            (selectedCode.isBlank() && loc.countryCode == "AUTO")
+                        val pingTint = when {
+                            loc.avgPingMs in 1..200 -> p.emerald
+                            loc.avgPingMs > 200 -> p.accentGold
+                            else -> p.textMuted
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (isSelected) {
+                                        Modifier.alanNeuInset(cornerRadius = 14.dp, accented = true)
+                                    } else {
+                                        Modifier.alanGlassCard(cornerRadius = 14.dp)
+                                    }
+                                )
+                                .clickable { onSelectLocation(loc.countryCode) }
+                                .padding(horizontal = 13.dp, vertical = 11.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                if (loc.countryCode == "AUTO") {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .alanNeuInset(cornerRadius = 10.dp)
+                                    ) {
+                                        Text("⚡", fontSize = 16.sp)
+                                    }
+                                } else {
+                                    FlagStripeBadge(
+                                        stripeColors = loc.flagStripeColors,
+                                        countryCode = loc.countryCode,
+                                        width = 30.dp,
+                                        height = 20.dp
+                                    )
+                                }
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = if (loc.countryCode == "AUTO") {
+                                            "⚡ ${loc.countryNameFa}"
+                                        } else {
+                                            "${loc.flagEmoji} ${loc.countryNameFa}"
+                                        },
+                                        color = if (isSelected) p.accentGold else p.textPrimary,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 12.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${loc.serverCount} سرور آماده در ریپازیتوری",
+                                        color = p.textMuted,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (loc.avgPingMs > 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .alanNeuInset(cornerRadius = 8.dp)
+                                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                                    ) {
+                                        LtrContent {
+                                            Text(
+                                                text = "~${loc.avgPingMs} ms",
+                                                color = pingTint,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 10.5.sp
+                                            )
+                                        }
+                                    }
+                                }
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Check,
+                                        contentDescription = null,
+                                        tint = p.accentGold,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Switch to Manual Personal Profiles Button
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp)
+                        .alanGlassCard(cornerRadius = 13.dp)
+                        .clickable { onSwitchToManualList() }
+                ) {
+                    Text(
+                        text = "سوییچ به لیست کانفیگ‌های شخصی (حالت دستی)",
+                        color = p.textSecondary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManualServerPickerDialog(
+    profiles: List<ProfileItem>,
+    activeIdx: Int,
+    isPureAutoMode: Boolean,
+    onDismiss: () -> Unit,
+    onImportFromClipboard: () -> Unit,
+    onSwitchToAutoRepo: () -> Unit,
+    onSelectProfile: (Int) -> Unit
+) {
+    val p = LocalAlanPalette.current
+    Dialog(onDismissRequest = onDismiss) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = p.surfaceBg,
+                border = BorderStroke(1.2.dp, p.cardBorder),
+                shadowElevation = 10.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "انتخاب سریع کانفیگ شخصی",
+                            color = p.accentGold,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp
+                        )
+                        AlanNeuIconButton(
+                            icon = Icons.Outlined.Close,
+                            tint = p.textSecondary,
+                            size = 32.dp,
+                            onClick = onDismiss
+                        )
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp)
+                                .alanGlassCard(cornerRadius = 11.dp)
+                                .clickable { onImportFromClipboard() }
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.ContentPaste, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(5.dp))
+                                Text("افزودن کلیپ‌بورد", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+                        }
+
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1.15f)
+                                .height(40.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(p.accentGold)
+                                .clickable { onSwitchToAutoRepo() }
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Bolt, null, tint = p.onAccent, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("لوکیشن‌های خودکار", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    if (profiles.isEmpty()) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .alanNeuInset(cornerRadius = 13.dp)
+                                .padding(20.dp)
+                        ) {
+                            Text(
+                                text = "کانفیگ شخصی ثبت نشده است؛ از کلیپ‌بورد یا تب کانفیگ‌ها اضافه کنید.",
+                                color = p.textMuted,
+                                fontSize = 11.5.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    } else {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(7.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 280.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            profiles.forEachIndexed { idx, item ->
+                                val sel = !isPureAutoMode && idx == activeIdx
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .then(
+                                            if (sel) {
+                                                Modifier.alanNeuInset(cornerRadius = 12.dp, accented = true)
+                                            } else {
+                                                Modifier.alanGlassCard(cornerRadius = 12.dp)
+                                            }
+                                        )
+                                        .clickable { onSelectProfile(idx) }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        FlagStripeBadge(item.flagStripeColors, item.countryCode, 22.dp, 14.dp)
+                                        Text(
+                                            text = item.name,
+                                            color = if (sel) p.accentGold else p.textPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    LtrContent {
+                                        Text(
+                                            text = if (item.pingMs > 0) "${item.pingMs} ms" else item.protocol,
+                                            color = if (item.pingMs in 1..280) p.emerald else p.textMuted,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 10.5.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveStepperHeaderCard(
     telemetry: TelemetrySnapshot,
     stages: List<ConnectionStageStep>,
     autoPilot: Boolean,
-    onClick: () -> Unit,
-    onDismiss: () -> Unit
+    onOpenModal: () -> Unit
 ) {
     val p = LocalAlanPalette.current
-    val isFa = LocalAlanLang.current == AlanLang.FA
-    val isError = telemetry.uiPhase.equals("ERROR", ignoreCase = true)
-
     val animPct by animateFloatAsState(
-        targetValue = when {
-            telemetry.isConnected -> 1f
-            telemetry.isConnecting -> (telemetry.progressPercent.coerceIn(8, 98)) / 100f
-            else -> 1f
-        },
-        animationSpec = tween(220),
-        label = "toastPct"
+        targetValue = (telemetry.progressPercent.coerceIn(0, 100)) / 100f,
+        animationSpec = tween(240),
+        label = "liveStepPct"
     )
 
-    val activeStage = stages.firstOrNull { it.state == "ACTIVE" }
-        ?: stages.lastOrNull { it.state == "DONE" }
-
-    val statusTint = when {
+    val shortLabels = listOf("اپراتور", "پینگ", "هسته", "کش", "متدها", "تست", "اتصال")
+    val headerStatus = when {
+        telemetry.isConnected -> "مسیر امن فعال"
+        telemetry.isConnecting -> "در حال راه‌اندازی تونل"
+        else -> "توقف در مسیر"
+    }
+    val dotTint = when {
         telemetry.isConnected -> p.emerald
         telemetry.isConnecting -> p.accentGold
         else -> p.danger
     }
 
-    val titleText = when {
-        telemetry.isConnected -> tr("تونل امن متصل شد", "Secure Tunnel Active")
-        telemetry.isConnecting -> if (isFa) {
-            activeStage?.title ?: "در حال برقراری مسیر..."
-        } else {
-            "Step ${telemetry.currentStageIndex.coerceAtLeast(1)}/${telemetry.totalStages} • Connecting..."
-        }
-        else -> tr("توقف در مسیر اتصال", "Connection Interrupted")
-    }
-
-    val badgeLabel = when {
-        telemetry.isConnected -> telemetry.activeVectorId.ifBlank { "TUN" }
-        telemetry.isConnecting && telemetry.progressPercent > 0 -> "${telemetry.progressPercent}%"
-        autoPilot -> "Auto"
-        else -> telemetry.activeVectorId.ifBlank { "DPI" }
-    }
-
-    Surface(
-        shape = RoundedCornerShape(22.dp),
-        color = p.surfaceBg.copy(alpha = 0.97f),
-        border = BorderStroke(1.2.dp, statusTint.copy(alpha = 0.55f)),
-        shadowElevation = 8.dp,
+    Column(
+        verticalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
-            .widthIn(min = 210.dp, max = 305.dp)
-            .clickable(onClick = onClick)
+            .fillMaxWidth()
+            .alanGlassCard(highlighted = telemetry.isConnecting, cornerRadius = 16.dp)
+            .clickable(onClick = onOpenModal)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(8.dp)
+                        .size(7.dp)
                         .clip(CircleShape)
-                        .background(statusTint)
+                        .background(dotTint)
                 )
-
                 Text(
-                    text = titleText,
+                    text = headerStatus,
                     color = p.textPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.5.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 11.sp
                 )
-
                 Box(
                     modifier = Modifier
-                        .alanNeuInset(cornerRadius = 8.dp)
-                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                        .alanNeuInset(cornerRadius = 7.dp)
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     LtrContent {
                         Text(
-                            text = badgeLabel,
-                            color = statusTint,
+                            text = if (telemetry.isConnected) telemetry.activeVectorId else if (autoPilot) "Auto" else telemetry.activeVectorId,
+                            color = p.accentGold,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 9.5.sp
+                            fontSize = 9.sp
                         )
                     }
                 }
+            }
 
-                if (!telemetry.isConnecting) {
-                    Icon(
-                        imageVector = Icons.Outlined.Close,
-                        contentDescription = null,
-                        tint = p.textMuted,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(Icons.Outlined.Route, null, tint = p.accentGold, modifier = Modifier.size(14.dp))
+                Text(
+                    text = "جزئیات مسیر",
+                    color = p.accentGold,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.sp
+                )
+            }
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            shortLabels.forEachIndexed { i, title ->
+                val st = stages.getOrNull(i)?.state ?: "PENDING"
+                val nodeColor = when (st) {
+                    "DONE" -> p.emerald
+                    "ACTIVE" -> p.accentGold
+                    "FAILED" -> p.danger
+                    else -> p.cardBorder
+                }
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
                         modifier = Modifier
-                            .size(14.dp)
-                            .clickable { onDismiss() }
+                            .size(if (st == "ACTIVE") 8.5.dp else 6.5.dp)
+                            .clip(CircleShape)
+                            .background(nodeColor)
+                    )
+                    Text(
+                        text = title,
+                        color = if (st == "DONE" || st == "ACTIVE") p.textPrimary else p.textMuted,
+                        fontSize = 8.5.sp,
+                        fontWeight = if (st == "ACTIVE") FontWeight.ExtraBold else FontWeight.Medium,
+                        maxLines = 1
                     )
                 }
             }
+        }
 
-            // Sleek thin progress line along bottom edge of notification pill
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.5.dp)
-                    .background(p.subtleBg)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(if (isError) 1f else animPct)
-                        .height(2.5.dp)
-                        .background(statusTint)
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(3.dp)
+                .clip(RoundedCornerShape(2.dp))
+        ) {
+            drawRect(color = p.subtleBg, size = size)
+            when {
+                telemetry.isConnected -> drawRect(color = p.emerald, size = size)
+                telemetry.isConnecting -> drawRect(
+                    color = p.accentGold,
+                    size = Size(size.width * animPct.coerceAtLeast(0.08f), size.height)
                 )
+                else -> drawRect(color = p.danger.copy(alpha = 0.7f), size = size)
             }
         }
     }
@@ -753,10 +1105,8 @@ private fun LiveRouteTimelineDialog(
     onDismiss: () -> Unit
 ) {
     val p = LocalAlanPalette.current
-    val layoutDir = if (LocalAlanLang.current == AlanLang.FA) LayoutDirection.Rtl else LayoutDirection.Ltr
-
     Dialog(onDismissRequest = onDismiss) {
-        CompositionLocalProvider(LocalLayoutDirection provides layoutDir) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = p.surfaceBg,
@@ -780,35 +1130,32 @@ private fun LiveRouteTimelineDialog(
                             Box(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
-                                    .size(34.dp)
+                                    .size(36.dp)
                                     .alanNeuInset(cornerRadius = 11.dp)
                             ) {
                                 Icon(Icons.Outlined.Route, null, tint = p.accentGold, modifier = Modifier.size(18.dp))
                             }
                             Column {
                                 Text(
-                                    text = tr("جزئیات مسیر اتصال", "Live Connection Timeline"),
+                                    text = "مسیر زنده اتصال",
                                     color = p.textPrimary,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 14.sp
                                 )
                                 Text(
-                                    text = tr("وضعیت مرحله‌به‌مرحله تونل", "Step-by-step tunnel diagnostics"),
+                                    text = "فرایند اتصال، مرحله‌به‌مرحله",
                                     color = p.textMuted,
                                     fontSize = 10.5.sp
                                 )
                             }
                         }
 
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(30.dp)
-                                .alanNeuInset(cornerRadius = 15.dp)
-                                .clickable { onDismiss() }
-                        ) {
-                            Icon(Icons.Outlined.Close, null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
-                        }
+                        AlanNeuIconButton(
+                            icon = Icons.Outlined.Close,
+                            tint = p.textSecondary,
+                            size = 32.dp,
+                            onClick = onDismiss
+                        )
                     }
 
                     Column(
@@ -819,12 +1166,12 @@ private fun LiveRouteTimelineDialog(
                             .verticalScroll(rememberScrollState())
                     ) {
                         stages.forEach { step ->
-                            val (statusLabel, dotCol) = when (step.state) {
-                                "DONE" -> tr("انجام شد", "Done") to p.emerald
-                                "ACTIVE" -> tr("در حال اجرا", "Active") to p.accentGold
-                                "FAILED" -> tr("ناموفق", "Failed") to p.danger
-                                "SKIPPED" -> tr("رد شد", "Skipped") to p.textMuted
-                                else -> tr("در انتظار", "Pending") to p.textMuted
+                            val (statusFa, dotCol) = when (step.state) {
+                                "DONE" -> "انجام شد" to p.emerald
+                                "ACTIVE" -> "در حال اجرا" to p.accentGold
+                                "FAILED" -> "ناموفق" to p.danger
+                                "SKIPPED" -> "عبور" to p.textMuted
+                                else -> "در انتظار" to p.textMuted
                             }
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -833,9 +1180,7 @@ private fun LiveRouteTimelineDialog(
                                     .fillMaxWidth()
                                     .then(
                                         if (step.state == "ACTIVE") {
-                                            Modifier
-                                                .alanNeuInset(12.dp)
-                                                .border(1.dp, p.accentGold, RoundedCornerShape(12.dp))
+                                            Modifier.alanNeuInset(cornerRadius = 12.dp, accented = true)
                                         } else {
                                             Modifier.alanGlassCard(cornerRadius = 12.dp)
                                         }
@@ -859,8 +1204,7 @@ private fun LiveRouteTimelineDialog(
                                             color = p.textPrimary,
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 11.5.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            maxLines = 1
                                         )
                                         if (step.subtitle.isNotBlank()) {
                                             Text(
@@ -874,7 +1218,7 @@ private fun LiveRouteTimelineDialog(
                                     }
                                 }
                                 Column(horizontalAlignment = Alignment.End) {
-                                    Text(statusLabel, color = dotCol, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                                    Text(statusFa, color = dotCol, fontWeight = FontWeight.Bold, fontSize = 10.sp)
                                     if (step.badgeText.isNotBlank()) {
                                         LtrContent {
                                             Text(
@@ -893,8 +1237,7 @@ private fun LiveRouteTimelineDialog(
                         val hitProbes = probes.filter { it.state == "PASSED" || it.state == "QUALIFIED" }
                         if (hitProbes.isNotEmpty()) {
                             Text(
-                                text = tr("متدهای تاییدشده: ", "Verified Vectors: ") +
-                                    hitProbes.joinToString(" , ") { "${it.vectorId} (${it.latencyMs}ms)" },
+                                text = "متدهای موفق: " + hitProbes.joinToString(" ، ") { "${it.vectorId} (${it.latencyMs}ms)" },
                                 color = p.emerald,
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold
@@ -921,7 +1264,11 @@ private fun SpeedMetricCard(
     Column(
         verticalArrangement = Arrangement.spacedBy(5.dp),
         modifier = modifier
-            .alanGlassCard(highlighted = isConnected, cornerRadius = 15.dp, accentBorderColor = accent.copy(alpha = 0.55f))
+            .alanGlassCard(
+                highlighted = isConnected,
+                cornerRadius = 16.dp,
+                accentBorderColor = accent.copy(alpha = 0.55f)
+            )
             .padding(horizontal = 11.dp, vertical = 9.dp)
     ) {
         Row(
@@ -955,7 +1302,7 @@ private fun SpeedMetricCard(
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(31.dp)
+                    .size(32.dp)
                     .alanNeuInset(cornerRadius = 16.dp)
             ) {
                 Icon(icon, title, tint = accent, modifier = Modifier.size(16.dp))
@@ -1026,18 +1373,18 @@ fun ScannerTabScreen(
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        // Segmented Inset Control
+        // Segmented Inset Control: یک کانفیگ / چند کانفیگ / کل مخزن
         Row(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .alanNeuInset(cornerRadius = 14.dp)
+                .alanNeuInset(cornerRadius = 15.dp)
                 .padding(5.dp)
         ) {
             listOf(
-                "single" to tr("یک کانفیگ", "Single"),
-                "selected" to tr("چند کانفیگ", "Selected"),
-                "all" to tr("کل کانفیگ‌ها", "All Configs")
+                "single" to "یک کانفیگ",
+                "selected" to "چند کانفیگ",
+                "all" to "کل مخزن"
             ).forEach { (key, label) ->
                 val sel = scopeMode == key
                 Box(
@@ -1049,11 +1396,11 @@ fun ScannerTabScreen(
                             if (sel) {
                                 Modifier.alanGlassCard(
                                     highlighted = true,
-                                    cornerRadius = 10.dp,
+                                    cornerRadius = 11.dp,
                                     accentBorderColor = p.accentGold
                                 )
                             } else {
-                                Modifier.clip(RoundedCornerShape(10.dp))
+                                Modifier.clip(RoundedCornerShape(11.dp))
                             }
                         )
                         .clickable { scopeMode = key }
@@ -1069,12 +1416,12 @@ fun ScannerTabScreen(
             }
         }
 
-        // Scanner Configuration Card
+        // Scanner Config Panel
         Column(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .alanGlassCard(cornerRadius = 16.dp)
+                .alanGlassCard(cornerRadius = 18.dp)
                 .padding(14.dp)
         ) {
             when (scopeMode) {
@@ -1086,9 +1433,9 @@ fun ScannerTabScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = tr("کانفیگی در لیست نیست:", "No configs in list:"),
+                                text = "کانفیگی در لیست نیست؛ از کلیپ‌بورد وارد کنید:",
                                 color = p.textSecondary,
-                                fontSize = 12.sp,
+                                fontSize = 11.5.sp,
                                 modifier = Modifier.weight(1f)
                             )
                             Box(
@@ -1100,16 +1447,16 @@ fun ScannerTabScreen(
                                     .padding(horizontal = 12.dp)
                             ) {
                                 Text(
-                                    text = tr("افزودن کلیپ‌بورد", "Paste Clipboard"),
+                                    text = "افزودن کلیپ‌بورد",
                                     color = p.accentGold,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 11.5.sp
+                                    fontSize = 11.sp
                                 )
                             }
                         }
                     } else {
                         AlanCustomSelectBox(
-                            label = tr("کانفیگ هدف", "Target Config"),
+                            label = "انتخاب کانفیگ هدف",
                             selectedValue = singleTargetIdx.coerceIn(profiles.indices).toString(),
                             options = profileOptions,
                             onSelect = { singleTargetIdx = it.toIntOrNull() ?: 0 }
@@ -1123,22 +1470,22 @@ fun ScannerTabScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .alanNeuInset(cornerRadius = 12.dp)
+                            .alanNeuInset(cornerRadius = 13.dp)
                             .clickable { showMultiPicker = true }
                             .padding(horizontal = 13.dp, vertical = 12.dp)
                     ) {
                         Text(
                             text = if (selectedMultiIndices.isEmpty()) {
-                                tr("انتخاب کانفیگ‌ها از لیست (${profiles.size})", "Pick configs from list (${profiles.size})")
+                                "انتخاب چند کانفیگ از لیست (${profiles.size} موجود)..."
                             } else {
-                                tr("${selectedMultiIndices.size} کانفیگ انتخاب شد", "${selectedMultiIndices.size} configs selected")
+                                "${selectedMultiIndices.size} کانفیگ برای تست انتخاب شد"
                             },
                             color = p.textPrimary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
                         )
                         Text(
-                            text = tr("انتخاب", "Select"),
+                            text = "انتخاب",
                             color = p.accentGold,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 11.5.sp
@@ -1149,9 +1496,9 @@ fun ScannerTabScreen(
                 else -> {
                     Text(
                         text = if (profiles.isNotEmpty()) {
-                            tr("اسکن متد روی تمام ${profiles.size} کانفیگ موجود در مخزن", "Scan methods across all ${profiles.size} saved configs")
+                            "اسکن هوشمند متدها روی تمام ${profiles.size} کانفیگ موجود در مخزن"
                         } else {
-                            tr("اسکن مستقیم متدها روی سرورهای مخزن هوشمند", "Scan methods directly on Smart Auto repository")
+                            "اسکن مستقیم متدها روی سرورهای ریپازیتوری گیت‌هاب"
                         },
                         color = p.textSecondary,
                         fontSize = 11.5.sp
@@ -1164,12 +1511,12 @@ fun ScannerTabScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .alanNeuInset(cornerRadius = 11.dp)
+                    .alanNeuInset(cornerRadius = 12.dp)
                     .clickable { autoConnectFirst = !autoConnectFirst }
                     .padding(horizontal = 12.dp, vertical = 9.dp)
             ) {
                 Text(
-                    text = tr("اتصال خودکار به سریع‌ترین متد", "Auto-connect to fastest verified method"),
+                    text = "اتصال خودکار به سریع‌ترین متد تاییدشده",
                     color = p.textPrimary,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 11.5.sp,
@@ -1184,12 +1531,12 @@ fun ScannerTabScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .alanNeuInset(cornerRadius = 11.dp)
+                    .alanNeuInset(cornerRadius = 12.dp)
                     .clickable { useCleanIpInScan = !useCleanIpInScan }
                     .padding(horizontal = 12.dp, vertical = 9.dp)
             ) {
                 Text(
-                    text = tr("تست همراه با IP تمیز کلادفلر", "Inject Cloudflare Clean IP during test"),
+                    text = "تست همراه با IP تمیز کلادفلر (خاموش = تست خالص سرور)",
                     color = p.textPrimary,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 11.5.sp,
@@ -1199,17 +1546,18 @@ fun ScannerTabScreen(
                 AlanPillSwitch(checked = useCleanIpInScan, onCheckedChange = { useCleanIpInScan = it })
             }
 
+            // Concave Progress Bar
             if (scanState.isRunning) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(5.dp)
+                        .height(6.dp)
                         .alanNeuInset(cornerRadius = 3.dp)
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(animScanPct)
-                            .height(5.dp)
+                            .height(6.dp)
                             .clip(RoundedCornerShape(3.dp))
                             .background(p.accentGold)
                     )
@@ -1242,7 +1590,7 @@ fun ScannerTabScreen(
                         .padding(horizontal = 18.dp)
                 ) {
                     Text(
-                        text = if (scanState.isRunning) tr("توقف", "Stop") else tr("شروع اسکن متد", "Start Scan"),
+                        text = if (scanState.isRunning) "توقف اسکن" else "شروع اسکن متد",
                         color = if (scanState.isRunning) Color.White else p.onAccent,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 12.5.sp
@@ -1260,7 +1608,7 @@ fun ScannerTabScreen(
             }
         }
 
-        // Results List
+        // Scan Results List
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(9.dp),
             contentPadding = PaddingValues(bottom = 18.dp),
@@ -1276,7 +1624,7 @@ fun ScannerTabScreen(
                     verticalArrangement = Arrangement.spacedBy(9.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .alanGlassCard(highlighted = row.rank == 1, cornerRadius = 15.dp)
+                        .alanGlassCard(highlighted = row.rank == 1, cornerRadius = 16.dp)
                         .padding(13.dp)
                 ) {
                     Row(
@@ -1313,11 +1661,11 @@ fun ScannerTabScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(38.dp)
-                                .alanNeuInset(cornerRadius = 10.dp)
+                                .alanNeuInset(cornerRadius = 11.dp)
                                 .clickable { onApplyVectorSingle(row.itemId, row.targetIndex, row.endpoint) }
                         ) {
                             Text(
-                                text = tr("ثبت متد", "Save Method"),
+                                text = "ثبت متد",
                                 color = p.textPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.5.sp
@@ -1326,14 +1674,14 @@ fun ScannerTabScreen(
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .weight(1.2f)
+                                .weight(1.25f)
                                 .height(38.dp)
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(11.dp))
                                 .background(p.accentGold)
                                 .clickable { onApplyVectorAndConnect(row.itemId, row.targetIndex, row.endpoint) }
                         ) {
                             Text(
-                                text = tr("ثبت و اتصال", "Save & Connect"),
+                                text = "ثبت و اتصال فوری",
                                 color = p.onAccent,
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 11.5.sp

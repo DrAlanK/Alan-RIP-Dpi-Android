@@ -1078,9 +1078,11 @@ object UriConfigCodec {
 
         // Wave 1 mixes 3 Zero-OOB framing/fragment vectors (VEC-17, VEC-11, VEC-23) + 3 OOB vectors (VEC-21, VEC-01, VEC-18)!
         val wavePriorityIds = listOf(
-            "VEC-21", // Hybrid OOB (Top on Cloudflare Edge)
-            "VEC-17", // Zero-OOB 3-Record DotSplit (Top on Railway / Envoy / TLS 1.3)
-            "VEC-11", // Zero-OOB Micro-Fragment 5-16B (Universal DPI SNI bypass)
+            "VEC-17", // Zero-OOB 3-Record DotSplit (100% stream-safe on Cloudflare, Railway & CDN)
+            "VEC-11", // Zero-OOB Micro-Fragment 5-16B (Universal DPI SNI bypass, zero OOB drops)
+            "VEC-23", // Zero-OOB Chameleon Interleave
+            "VEC-21", // Hybrid OOB
+            "VEC-20", // Zero-OOB Dot-Fibonacci
             "VEC-01", // Core Alpha SNI-Tag OOB
             "VEC-23", // Zero-OOB Chameleon Interleave
             "VEC-18", // Cipher-Pivot OOB
@@ -1156,7 +1158,7 @@ object UriConfigCodec {
                     .put("port", httpPortVal)
                     .put("protocol", "http")
                     .put("settings", org.json.JSONObject().put("allowTransparent", false))
-                    .put("sniffing", org.json.JSONObject().put("enabled", false))
+                    .put("sniffing", org.json.JSONObject().put("enabled", true).put("destOverride", org.json.JSONArray().put("http").put("tls").put("quic")).put("routeOnly", false))
             )
 
             // Compile outbound cleanly via single-lane helper & retag

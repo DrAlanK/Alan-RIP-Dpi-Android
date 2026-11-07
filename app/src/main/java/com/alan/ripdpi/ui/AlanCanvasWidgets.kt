@@ -1,5 +1,6 @@
 package com.alan.ripdpi.ui
 
+import android.graphics.BlurMaskFilter
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -38,11 +39,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -156,11 +161,11 @@ fun StatusPillBadge(status: String) {
     val p = LocalAlanPalette.current
     val up = status.uppercase(Locale.US)
     val (label, col) = when (up) {
-        "ONLINE", "CONNECTED" -> tr("متصل", "Online") to p.emerald
-        "VERIFIED", "HEALTHY" -> tr("تایید شده", "Verified") to p.emerald
-        "PROBING", "TESTING" -> tr("بررسی...", "Testing") to p.accentGold
-        "DEAD", "ERROR", "FAILED" -> tr("خطا", "Dead") to p.danger
-        else -> tr("آماده", "Ready") to p.textMuted
+        "ONLINE", "CONNECTED" -> "متصل" to p.emerald
+        "VERIFIED", "HEALTHY" -> "تایید شده" to p.emerald
+        "PROBING", "TESTING" -> "در حال تست" to p.accentGold
+        "DEAD", "ERROR", "FAILED" -> "بدون پینگ" to p.danger
+        else -> "تست‌نشده" to p.textMuted
     }
 
     Box(
@@ -191,47 +196,47 @@ fun CenterPowerOrbButton(
     val isDark = p.isDark
     val isError = uiPhase.equals("ERROR", ignoreCase = true)
 
-    val ringColor = when {
+    val ledColor = when {
         isConnected -> p.emerald
         isConnecting -> p.accentGold
         isError -> p.danger
         else -> if (isDark) p.accentGold else Color(0xFFD97706)
     }
 
-    val inf = rememberInfiniteTransition(label = "neuOrb")
+    val inf = rememberInfiniteTransition(label = "tactileOrb")
     val spinDeg by inf.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
             animation = tween(
                 durationMillis = when {
-                    isConnecting -> 1200
-                    isConnected -> 4000
-                    else -> 3200
+                    isConnecting -> 1150
+                    isConnected -> 3900
+                    else -> 3100
                 },
                 easing = LinearEasing
             )
         ),
         label = "spinDeg"
     )
-    val breathAlpha by inf.animateFloat(
-        initialValue = 0.14f,
-        targetValue = 0.28f,
+    val glowPulse by inf.animateFloat(
+        initialValue = 0.20f,
+        targetValue = 0.45f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = FastOutSlowInEasing),
+            animation = tween(1500, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "breathAlpha"
+        label = "glowPulse"
     )
 
     val centerLabel = when {
-        isConnecting -> tr("لغو", "Cancel")
-        isConnected -> tr("قطع اتصال", "Disconnect")
-        isError -> tr("تلاش مجدد", "Retry")
-        else -> tr("اتصال", "Connect")
+        isConnecting -> "لغو اتصال"
+        isConnected -> "قطع اتصال"
+        isError -> "تلاش مجدد"
+        else -> "اتصال"
     }
 
-    val appliedModifier = if (modifier === Modifier) Modifier.size(176.dp) else modifier
+    val appliedModifier = if (modifier === Modifier) Modifier.size(182.dp) else modifier
 
     Box(
         contentAlignment = Alignment.Center,
@@ -247,134 +252,148 @@ fun CenterPowerOrbButton(
             val cy = size.height / 2f
             val maxR = size.minDimension / 2f
 
-            // 1. Single Unified Gravity Drop-Shadow (NO split double-shadow!)
-            val shadowCenter = Offset(cx, cy + maxR * 0.045f)
-            val ambientCol = if (isConnected || isConnecting) {
-                ringColor.copy(alpha = breathAlpha)
-            } else if (isDark) {
-                Color(0xFF07090E).copy(alpha = 0.62f)
-            } else {
-                Color(0xFF96A8C2).copy(alpha = 0.52f)
-            }
-            drawCircle(
-                brush = Brush.radialGradient(
-                    0.0f to ambientCol,
-                    0.76f to ambientCol.copy(alpha = ambientCol.alpha * 0.55f),
-                    1.0f to Color.Transparent,
-                    center = shadowCenter,
-                    radius = maxR * 0.98f
-                ),
-                radius = maxR * 0.98f,
-                center = shadowCenter
-            )
+            // 1. Extruded Outer Neumorphic Disc with soft BlurMaskFilter shadows
+            val discR = maxR * 0.88f
+            val shadowOff = 4.dp.toPx()
+            val lightShadowCol = if (isDark) Color(0xFF2B3242).copy(alpha = 0.78f) else Color(0xFFFFFFFF).copy(alpha = 0.95f)
+            val darkShadowCol = if (isDark) Color(0xFF11141B).copy(alpha = 0.92f) else Color(0xFFBCC7D8).copy(alpha = 0.85f)
 
-            // 2. Outer Tactile Bezel Ring
-            val bezelR = maxR * 0.87f
-            val bezelTop = if (isDark) Color(0xFF282F3E) else Color(0xFFF6F9FD)
-            val bezelBottom = if (isDark) Color(0xFF161A23) else Color(0xFFD2DCEB)
+            drawIntoCanvas { canvas ->
+                val darkPaint = Paint().asFrameworkPaint().apply {
+                    isAntiAlias = true
+                    color = darkShadowCol.toArgb()
+                    maskFilter = BlurMaskFilter(18f, BlurMaskFilter.Blur.NORMAL)
+                }
+                canvas.nativeCanvas.drawCircle(cx + shadowOff, cy + shadowOff, discR, darkPaint)
+
+                val lightPaint = Paint().asFrameworkPaint().apply {
+                    isAntiAlias = true
+                    color = lightShadowCol.toArgb()
+                    maskFilter = BlurMaskFilter(18f, BlurMaskFilter.Blur.NORMAL)
+                }
+                canvas.nativeCanvas.drawCircle(cx - shadowOff, cy - shadowOff, discR, lightPaint)
+            }
+
+            val outerTop = if (isDark) Color(0xFF252B39) else Color(0xFFF3F7FD)
+            val outerBottom = if (isDark) Color(0xFF181C26) else Color(0xFFD8E2F0)
             drawCircle(
                 brush = Brush.linearGradient(
-                    colors = listOf(bezelTop, p.cardBg, bezelBottom),
-                    start = Offset(cx, cy - bezelR),
-                    end = Offset(cx, cy + bezelR)
+                    colors = listOf(outerTop, p.cardBg, outerBottom),
+                    start = Offset(cx - discR, cy - discR),
+                    end = Offset(cx + discR, cy + discR)
                 ),
-                radius = bezelR,
+                radius = discR,
                 center = Offset(cx, cy)
             )
             drawCircle(
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = if (isDark) 0.14f else 0.90f),
-                        if (isDark) Color.Black.copy(alpha = 0.50f) else Color(0xFFB3C2D8)
+                        Color.White.copy(alpha = if (isDark) 0.12f else 0.90f),
+                        if (isDark) Color.Black.copy(alpha = 0.55f) else Color(0xFFB4C2D8)
                     ),
-                    start = Offset(cx - bezelR, cy - bezelR),
-                    end = Offset(cx + bezelR, cy + bezelR)
+                    start = Offset(cx - discR, cy - discR),
+                    end = Offset(cx + discR, cy + discR)
                 ),
-                radius = bezelR,
+                radius = discR,
                 center = Offset(cx, cy),
                 style = Stroke(width = 1.3.dp.toPx())
             )
 
-            // 3. Recessed LED Groove Channel
-            val grooveOuterR = maxR * 0.76f
-            val ledRadius = maxR * 0.705f
+            // 2. Concave Sunken LED Groove Channel
+            val grooveR = maxR * 0.72f
             drawCircle(
                 color = p.subtleBg,
-                radius = grooveOuterR,
+                radius = grooveR + 3.5.dp.toPx(),
                 center = Offset(cx, cy)
             )
             drawCircle(
-                color = ringColor.copy(alpha = if (isDark) 0.16f else 0.20f),
-                radius = ledRadius,
+                color = ledColor.copy(alpha = if (isDark) 0.18f else 0.22f),
+                radius = grooveR,
                 center = Offset(cx, cy),
-                style = Stroke(width = 4.2.dp.toPx())
+                style = Stroke(width = 5.dp.toPx())
             )
 
-            val sweepDeg = when {
-                isConnecting -> 145f
-                isConnected -> 290f
-                else -> 210f
+            val sweepAngle = when {
+                isConnecting && progressPercent > 0 -> (progressPercent.coerceIn(12, 95) * 3.4f)
+                isConnecting -> 150f
+                isConnected -> 360f
+                else -> 215f
             }
-            rotate(degrees = spinDeg, pivot = Offset(cx, cy)) {
-                drawArc(
-                    brush = Brush.sweepGradient(
-                        0.00f to Color.Transparent,
-                        0.18f to ringColor.copy(alpha = 0.22f),
-                        0.68f to ringColor,
-                        1.00f to Color.Transparent,
-                        center = Offset(cx, cy)
-                    ),
-                    startAngle = 0f,
-                    sweepAngle = sweepDeg,
-                    useCenter = false,
-                    topLeft = Offset(cx - ledRadius, cy - ledRadius),
-                    size = Size(ledRadius * 2f, ledRadius * 2f),
-                    style = Stroke(width = 4.2.dp.toPx(), cap = StrokeCap.Round)
+
+            if (isConnected) {
+                drawCircle(
+                    color = ledColor.copy(alpha = glowPulse),
+                    radius = grooveR,
+                    center = Offset(cx, cy),
+                    style = Stroke(width = 8.dp.toPx())
+                )
+                drawCircle(
+                    color = ledColor,
+                    radius = grooveR,
+                    center = Offset(cx, cy),
+                    style = Stroke(width = 4.2.dp.toPx())
+                )
+            } else {
+                rotate(degrees = spinDeg, pivot = Offset(cx, cy)) {
+                    drawArc(
+                        brush = Brush.sweepGradient(
+                            0.00f to Color.Transparent,
+                            0.18f to ledColor.copy(alpha = 0.25f),
+                            0.72f to ledColor,
+                            1.00f to Color.Transparent,
+                            center = Offset(cx, cy)
+                        ),
+                        startAngle = 0f,
+                        sweepAngle = sweepAngle,
+                        useCenter = false,
+                        topLeft = Offset(cx - grooveR, cy - grooveR),
+                        size = Size(grooveR * 2f, grooveR * 2f),
+                        style = Stroke(width = 4.5.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                }
+
+                val tipRad = (spinDeg + sweepAngle) * (PI / 180.0)
+                val tipPos = Offset(
+                    cx + (cos(tipRad) * grooveR).toFloat(),
+                    cy + (sin(tipRad) * grooveR).toFloat()
+                )
+                drawCircle(
+                    color = ledColor.copy(alpha = 0.42f),
+                    radius = 6.dp.toPx(),
+                    center = tipPos
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = 2.4.dp.toPx(),
+                    center = tipPos
                 )
             }
 
-            // Glowing Comet Tip on LED Ring
-            val tipRad = (spinDeg + sweepDeg) * (PI / 180.0)
-            val tipOffset = Offset(
-                cx + (cos(tipRad) * ledRadius).toFloat(),
-                cy + (sin(tipRad) * ledRadius).toFloat()
-            )
-            drawCircle(
-                color = ringColor.copy(alpha = 0.40f),
-                radius = 6.dp.toPx(),
-                center = tipOffset
-            )
-            drawCircle(
-                color = Color.White,
-                radius = 2.4.dp.toPx(),
-                center = tipOffset
-            )
-
-            // 4. Center Tactile Button Cap (Pressed feel when connected, raised dome when idle)
-            val capR = maxR * 0.63f
+            // 3. Center Tactile Cap (Concave/Pressed when Connected, Extruded Dome when Disconnected)
+            val capR = maxR * 0.61f
             val capTop = when {
-                isConnected && isDark -> Color(0xFF151B24)
-                isConnected && !isDark -> Color(0xFFD9E3F0)
-                isDark -> Color(0xFF262D3B)
-                else -> Color(0xFFF7FAFE)
+                isConnected && isDark -> Color(0xFF151922)
+                isConnected && !isDark -> Color(0xFFD5DFEE)
+                isDark -> Color(0xFF262D3D)
+                else -> Color(0xFFF6F9FE)
             }
             val capBottom = when {
-                isConnected && isDark -> Color(0xFF222938)
+                isConnected && isDark -> Color(0xFF232A38)
                 isConnected && !isDark -> Color(0xFFF2F6FC)
-                isDark -> Color(0xFF181C26)
-                else -> Color(0xFFD8E2F0)
+                isDark -> Color(0xFF171B24)
+                else -> Color(0xFFD9E3F1)
             }
             drawCircle(
                 brush = Brush.linearGradient(
                     colors = listOf(capTop, capBottom),
-                    start = Offset(cx, cy - capR),
-                    end = Offset(cx, cy + capR)
+                    start = Offset(cx - capR, cy - capR),
+                    end = Offset(cx + capR, cy + capR)
                 ),
                 radius = capR,
                 center = Offset(cx, cy)
             )
             drawCircle(
-                color = if (isConnected) ringColor.copy(alpha = 0.45f) else p.cardBorder,
+                color = if (isConnected) ledColor.copy(alpha = 0.55f) else p.cardBorder,
                 radius = capR,
                 center = Offset(cx, cy),
                 style = Stroke(width = 1.2.dp.toPx())
@@ -388,13 +407,13 @@ fun CenterPowerOrbButton(
             Icon(
                 imageVector = Icons.Outlined.PowerSettingsNew,
                 contentDescription = centerLabel,
-                tint = ringColor,
-                modifier = Modifier.size(36.dp)
+                tint = ledColor,
+                modifier = Modifier.size(38.dp)
             )
-            Spacer(Modifier.height(3.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
                 text = centerLabel,
-                color = if (isConnected || isError) ringColor else p.textPrimary,
+                color = if (isConnected || isError) ledColor else p.textPrimary,
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 13.5.sp,
                 maxLines = 1
@@ -428,22 +447,7 @@ fun JustifiedCountryFlagsBar(
     isConnecting: Boolean
 ) {
     val p = LocalAlanPalette.current
-    val isFa = LocalAlanLang.current == AlanLang.FA
     val destAccent = destAccentLong.toThemeAwareAccent(p.accentGold)
-    val destSpec = remember(destCountryCode) { CountryPaletteRegistry.resolveByCode(destCountryCode) }
-
-    val originDisplay = if (isFa) {
-        "مبدا: ${originCountryName.ifBlank { "ایران" }}"
-    } else {
-        "Origin: Iran"
-    }
-
-    val destResolvedName = if (isFa) {
-        destCountryName.ifBlank { "خودکار" }
-    } else {
-        if (destCountryCode.equals("UN", true) || destCountryName == "خودکار") "Auto" else destSpec.nameEn
-    }
-    val destDisplay = if (isFa) "مقصد: $destResolvedName" else "Target: $destResolvedName"
 
     val inf = rememberInfiniteTransition(label = "pktBridge")
     val photonFrac by inf.animateFloat(
@@ -471,7 +475,11 @@ fun JustifiedCountryFlagsBar(
         verticalArrangement = Arrangement.spacedBy(7.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .alanGlassCard(highlighted = isConnected, cornerRadius = 16.dp, accentBorderColor = p.emerald.copy(alpha = 0.55f))
+            .alanGlassCard(
+                highlighted = isConnected,
+                cornerRadius = 18.dp,
+                accentBorderColor = p.emerald.copy(alpha = 0.6f)
+            )
             .padding(horizontal = 11.dp, vertical = 9.dp)
     ) {
         Row(
@@ -479,18 +487,18 @@ fun JustifiedCountryFlagsBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
-            // Origin Pod
+            // Origin Pod (Iran)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .alanNeuInset(cornerRadius = 11.dp)
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .alanNeuInset(cornerRadius = 12.dp)
+                    .padding(horizontal = 9.dp, vertical = 6.dp)
             ) {
                 FlagStripeBadge(CountryPaletteRegistry.IRAN_SPEC.stripeColors, "IR", 26.dp, 17.dp)
                 Spacer(Modifier.width(7.dp))
                 Column {
                     Text(
-                        text = originDisplay,
+                        text = "مبدا: ${originCountryName.ifBlank { "ایران" }}",
                         color = p.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 10.5.sp,
@@ -528,7 +536,7 @@ fun JustifiedCountryFlagsBar(
                     )
                     for (k in 0..1) {
                         val f = (photonFrac + k * 0.5f) % 1f
-                        val xPos = if (isFa) w * (1f - f) else w * f
+                        val xPos = w * (1f - f)
                         drawCircle(
                             color = capsuleColor,
                             radius = 2.6.dp.toPx(),
@@ -542,12 +550,12 @@ fun JustifiedCountryFlagsBar(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .alanNeuInset(cornerRadius = 11.dp)
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .alanNeuInset(cornerRadius = 12.dp)
+                    .padding(horizontal = 9.dp, vertical = 6.dp)
             ) {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = destDisplay,
+                        text = "مقصد: ${destCountryName.ifBlank { "خودکار" }}",
                         color = p.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 10.5.sp,
@@ -576,18 +584,14 @@ fun JustifiedCountryFlagsBar(
             }
         }
 
-        // Compact Status Strip
+        // Bottom Status Strip
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = if (isConnected) {
-                    tr("تونل رمزنگاری‌شده دوطرفه فعال", "Encrypted bidirectional tunnel active")
-                } else {
-                    tr("آماده عبور از فیلترینگ DPI", "Ready for anti-DPI tunnel")
-                },
+                text = if (isConnected) "مسیر رمزنگاری‌شده دوطرفه فعال" else "آماده برقراری تونل ضد DPI",
                 color = p.textSecondary,
                 fontSize = 9.5.sp,
                 fontWeight = FontWeight.SemiBold,

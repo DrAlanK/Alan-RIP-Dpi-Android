@@ -4,7 +4,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,7 +77,6 @@ fun CleanIpScannerScreen(
 ) {
     val p = LocalAlanPalette.current
     val context = LocalContext.current
-    val isFa = LocalAlanLang.current == AlanLang.FA
 
     var sourceMode by rememberSaveable { mutableStateOf("github") }
     var customRangesText by rememberSaveable {
@@ -105,18 +103,18 @@ fun CleanIpScannerScreen(
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        // Source Mode Segmented Control
+        // Segmented Inset Control: فایل گیت‌هاب / ساب‌نت پیش‌فرض / رنج دلخواه
         Row(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .alanNeuInset(cornerRadius = 14.dp)
+                .alanNeuInset(cornerRadius = 15.dp)
                 .padding(5.dp)
         ) {
             listOf(
-                "github" to tr("فایل گیت‌هاب", "GitHub"),
-                "default" to tr("ساب‌نت پیش‌فرض", "Default"),
-                "custom" to tr("رنج دلخواه", "Custom")
+                "github" to "فایل گیت‌هاب",
+                "default" to "ساب‌نت پیش‌فرض",
+                "custom" to "رنج دلخواه"
             ).forEach { (key, title) ->
                 val sel = sourceMode == key
                 Box(
@@ -128,11 +126,11 @@ fun CleanIpScannerScreen(
                             if (sel) {
                                 Modifier.alanGlassCard(
                                     highlighted = true,
-                                    cornerRadius = 10.dp,
+                                    cornerRadius = 11.dp,
                                     accentBorderColor = p.accentGold
                                 )
                             } else {
-                                Modifier.clip(RoundedCornerShape(10.dp))
+                                Modifier.clip(RoundedCornerShape(11.dp))
                             }
                         )
                         .clickable { sourceMode = key }
@@ -148,12 +146,12 @@ fun CleanIpScannerScreen(
             }
         }
 
-        // Scanner Control Card
+        // Control Card
         Column(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .alanGlassCard(cornerRadius = 16.dp)
+                .alanGlassCard(cornerRadius = 18.dp)
                 .padding(14.dp)
         ) {
             when (sourceMode) {
@@ -165,10 +163,7 @@ fun CleanIpScannerScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = tr(
-                                    "فایل ساب‌نت گیت‌هاب (${cleanIpState.loadedSubnetsCount} رنج)",
-                                    "GitHub Subnets (${cleanIpState.loadedSubnetsCount} ranges)"
-                                ),
+                                text = "فایل ساب‌نت گیت‌هاب (${cleanIpState.loadedSubnetsCount} رنج فعال)",
                                 color = p.textPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp
@@ -186,15 +181,13 @@ fun CleanIpScannerScreen(
                         }
                         Spacer(Modifier.width(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .alanNeuInset(cornerRadius = 10.dp)
-                                    .clickable { editingRepoUrl = !editingRepoUrl }
-                            ) {
-                                Icon(Icons.Outlined.Edit, null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
-                            }
+                            AlanNeuIconButton(
+                                icon = Icons.Outlined.Edit,
+                                tint = p.textSecondary,
+                                size = 34.dp,
+                                isPressed = editingRepoUrl,
+                                onClick = { editingRepoUrl = !editingRepoUrl }
+                            )
                             Box(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
@@ -207,7 +200,7 @@ fun CleanIpScannerScreen(
                                     Icon(Icons.Outlined.Refresh, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text(
-                                        text = tr("بروزرسانی", "Sync"),
+                                        text = "بروزرسانی",
                                         color = p.textPrimary,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 11.sp
@@ -224,7 +217,7 @@ fun CleanIpScannerScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             AlanSheetTextField(
-                                label = "Subnets URL",
+                                label = "لینک فایل ساب‌نت گیت‌هاب",
                                 value = repoUrlDraft,
                                 onValueChange = { repoUrlDraft = it },
                                 ltr = true,
@@ -240,13 +233,13 @@ fun CleanIpScannerScreen(
                                         if (repoUrlDraft.isNotBlank()) {
                                             onUpdateSubnetsUrl(repoUrlDraft.trim())
                                             editingRepoUrl = false
-                                            feedback = if (isFa) "لینک ساب‌نت ذخیره شد." else "Subnets URL updated."
+                                            feedback = "لینک فایل ساب‌نت ذخیره شد."
                                         }
                                     }
                                     .padding(horizontal = 14.dp)
                             ) {
                                 Text(
-                                    text = tr("ثبت", "Save"),
+                                    text = "ثبت",
                                     color = p.onAccent,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 12.sp
@@ -258,7 +251,7 @@ fun CleanIpScannerScreen(
 
                 "custom" -> {
                     AlanSheetTextField(
-                        label = tr("رنج‌های CIDR یا IP (هر خط یک رنج)", "CIDR or IP ranges (one per line)"),
+                        label = "رنج‌های CIDR یا بازه IP (هر خط یک رنج)",
                         value = customRangesText,
                         onValueChange = { customRangesText = it },
                         ltr = true,
@@ -268,24 +261,20 @@ fun CleanIpScannerScreen(
 
                 else -> {
                     Text(
-                        text = tr(
-                            "استفاده از ۲۲ ساب‌نت منتخب کلادفلر برای اپراتورهای همراه و ثابت",
-                            "Using 22 curated Cloudflare subnets optimized for mobile & fiber ISPs"
-                        ),
+                        text = "استفاده از ۲۲ ساب‌نت منتخب کلادفلر برای اپراتورهای همراه و ثابت",
                         color = p.textSecondary,
                         fontSize = 11.5.sp
                     )
                 }
             }
 
-            // Aligned 48.dp Input + Action Row
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 AlanSheetTextField(
-                    label = tr("پورت", "Port"),
+                    label = "پورت (443/8443)",
                     value = portText,
                     onValueChange = { portText = it.filter(Char::isDigit) },
                     ltr = true,
@@ -293,7 +282,7 @@ fun CleanIpScannerScreen(
                     modifier = Modifier.weight(1f)
                 )
                 AlanSheetTextField(
-                    label = tr("تعداد هدف", "Max IPs"),
+                    label = "تعداد هدف",
                     value = maxHitsText,
                     onValueChange = { maxHitsText = it.filter(Char::isDigit) },
                     ltr = true,
@@ -322,7 +311,7 @@ fun CleanIpScannerScreen(
                         .padding(horizontal = 16.dp)
                 ) {
                     Text(
-                        text = if (cleanIpState.isRunning) tr("توقف", "Stop") else tr("شروع اسکن", "Scan"),
+                        text = if (cleanIpState.isRunning) "توقف" else "شروع اسکن",
                         color = if (cleanIpState.isRunning) Color.White else p.onAccent,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 12.5.sp
@@ -334,13 +323,13 @@ fun CleanIpScannerScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(5.dp)
+                        .height(6.dp)
                         .alanNeuInset(cornerRadius = 3.dp)
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(animPct)
-                            .height(5.dp)
+                            .height(6.dp)
                             .clip(RoundedCornerShape(3.dp))
                             .background(p.accentGold)
                     )
@@ -367,15 +356,11 @@ fun CleanIpScannerScreen(
                     modifier = Modifier
                         .weight(1f)
                         .height(40.dp)
-                        .alanGlassCard(cornerRadius = 11.dp)
+                        .alanGlassCard(cornerRadius = 12.dp)
                         .clickable {
                             val targetList = if (checkedIps.isNotEmpty()) checkedIps.toList() else cleanIpHits.map { it.ip }
                             copyPlainTextToClipboard(context, "CleanIPs", targetList.joinToString("\n"))
-                            feedback = if (isFa) {
-                                "${targetList.size} آی‌پی تمیز کپی شد."
-                            } else {
-                                "Copied ${targetList.size} clean IPs."
-                            }
+                            feedback = "${targetList.size} آی‌پی تمیز در کلیپ‌بورد کپی شد."
                         }
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -383,9 +368,9 @@ fun CleanIpScannerScreen(
                         Spacer(Modifier.width(5.dp))
                         Text(
                             text = if (checkedIps.isNotEmpty()) {
-                                tr("کپی انتخابی (${checkedIps.size})", "Copy (${checkedIps.size})")
+                                "کپی انتخابی (${checkedIps.size})"
                             } else {
-                                tr("کپی همه (${cleanIpHits.size})", "Copy All (${cleanIpHits.size})")
+                                "کپی همه (${cleanIpHits.size})"
                             },
                             color = p.textPrimary,
                             fontWeight = FontWeight.Bold,
@@ -399,7 +384,7 @@ fun CleanIpScannerScreen(
                     modifier = Modifier
                         .weight(1.3f)
                         .height(40.dp)
-                        .clip(RoundedCornerShape(11.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .background(p.accentGold)
                         .clickable {
                             singleQuickIp = null
@@ -410,7 +395,7 @@ fun CleanIpScannerScreen(
                         Icon(Icons.Outlined.Bolt, null, tint = p.onAccent, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            text = tr("اعمال و کلون روی کانفیگ‌ها", "Apply / Clone to Configs"),
+                            text = "اعمال و کلون روی کانفیگ‌ها",
                             color = p.onAccent,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 11.5.sp
@@ -435,7 +420,7 @@ fun CleanIpScannerScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .alanGlassCard(highlighted = rankIdx == 0, cornerRadius = 14.dp)
+                        .alanGlassCard(highlighted = rankIdx == 0, cornerRadius = 15.dp)
                         .clickable {
                             if (isChecked) checkedIps.remove(hit.ip) else checkedIps.add(hit.ip)
                         }
@@ -446,7 +431,6 @@ fun CleanIpScannerScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        // Compact 22.dp Tactile Checkbox
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
@@ -508,7 +492,7 @@ fun CleanIpScannerScreen(
                                 .alanNeuInset(cornerRadius = 9.dp)
                                 .clickable {
                                     copyPlainTextToClipboard(context, "CleanIP", hit.ip)
-                                    feedback = if (isFa) "آی‌پی ${hit.ip} کپی شد." else "Copied ${hit.ip}."
+                                    feedback = "آی‌پی ${hit.ip} کپی شد."
                                 }
                         ) {
                             Icon(Icons.Outlined.ContentCopy, null, tint = p.textSecondary, modifier = Modifier.size(15.dp))
@@ -545,9 +529,9 @@ fun CleanIpScannerScreen(
                 showApplyModal = false
                 onApplyOrCloneIps(ipsToUse, targetMode, selIndices, cloneMode, clonesCount)
                 feedback = if (cloneMode) {
-                    if (isFa) "کلون‌های مجهز به IP تمیز اضافه شدند." else "Clean IP clones added to profiles."
+                    "کلون‌های مجهز به IP تمیز به مخزن اضافه شدند."
                 } else {
-                    if (isFa) "IP تمیز روی کانفیگ‌ها اعمال شد." else "Clean IP applied to target configs."
+                    "IP تمیز روی کانفیگ‌ها اعمال شد."
                 }
             }
         )
@@ -562,8 +546,6 @@ private fun ApplyCleanIpToRepoDialog(
     onConfirm: (targetMode: String, selectedIndices: List<Int>, cloneMode: Boolean, clonesPerConfig: Int) -> Unit
 ) {
     val p = LocalAlanPalette.current
-    val layoutDir = if (LocalAlanLang.current == AlanLang.FA) LayoutDirection.Rtl else LayoutDirection.Ltr
-
     var targetMode by remember { mutableStateOf("single") }
     var cloneMode by remember { mutableStateOf(true) }
     var singleIdx by remember {
@@ -580,7 +562,7 @@ private fun ApplyCleanIpToRepoDialog(
     }
 
     Dialog(onDismissRequest = onDismiss) {
-        CompositionLocalProvider(LocalLayoutDirection provides layoutDir) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = p.surfaceBg,
@@ -598,20 +580,17 @@ private fun ApplyCleanIpToRepoDialog(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = tr("اعمال / کلون (${ips.size} آی‌پی)", "Apply / Clone (${ips.size} IPs)"),
+                            text = "اعمال / کلون ${ips.size} آی‌پی تمیز",
                             color = p.accentGold,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 14.sp
                         )
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(30.dp)
-                                .alanNeuInset(cornerRadius = 15.dp)
-                                .clickable { onDismiss() }
-                        ) {
-                            Icon(Icons.Outlined.Close, null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
-                        }
+                        AlanNeuIconButton(
+                            icon = Icons.Outlined.Close,
+                            tint = p.textSecondary,
+                            size = 32.dp,
+                            onClick = onDismiss
+                        )
                     }
 
                     Row(
@@ -622,10 +601,10 @@ private fun ApplyCleanIpToRepoDialog(
                             .padding(4.dp)
                     ) {
                         listOf(
-                            "single" to tr("تکی", "Single"),
-                            "selected" to tr("چندتایی", "Multi"),
-                            "cf_only" to tr("کلادفلر", "CF Only"),
-                            "all" to tr("همه", "All")
+                            "single" to "یک کانفیگ",
+                            "selected" to "چند کانفیگ",
+                            "cf_only" to "کلادفلرها",
+                            "all" to "کل مخزن"
                         ).forEach { (k, label) ->
                             val sel = targetMode == k
                             Box(
@@ -659,7 +638,7 @@ private fun ApplyCleanIpToRepoDialog(
 
                     if (targetMode == "single" && profileOptions.isNotEmpty()) {
                         AlanCustomSelectBox(
-                            label = tr("انتخاب کانفیگ", "Target Config"),
+                            label = "انتخاب کانفیگ",
                             selectedValue = singleIdx.toString(),
                             options = profileOptions,
                             onSelect = { singleIdx = it.toIntOrNull() ?: 0 }
@@ -675,9 +654,9 @@ private fun ApplyCleanIpToRepoDialog(
                         ) {
                             Text(
                                 text = if (multiIndices.isEmpty()) {
-                                    tr("انتخاب کانفیگ‌ها از لیست...", "Select configs from list...")
+                                    "انتخاب کانفیگ‌ها از لیست..."
                                 } else {
-                                    tr("${multiIndices.size} کانفیگ انتخاب شد", "${multiIndices.size} configs selected")
+                                    "${multiIndices.size} کانفیگ انتخاب شد"
                                 },
                                 color = p.accentGold,
                                 fontWeight = FontWeight.Bold,
@@ -696,7 +675,7 @@ private fun ApplyCleanIpToRepoDialog(
                             .padding(horizontal = 12.dp, vertical = 10.dp)
                     ) {
                         Text(
-                            text = tr("ساخت کلون مجزا (حفظ اصلی)", "Clone as new configs (keep original)"),
+                            text = "ساخت کلون مجزا (حفظ کانفیگ اصلی)",
                             color = p.textPrimary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.5.sp,
@@ -713,7 +692,7 @@ private fun ApplyCleanIpToRepoDialog(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = tr("تعداد کلون هر کانفیگ:", "Clones per config:"),
+                                text = "تعداد کلون به ازای هر کانفیگ:",
                                 color = p.textSecondary,
                                 fontSize = 11.5.sp
                             )
@@ -762,12 +741,7 @@ private fun ApplyCleanIpToRepoDialog(
                                 .alanNeuInset(cornerRadius = 11.dp)
                                 .clickable { onDismiss() }
                         ) {
-                            Text(
-                                text = tr("انصراف", "Cancel"),
-                                color = p.textSecondary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.5.sp
-                            )
+                            Text("انصراف", color = p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
                         }
                         Box(
                             contentAlignment = Alignment.Center,
@@ -781,12 +755,7 @@ private fun ApplyCleanIpToRepoDialog(
                                     onConfirm(targetMode, indices, cloneMode, clonesPerCfg)
                                 }
                         ) {
-                            Text(
-                                text = tr("تایید و اجرا", "Confirm & Apply"),
-                                color = p.onAccent,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 12.5.sp
-                            )
+                            Text("تایید و اجرا", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 12.5.sp)
                         }
                     }
                 }
@@ -816,8 +785,6 @@ fun MultiProfilePickerDialog(
     onConfirm: (List<Int>) -> Unit
 ) {
     val p = LocalAlanPalette.current
-    val layoutDir = if (LocalAlanLang.current == AlanLang.FA) LayoutDirection.Rtl else LayoutDirection.Ltr
-
     var filterText by remember { mutableStateOf("") }
     val selectedSet = remember { mutableStateListOf<Int>().apply { addAll(initialSelected) } }
 
@@ -833,7 +800,7 @@ fun MultiProfilePickerDialog(
     }
 
     Dialog(onDismissRequest = onDismiss) {
-        CompositionLocalProvider(LocalLayoutDirection provides layoutDir) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = p.surfaceBg,
@@ -851,7 +818,7 @@ fun MultiProfilePickerDialog(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = tr("انتخاب کانفیگ (${selectedSet.size})", "Select Configs (${selectedSet.size})"),
+                            text = "انتخاب کانفیگ‌ها (${selectedSet.size})",
                             color = p.accentGold,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 14.sp
@@ -868,7 +835,7 @@ fun MultiProfilePickerDialog(
                                     }
                                     .padding(horizontal = 9.dp)
                             ) {
-                                Text(tr("همه", "All"), color = p.accentGold, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                                Text("همه", color = p.accentGold, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                             }
                             Box(
                                 contentAlignment = Alignment.Center,
@@ -878,13 +845,13 @@ fun MultiProfilePickerDialog(
                                     .clickable { selectedSet.clear() }
                                     .padding(horizontal = 9.dp)
                             ) {
-                                Text(tr("هیچکدام", "None"), color = p.textSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                                Text("پاک کردن", color = p.textSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
 
                     AlanSheetTextField(
-                        label = tr("جستجو...", "Search..."),
+                        label = "جستجو...",
                         value = filterText,
                         onValueChange = { filterText = it },
                         ltr = false
@@ -905,9 +872,7 @@ fun MultiProfilePickerDialog(
                                     .fillMaxWidth()
                                     .then(
                                         if (checked) {
-                                            Modifier
-                                                .alanNeuInset(11.dp)
-                                                .border(1.dp, p.accentGold, RoundedCornerShape(11.dp))
+                                            Modifier.alanNeuInset(cornerRadius = 11.dp, accented = true)
                                         } else {
                                             Modifier.alanGlassCard(cornerRadius = 11.dp)
                                         }
@@ -963,7 +928,7 @@ fun MultiProfilePickerDialog(
                                 .alanNeuInset(cornerRadius = 11.dp)
                                 .clickable { onDismiss() }
                         ) {
-                            Text(tr("بستن", "Close"), color = p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("بستن", color = p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
                         Box(
                             contentAlignment = Alignment.Center,
@@ -975,7 +940,7 @@ fun MultiProfilePickerDialog(
                                 .clickable { onConfirm(selectedSet.toList()) }
                         ) {
                             Text(
-                                text = tr("ثبت (${selectedSet.size})", "Confirm (${selectedSet.size})"),
+                                text = "ثبت انتخاب (${selectedSet.size} کانفیگ)",
                                 color = p.onAccent,
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 12.5.sp
