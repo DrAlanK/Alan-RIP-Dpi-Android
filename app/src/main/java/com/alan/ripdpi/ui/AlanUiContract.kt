@@ -89,7 +89,8 @@ data class ProfileItem(
     val flagEmoji: String = CountryPaletteRegistry.DEFAULT_SPEC.flagEmoji,
     val flagStripeColors: List<Long> = CountryPaletteRegistry.DEFAULT_SPEC.stripeColors,
     val accentPrimaryColor: Long = CountryPaletteRegistry.DEFAULT_SPEC.accentPrimary,
-    val accentSecondaryColor: Long = CountryPaletteRegistry.DEFAULT_SPEC.accentSecondary
+    val accentSecondaryColor: Long = CountryPaletteRegistry.DEFAULT_SPEC.accentSecondary,
+    val groupName: String = "Manual"
 )
 
 data class EditableConfigFields(
@@ -138,7 +139,10 @@ data class EngineSettings(
     val darkTheme: Boolean = true,
     val lastActiveTab: Int = 0,
     val subnetsRepoUrl: String = "https://raw.githubusercontent.com/DrAlanK/Alan-RIP-Dpi-Android/main/subnets.txt",
-    val autoCleanIpForCf: Boolean = true
+    val autoCleanIpForCf: Boolean = true,
+    val preferredAutoCountry: String = "AUTO",
+    val autoRenameOnScan: Boolean = true,
+    val bridgePort: Int = 20809
 )
 
 data class VectorSpec(
@@ -194,6 +198,25 @@ data class CleanIpScanState(
     val percent: Int = 0,
     val summary: String = "آماده اسکن IP تمیز کلادفلر",
     val loadedSubnetsCount: Int = 22
+)
+
+
+data class RepoLocationOption(
+    val countryCode: String,
+    val countryNameFa: String,
+    val countryNameEn: String = "",
+    val flagEmoji: String = "🌐",
+    val flagStripeColors: List<Long> = listOf(0xFF3B82F6, 0xFF60A5FA, 0xFF3B82F6),
+    val serverCount: Int = 0,
+    val avgPingMs: Int = -1
+)
+
+data class RepoScanReportSummary(
+    val updatedAtLabel: String = "—",
+    val totalScanned: Int = 0,
+    val totalVerified: Int = 0,
+    val activeLocationsCount: Int = 0,
+    val sourceLabel: String = "GitHub Auto-Repo"
 )
 
 interface AlanEngineController {
@@ -302,7 +325,30 @@ interface AlanEngineController {
     fun quickCloneConfigWithCleanIps(profileIndex: Int, cloneCount: Int = 5) {}
 
     fun clearLogs()
+
+    val availableRepoLocations: StateFlow<List<RepoLocationOption>>
+        get() = MutableStateFlow(emptyList())
+
+    val repoScanReport: StateFlow<RepoScanReportSummary>
+        get() = MutableStateFlow(RepoScanReportSummary())
+
+    fun selectAutoRepoCountry(countryCode: String, reconnectIfActive: Boolean = false) {}
+
+    fun refreshAutoRepoCatalog() {}
+
+    fun realTunnelPingConfigs(selectedIndices: List<Int> = emptyList(), autoRenameWithLocation: Boolean = true) {}
+
+    fun pingSingleConfig(index: Int, realTunnelPing: Boolean = true) {}
+
+    fun autoRenameConfigsWithLocation(onlySelectedIndices: List<Int> = emptyList()) {}
+
+    fun deleteSelectedConfigs(indices: List<Int>) {}
+
+    fun importQrPayload(rawQrText: String): Int = 0
+
+    fun shareOrExportSelectedConfigs(indices: List<Int>, asBase64Sub: Boolean = false): String = ""
 }
+
 
 class DemoAlanEngineController : AlanEngineController {
     private val deSpec = CountryPaletteRegistry.resolveByCode("DE")

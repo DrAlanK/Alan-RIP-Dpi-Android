@@ -1,8 +1,11 @@
 package com.alan.ripdpi.ui
 
+import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -53,13 +57,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,7 +75,8 @@ import kotlinx.coroutines.launch
 
 private data class SimpleNavSpec(
     val index: Int,
-    val title: String,
+    val titleFa: String,
+    val titleEn: String,
     val icon: ImageVector
 )
 
@@ -79,6 +85,21 @@ fun AlanMainScreen(
     controller: AlanEngineController = remember { DemoAlanEngineController() },
     @Suppress("UNUSED_PARAMETER") initialDarkTheme: Boolean = true
 ) {
+    val context = LocalContext.current
+    val uiPrefs = remember(context) {
+        context.getSharedPreferences("alan_ui_prefs", Context.MODE_PRIVATE)
+    }
+    var appLang by remember {
+        val saved = uiPrefs.getString("ui_lang", "FA") ?: "FA"
+        mutableStateOf(if (saved == "EN") AlanLang.EN else AlanLang.FA)
+    }
+
+    val toggleLanguage: () -> Unit = {
+        val next = if (appLang == AlanLang.FA) AlanLang.EN else AlanLang.FA
+        appLang = next
+        uiPrefs.edit().putString("ui_lang", next.name).apply()
+    }
+
     val settings by controller.settings.collectAsState()
     val darkTheme = settings.darkTheme
     var currentTab by rememberSaveable(settings.lastActiveTab) {
@@ -119,31 +140,37 @@ fun AlanMainScreen(
 
     AlanCyberTheme(darkTheme = darkTheme) {
         val p = LocalAlanPalette.current
+        val layoutDir = if (appLang == AlanLang.FA) LayoutDirection.Rtl else LayoutDirection.Ltr
 
         val navItems = remember {
             listOf(
-                SimpleNavSpec(0, "خانه", Icons.Outlined.Home),
-                SimpleNavSpec(1, "کانفیگ‌ها", Icons.Outlined.Description),
-                SimpleNavSpec(2, "اسکنر متد", Icons.Outlined.Speed),
-                SimpleNavSpec(3, "اسکنر IP تمیز", Icons.Outlined.Radar),
-                SimpleNavSpec(4, "تنظیمات عمومی", Icons.Outlined.Settings),
-                SimpleNavSpec(5, "تنظیمات Xray", Icons.Outlined.Tune),
-                SimpleNavSpec(6, "لاگ‌ها", Icons.Outlined.Terminal)
+                SimpleNavSpec(0, "خانه", "Home", Icons.Outlined.Home),
+                SimpleNavSpec(1, "کانفیگ‌ها", "Profiles", Icons.Outlined.Description),
+                SimpleNavSpec(2, "اسکنر متد", "Method Scanner", Icons.Outlined.Speed),
+                SimpleNavSpec(3, "اسکنر IP تمیز", "Clean IP Scanner", Icons.Outlined.Radar),
+                SimpleNavSpec(4, "تنظیمات عمومی", "General Settings", Icons.Outlined.Settings),
+                SimpleNavSpec(5, "تنظیمات Xray", "Xray Settings", Icons.Outlined.Tune),
+                SimpleNavSpec(6, "لاگ‌ها", "Logs", Icons.Outlined.Terminal)
             )
         }
 
-        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        val drawerShape = RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp)
+
+        CompositionLocalProvider(
+            LocalAlanLang provides appLang,
+            LocalLayoutDirection provides layoutDir
+        ) {
             ModalNavigationDrawer(
                 drawerState = drawerState,
                 drawerContent = {
                     ModalDrawerSheet(
-                        drawerContainerColor = Color.Transparent, // Transparent to let GlassCard handle the Neumorphic background
+                        drawerContainerColor = p.surfaceBg,
                         drawerContentColor = p.textPrimary,
-                        drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
+                        drawerShape = drawerShape,
                         modifier = Modifier
-                            .width(288.dp)
+                            .width(280.dp)
                             .fillMaxHeight()
-                            .alanGlassCard(cornerRadius = 24.dp)
+                            .border(BorderStroke(1.dp, p.cardBorder), drawerShape)
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -152,7 +179,7 @@ fun AlanMainScreen(
                                 .fillMaxSize()
                                 .statusBarsPadding()
                                 .navigationBarsPadding()
-                                .padding(horizontal = 16.dp, vertical = 20.dp)
+                                .padding(horizontal = 14.dp, vertical = 16.dp)
                         ) {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -163,60 +190,84 @@ fun AlanMainScreen(
                                 Box(
                                     contentAlignment = Alignment.Center,
                                     modifier = Modifier
-                                        .size(68.dp)
-                                        .alanGlassCard(cornerRadius = 20.dp)
+                                        .size(60.dp)
+                                        .alanGlassCard(cornerRadius = 18.dp)
                                 ) {
                                     Image(
                                         painter = painterResource(id = R.drawable.alan_brand_logo),
                                         contentDescription = APP_NAME,
                                         contentScale = ContentScale.Fit,
-                                        modifier = Modifier.size(42.dp)
+                                        modifier = Modifier.size(38.dp)
                                     )
                                 }
-                                Spacer(Modifier.height(12.dp))
+                                Spacer(Modifier.height(10.dp))
                                 LtrContent {
-                                    Text(text = APP_NAME, color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 17.sp)
+                                    Text(
+                                        text = APP_NAME,
+                                        color = p.textPrimary,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 16.sp
+                                    )
                                 }
-                                Text(text = "ابزارهای امن شبکه", color = p.textMuted, fontSize = 11.sp)
+                                Text(
+                                    text = tr("ابزار هوشمند عبور از DPI", "Smart Anti-DPI Suite"),
+                                    color = p.textMuted,
+                                    fontSize = 11.sp
+                                )
 
-                                Spacer(Modifier.height(24.dp))
+                                Spacer(Modifier.height(18.dp))
 
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                                     navItems.forEach { item ->
                                         val selected = currentTab == item.index
+                                        val itemTitle = if (appLang == AlanLang.FA) item.titleFa else item.titleEn
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .height(IntrinsicSize.Min)
-                                                .then(if (selected) Modifier.alanNeuInset(14.dp) else Modifier)
-                                                .clip(RoundedCornerShape(14.dp))
+                                                .then(
+                                                    if (selected) {
+                                                        Modifier
+                                                            .alanNeuInset(13.dp)
+                                                            .border(1.dp, p.glowBorder, RoundedCornerShape(13.dp))
+                                                    } else {
+                                                        Modifier.clip(RoundedCornerShape(13.dp))
+                                                    }
+                                                )
                                                 .clickable {
                                                     selectTab(item.index)
                                                     scope.launch { drawerState.close() }
                                                 }
                                         ) {
                                             if (selected) {
-                                                Box(modifier = Modifier.width(4.dp).fillMaxHeight().background(p.accentGold))
+                                                Box(
+                                                    modifier = Modifier
+                                                        .width(4.dp)
+                                                        .fillMaxHeight()
+                                                        .background(p.accentGold)
+                                                )
                                             }
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(12.dp),
                                                 modifier = Modifier
                                                     .weight(1f)
-                                                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                                                    .padding(horizontal = 14.dp, vertical = 11.dp)
                                             ) {
                                                 Icon(
                                                     imageVector = item.icon,
-                                                    contentDescription = item.title,
+                                                    contentDescription = itemTitle,
                                                     tint = if (selected) p.accentGold else p.textSecondary,
-                                                    modifier = Modifier.size(20.dp)
+                                                    modifier = Modifier.size(19.dp)
                                                 )
                                                 Text(
-                                                    text = item.title,
+                                                    text = itemTitle,
                                                     color = if (selected) p.textPrimary else p.textSecondary,
-                                                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Bold,
-                                                    fontSize = 14.sp
+                                                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                                    fontSize = 13.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
                                                 )
                                             }
                                         }
@@ -230,12 +281,23 @@ fun AlanMainScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .alanGlassCard(cornerRadius = 14.dp)
-                                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                                    .padding(horizontal = 14.dp, vertical = 10.dp)
                             ) {
-                                Column {
-                                    Text("حالت خودکار هوشمند", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = tr("حالت خودکار هوشمند", "Smart Auto-Pilot"),
+                                        color = p.textPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        maxLines = 1
+                                    )
                                     LtrContent {
-                                        Text("v$APP_VERSION", color = p.textMuted, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                                        Text(
+                                            text = "v$APP_VERSION",
+                                            color = p.textMuted,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp
+                                        )
                                     }
                                 }
                                 AlanPillSwitch(
@@ -248,7 +310,7 @@ fun AlanMainScreen(
                 }
             ) {
                 Scaffold(
-                    containerColor = p.rootBg, // The scaffold background relies on Neumorphic root
+                    containerColor = p.rootBg,
                     topBar = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -257,74 +319,89 @@ fun AlanMainScreen(
                                 .fillMaxWidth()
                                 .background(p.rootBg)
                                 .statusBarsPadding()
-                                .padding(horizontal = 16.dp, vertical = 10.dp)
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
                         ) {
+                            // Menu Button
                             Box(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
-                                    .size(42.dp)
-                                    .alanGlassCard(cornerRadius = 12.dp)
+                                    .size(38.dp)
+                                    .alanGlassCard(cornerRadius = 11.dp)
                                     .clickable { scope.launch { drawerState.open() } }
                             ) {
-                                Icon(Icons.Outlined.Menu, "منو", tint = p.textPrimary, modifier = Modifier.size(22.dp))
-                            }
-
-                            LtrContent {
-                                Text(
-                                    text = APP_NAME.uppercase(),
-                                    color = p.accentGold,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 18.sp,
-                                    letterSpacing = 1.1.sp
+                                Icon(
+                                    imageVector = Icons.Outlined.Menu,
+                                    contentDescription = tr("منو", "Menu"),
+                                    tint = p.textPrimary,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
 
+                            // Brand Title + Subtle Active Status Dot
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            when {
+                                                telemetry.isConnected -> p.emerald
+                                                telemetry.isConnecting -> p.accentGold
+                                                else -> p.textMuted.copy(alpha = 0.45f)
+                                            }
+                                        )
+                                )
+                                LtrContent {
+                                    Text(
+                                        text = APP_NAME.uppercase(),
+                                        color = p.textPrimary,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 16.sp,
+                                        letterSpacing = 0.9.sp
+                                    )
+                                }
+                            }
+
+                            // Language Switch (FA/EN) + Theme Switch (No Xray badge!)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Box(
                                     contentAlignment = Alignment.Center,
                                     modifier = Modifier
-                                        .size(42.dp)
-                                        .alanGlassCard(cornerRadius = 12.dp)
+                                        .height(38.dp)
+                                        .width(42.dp)
+                                        .alanGlassCard(cornerRadius = 11.dp)
+                                        .clickable { toggleLanguage() }
+                                ) {
+                                    LtrContent {
+                                        Text(
+                                            text = if (appLang == AlanLang.FA) "EN" else "FA",
+                                            color = p.accentGold,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .alanGlassCard(cornerRadius = 11.dp)
                                         .clickable { controller.updateSettings(mapOf("darkTheme" to !darkTheme)) }
                                 ) {
                                     Icon(
                                         imageVector = if (darkTheme) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
-                                        contentDescription = "تغییر تم",
+                                        contentDescription = tr("تغییر تم", "Toggle Theme"),
                                         tint = p.accentGold,
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(19.dp)
                                     )
-                                }
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier
-                                        .alanGlassCard(
-                                            highlighted = telemetry.isConnected,
-                                            cornerRadius = 20.dp,
-                                            accentBorderColor = p.emerald
-                                        )
-                                        .clickable { selectTab(5) }
-                                        .padding(horizontal = 12.dp, vertical = 9.dp)
-                                ) {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.alan_brand_logo),
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Fit,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    LtrContent {
-                                        Text(
-                                            text = "Xray",
-                                            color = if (telemetry.isConnected) p.emerald else p.accentGold,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 11.sp
-                                        )
-                                    }
                                 }
                             }
                         }

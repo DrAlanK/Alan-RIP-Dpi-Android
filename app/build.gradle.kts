@@ -18,8 +18,8 @@ android {
         applicationId = "com.alan.ripdpi"
         minSdk = 24
         targetSdk = 35
-        versionCode = 105
-        versionName = "1.3.0"
+        versionCode = 106
+        versionName = "1.4.0"
     }
 
     splits {
@@ -88,6 +88,8 @@ androidComponents {
 }
 
 dependencies {
+    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)

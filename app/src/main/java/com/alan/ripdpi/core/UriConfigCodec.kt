@@ -48,6 +48,20 @@ data class CompiledXraySession(
     val remotePort: Int
 )
 
+data class MultiLaneItem(
+    val laneIndex: Int,
+    val profile: ProfileItem,
+    val httpPort: Int,
+    val bridgePort: Int,
+    val remoteHost: String,
+    val remotePort: Int
+)
+
+data class MultiLaneXraySession(
+    val configJson: String,
+    val lanes: List<MultiLaneItem>
+)
+
 object UriConfigCodec {
 
     fun allocateSafePort(preferredPort: Int, exclude: Set<Int> = emptySet()): Int {
@@ -1038,5 +1052,164 @@ object UriConfigCodec {
         } catch (_: Throwable) {
             s
         }
+    }
+
+    // Interleaved OOB + Zero-OOB Vector Wave Plan: guarantees Railway/Envoy/Nginx AND Cloudflare both succeed in Wave 1!
+    fun buildBalancedRacePlan(profile: ProfileItem, settings: EngineSettings): List<BypassVector> {
+        val protoUp = profile.protocol.uppercase(java.util.Locale.US)
+        val uriLow = profile.uri.lowercase(java.util.Locale.US)
+        val hostLow = profile.originalHost.ifBlank { profile.host }.lowercase(java.util.Locale.US).trim()
+        val directVec = VectorCatalog.findVector("VEC-00")
+
+        if (protoUp in setOf("SHADOWSOCKS", "SS", "SOCKS")) {
+            return listOf(directVec)
+        }
+        if (uriLow.contains("security=reality")) {
+            return listOf(
+                directVec,
+                VectorCatalog.findVector("VEC-17"),
+                VectorCatalog.findVector("VEC-11"),
+                VectorCatalog.findVector("VEC-23")
+            ).distinctBy { it.vectorId }
+        }
+        if (hostLow.endsWith(".ir") || uriLow.contains("security=none")) {
+            return (listOf(directVec) + buildVectorPlan(profile, settings)).distinctBy { it.vectorId }
+        }
+
+        // Wave 1 mixes 3 Zero-OOB framing/fragment vectors (VEC-17, VEC-11, VEC-23) + 3 OOB vectors (VEC-21, VEC-01, VEC-18)!
+        val wavePriorityIds = listOf(
+            "VEC-21", // Hybrid OOB (Top on Cloudflare Edge)
+            "VEC-17", // Zero-OOB 3-Record DotSplit (Top on Railway / Envoy / TLS 1.3)
+            "VEC-11", // Zero-OOB Micro-Fragment 5-16B (Universal DPI SNI bypass)
+            "VEC-01", // Core Alpha SNI-Tag OOB
+            "VEC-23", // Zero-OOB Chameleon Interleave
+            "VEC-18", // Cipher-Pivot OOB
+            "VEC-20", // Zero-OOB Dot-Fibonacci
+            "VEC-13", // Zero-OOB Rapid Fragment 12-28B
+            "VEC-22", // Microcell Pincer OOB
+            "VEC-19", // Stream Window Balance
+            "VEC-09", // Zero-OOB Atomic Mid-SNI Split
+            "VEC-04", // Preamble Fusion OOB
+            "VEC-08", // Zero-OOB Dual Preamble
+            "VEC-14", // Zero-OOB Multi-Flight Fragment
+            "VEC-02", "VEC-03", "VEC-05", "VEC-06", "VEC-07", "VEC-10", "VEC-15", "VEC-16", "VEC-12", "VEC-00"
+        )
+
+        val allowedSet = VectorCatalog.filterVectorsByMode(settings.engineMode).map { it.vectorId }.toSet()
+        val ordered = ArrayList<BypassVector>(24)
+
+        for (pinned in listOf(profile.preferredVectorId, profile.cachedVectorId)) {
+            if (pinned.isNotBlank() && !pinned.equals("AUTO", true)) {
+                val v = VectorCatalog.findVector(pinned)
+                if (ordered.none { it.vectorId == v.vectorId }) ordered.add(v)
+            }
+        }
+        for (vid in wavePriorityIds) {
+            if (vid in allowedSet) {
+                val v = VectorCatalog.findVector(vid)
+                if (ordered.none { it.vectorId == v.vectorId }) ordered.add(v)
+            }
+        }
+        return ordered
+    }
+
+    fun updateUriRemarkName(rawUri: String, newRemark: String): String {
+        val cleanName = newRemark.trim()
+        if (cleanName.isEmpty()) return rawUri
+        val spec = parseFullConfig(rawUri) ?: return rawUri
+        return buildUriFromFullSpec(spec.copy(name = cleanName))
+    }
+
+    fun compileMultiLaneProbeSession(
+        laneSpecs: List<Pair<ProfileItem, String>>,
+        settings: EngineSettings
+    ): MultiLaneXraySession {
+        val usedPorts = LinkedHashSet<Int>()
+        usedPorts.add(settings.socksPort)
+        usedPorts.add(settings.httpPort)
+        usedPorts.add(20809)
+
+        val inboundsArr = org.json.JSONArray()
+        val outboundsArr = org.json.JSONArray()
+        val rulesArr = org.json.JSONArray()
+        val compiledLanes = ArrayList<MultiLaneItem>(laneSpecs.size)
+
+        for ((idx, pair) in laneSpecs.withIndex()) {
+            val (prof, epOverride) = pair
+            val spec = parseFullConfig(prof.uri) ?: continue
+
+            val httpPortVal = allocateSafePort(0, usedPorts)
+            usedPorts.add(httpPortVal)
+            val bridgePortVal = allocateSafePort(0, usedPorts)
+            usedPorts.add(bridgePortVal)
+
+            val remoteHostVal = epOverride.ifBlank { prof.host.ifBlank { spec.address } }.trim()
+            val remotePortVal = (if (prof.port in 1..65535) prof.port else spec.port).coerceIn(1, 65535)
+
+            val inTag = "http-lane-$idx"
+            val outTag = "proxy-lane-$idx"
+
+            inboundsArr.put(
+                org.json.JSONObject()
+                    .put("tag", inTag)
+                    .put("listen", "127.0.0.1")
+                    .put("port", httpPortVal)
+                    .put("protocol", "http")
+                    .put("settings", org.json.JSONObject().put("allowTransparent", false))
+                    .put("sniffing", org.json.JSONObject().put("enabled", false))
+            )
+
+            // Compile outbound cleanly via single-lane helper & retag
+            val single = compileXraySession(
+                profile = prof,
+                settings = settings,
+                preferredSocksPort = 0,
+                preferredHttpPort = httpPortVal,
+                preferredBridgePort = bridgePortVal,
+                forceLogSilent = true
+            )
+            val singleJson = org.json.JSONObject(single.configJson)
+            val singleOut = singleJson.getJSONArray("outbounds").getJSONObject(0)
+            singleOut.put("tag", outTag)
+            outboundsArr.put(singleOut)
+
+            rulesArr.put(
+                org.json.JSONObject()
+                    .put("type", "field")
+                    .put("inboundTag", org.json.JSONArray().put(inTag))
+                    .put("outboundTag", outTag)
+            )
+
+            compiledLanes.add(
+                MultiLaneItem(
+                    laneIndex = idx,
+                    profile = prof,
+                    httpPort = httpPortVal,
+                    bridgePort = bridgePortVal,
+                    remoteHost = remoteHostVal,
+                    remotePort = remotePortVal
+                )
+            )
+        }
+
+        outboundsArr.put(org.json.JSONObject().put("tag", "direct-out").put("protocol", "freedom"))
+
+        val root = org.json.JSONObject()
+            .put("log", org.json.JSONObject().put("loglevel", "none"))
+            .put("inbounds", inboundsArr)
+            .put("outbounds", outboundsArr)
+            .put("routing", org.json.JSONObject().put("domainStrategy", "AsIs").put("rules", rulesArr))
+
+        return MultiLaneXraySession(configJson = root.toString(), lanes = compiledLanes)
+    }
+
+    fun extractExplicitIsoFromTitle(title: String): String {
+        // Matches [DE-01] or [DE] produced by Alan Cloudflare Worker!
+        val bracketMatch = Regex("\\[([A-Za-z]{2})(?:-\\d+)?\\]").find(title)
+        if (bracketMatch != null) {
+            val code = bracketMatch.groupValues[1].uppercase(java.util.Locale.US)
+            if (code != "UN" && code != "CF") return if (code == "UK") "GB" else code
+        }
+        return ""
     }
 }

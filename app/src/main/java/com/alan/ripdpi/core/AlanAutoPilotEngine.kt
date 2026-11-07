@@ -65,6 +65,8 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import android.util.Base64
 import java.security.MessageDigest
+import com.alan.ripdpi.ui.RepoLocationOption
+import com.alan.ripdpi.ui.RepoScanReportSummary
 
 class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineController {
 
@@ -119,6 +121,15 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     override val isFindingBestMethod: StateFlow<Boolean> = _isFindingBestMethod.asStateFlow()
     private val _autoMethodStatus = MutableStateFlow("")
     override val autoMethodStatus: StateFlow<String> = _autoMethodStatus.asStateFlow()
+
+    private val _availableRepoLocations = MutableStateFlow<List<RepoLocationOption>>(emptyList())
+    override val availableRepoLocations: StateFlow<List<RepoLocationOption>> = _availableRepoLocations.asStateFlow()
+
+    private val _repoScanReport = MutableStateFlow(RepoScanReportSummary())
+    override val repoScanReport: StateFlow<RepoScanReportSummary> = _repoScanReport.asStateFlow()
+
+    @Volatile
+    private var cachedAutoRepoNodes: List<ProfileItem> = emptyList()
     private var watchdogFailureStreak = 0
     private var configuredBridgePort = 20809
     private var selectedProfileUidPersist = ""
@@ -458,29 +469,36 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
     override fun sortConfigs(by: String) {
         val current = _profiles.value
-        if (current.isEmpty()) return
-        val currentSelectedUid = current.getOrNull(_selectedIndex.value)?.uid ?: selectedProfileUidPersist
-
-        val sorted = when (by.lowercase()) {
-            "name" -> current.sortedBy { it.name.lowercase() }
-            "protocol" -> current.sortedBy { it.protocol }
-            "country" -> current.sortedBy { it.countryCode }
+        if (current.size <= 1) return
+        val selUid = current.getOrNull(_selectedIndex.value)?.uid
+        val sorted = when (by.lowercase(Locale.ROOT)) {
+            "name" -> current.sortedBy { it.name.lowercase(Locale.ROOT) }
+            "protocol" -> current.sortedWith(
+                compareBy<ProfileItem> { it.protocol.lowercase(Locale.ROOT) }
+                    .thenBy { if (it.pingMs > 0) it.pingMs else Int.MAX_VALUE }
+            )
+            "country" -> current.sortedWith(
+                compareBy<ProfileItem> { if (it.countryCode == "UN") "ZZ" else it.countryCode }
+                    .thenBy { if (it.pingMs > 0) it.pingMs else Int.MAX_VALUE }
+            )
             else -> current.sortedWith(
                 compareBy<ProfileItem> {
                     when (it.status) {
                         "VERIFIED" -> 0
-                        "ONLINE" -> 1
+                        "HEALTHY" -> 1
                         "UNTESTED" -> 2
                         else -> 3
                     }
                 }.thenBy { if (it.pingMs > 0) it.pingMs else Int.MAX_VALUE }
             )
         }
-
-        val newIdx = sorted.indexOfFirst { it.uid == currentSelectedUid }.let { if (it >= 0) it else 0 }
-        _profiles.value = sorted
-        selectConfig(newIdx)
+        val newSelIdx = if (_selectedIndex.value < 0) -1 else sorted.indexOfFirst { it.uid == selUid }.coerceAtLeast(0)
+        _selectedIndex.value = newSelIdx
+        _profiles.value = sorted.mapIndexed { idx, item -> item.copy(isSelected = idx == newSelIdx) }
+        saveRepositoryToDisk()
     }
+
+
 
     override fun deduplicateConfigs() {
         val current = _profiles.value
@@ -1374,15 +1392,15 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             _scanState.value = ScanUiState(
                 isRunning = true,
                 mode = "active_profile",
-                percent = 3,
+                percent = 4,
                 summary = if (targets.size == 1) {
-                    "تست خالص متدها روی «${targets.first().second.name}»..."
+                    "اسکن موازی ۶ مسیره روی «${targets.first().second.name}»..."
                 } else {
-                    "اسکن آزمایشگاه روی ${targets.size} کانفیگ..."
+                    "اسکن موازی آزمایشگاه روی ${targets.size} کانفیگ..."
                 }
             )
 
-            val collected = ArrayList<ScanResultRow>()
+            val collected = java.util.Collections.synchronizedList(ArrayList<ScanResultRow>())
             var winnerForAutoConnect: Triple<Int, String, String>? = null
             val portEdgeCache = HashMap<Int, List<String>>()
             val myGen = opGeneration.get()
@@ -1401,20 +1419,21 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                             if (!isActive) break
                             val (origIdx, prof) = pair
 
+                            // Never inject Cloudflare IP unless user explicitly checked `useCleanIp = true`!
                             val reachableEps: List<String> = if (useCleanIp && cleanIpEngine.isCloudflareEdgeProfile(prof)) {
                                 resolveCandidateEndpointsForNode(
                                     node = prof,
                                     gen = myGen,
                                     portEdgeCache = portEdgeCache,
-                                    sampleCount = 32
+                                    sampleCount = 30
                                 ).filter { cleanIpEngine.fastTcpPingBlocking(it, prof.port, 1400) >= 0 }
                             } else {
                                 val realHost = prof.host.ifBlank { prof.originalHost }.trim()
                                 val unpoisonedIp = withContext(Dispatchers.IO) {
-                                    cleanIpEngine.resolveUnpoisonedIpv4Blocking(realHost, 1600).ifBlank { realHost }
+                                    cleanIpEngine.resolveUnpoisonedIpv4Blocking(realHost, 1500).ifBlank { realHost }
                                 }
                                 val rtt = withContext(Dispatchers.IO) {
-                                    cleanIpEngine.fastTcpPingBlocking(unpoisonedIp, prof.port, 1600)
+                                    cleanIpEngine.fastTcpPingBlocking(unpoisonedIp, prof.port, 1500)
                                 }
                                 if (rtt >= 0) listOf(unpoisonedIp) else emptyList()
                             }
@@ -1424,159 +1443,152 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                                 continue
                             }
 
-                            var activeEp = reachableEps.first()
+                            val activeEp = reachableEps.first()
                             val tcpRtt = withContext(Dispatchers.IO) {
-                                cleanIpEngine.fastTcpPingBlocking(activeEp, prof.port, 1300).coerceAtLeast(1)
-                            }
-
-                            val session = try {
-                                UriConfigCodec.compileXraySession(prof, cfg, 0, 0, 0, forceLogSilent = true)
-                            } catch (e: Throwable) {
-                                appendLog("[Lab] Xray config error on '${prof.name}': ${e.message}")
-                                continue
+                                cleanIpEngine.fastTcpPingBlocking(activeEp, prof.port, 1200).coerceAtLeast(1)
                             }
 
                             val plan: List<BypassVector> = if (targets.size == 1) {
-                                UriConfigCodec.buildVectorPlan(prof.copy(cachedVectorId = "", preferredVectorId = "AUTO"), cfg)
+                                UriConfigCodec.buildBalancedRacePlan(prof.copy(cachedVectorId = "", preferredVectorId = "AUTO"), cfg)
                             } else if (cleanIpEngine.isDomesticOrDirectTunnel(prof)) {
                                 listOf(VectorCatalog.findVector("VEC-00"))
                             } else {
-                                VectorCatalog.FAST_LAB_VECTOR_IDS.map { VectorCatalog.findVector(it) }
+                                UriConfigCodec.buildBalancedRacePlan(prof.copy(cachedVectorId = "", preferredVectorId = "AUTO"), cfg).take(12)
                             }
 
-                            val bridge = FullDuplexMutatorBridge(
-                                listenPort = session.bridgePort,
-                                initialRemoteHost = activeEp,
-                                initialRemotePort = prof.port,
-                                initialVector = plan.first(),
-                                initialCustomStride = cfg.forwardStrideBytes,
-                                initialJitterBytes = cfg.strideJitterBytes,
-                                initialRawPassthrough = plan.first().family == "DIRECT"
-                            )
+                            val waves = plan.chunked(6)
+                            var detectedCountryOnNode = prof.countryCode
 
-                            try {
-                                bridge.start()
-                                if (!xrayCoreManager.startCore(session.configJson)) continue
-                                waitLocalHttpReady(session.httpPort, 500L)
-
-                                var passedOnThisNode = false
-                                for ((vIdx, vec) in plan.withIndex()) {
-                                    if (!isActive) break
-                                    val pct = if (targets.size == 1) {
-                                        (10 + (((vIdx + 1) * 88) / plan.size.coerceAtLeast(1))).coerceIn(10, 99)
-                                    } else {
-                                        (8 + (((tPos * plan.size + vIdx + 1) * 90) / (targets.size * plan.size).coerceAtLeast(1))).coerceIn(8, 99)
-                                    }
-                                    _scanState.value = _scanState.value.copy(
-                                        percent = pct,
-                                        summary = if (targets.size == 1) {
-                                            "[${vIdx + 1}/${plan.size}] تست ${vec.vectorId} (${vec.codeName})..."
-                                        } else {
-                                            "[${tPos + 1}/${targets.size}] ${prof.name.take(20)} • ${vec.vectorId}"
-                                        }
-                                    )
-
-                                    bridge.updateRoute(
-                                        remoteHost = activeEp,
-                                        remotePort = prof.port,
-                                        vector = vec,
-                                        customStride = cfg.forwardStrideBytes,
-                                        jitterBytes = cfg.strideJitterBytes,
-                                        rawPassthrough = vec.family == "DIRECT",
-                                        flushExistingPool = true
-                                    )
-
-                                    var probe = TunnelStreamVerifier.fastProbe(session.httpPort, 2500L)
-                                    if (!probe.ok && useCleanIp && vIdx == 1 && !passedOnThisNode && reachableEps.size > 1) {
-                                        activeEp = reachableEps[1]
-                                        bridge.updateRoute(
-                                            remoteHost = activeEp,
-                                            remotePort = prof.port,
-                                            vector = vec,
-                                            customStride = cfg.forwardStrideBytes,
-                                            jitterBytes = cfg.strideJitterBytes,
-                                            rawPassthrough = vec.family == "DIRECT",
-                                            flushExistingPool = true
-                                        )
-                                        probe = TunnelStreamVerifier.fastProbe(session.httpPort, 2500L)
-                                    }
-
-                                    if (!probe.ok) continue
-
-                                    passedOnThisNode = true
-                                    val finalRtt = probe.latencyMs.toInt().coerceAtLeast(1)
-                                    val (upOk, upKbps) = withContext(Dispatchers.IO) {
-                                        TunnelStreamVerifier.quickUploadCheck(session.httpPort, 1800L)
-                                    }
-                                    val detailStr = if (upOk && upKbps > 0.0) {
-                                        "Up=${upKbps.toInt()} KB/s | ${vec.codeName}"
-                                    } else {
-                                        "${finalRtt}ms | ${vec.codeName}"
-                                    }
-
-                                    val rowTitle = if (targets.size == 1) {
-                                        "${vec.vectorId} • ${vec.codeName}"
-                                    } else {
-                                        "${prof.name} [${vec.vectorId}]"
-                                    }
-                                    val scoreVal = (100f - (finalRtt / 24f)).coerceIn(15f, 100f)
-                                    val shownEndpoint = if (useCleanIp) "$activeEp:${prof.port}" else "${prof.host}:${prof.port}"
-
-                                    collected.add(
-                                        ScanResultRow(
-                                            scanType = "vector",
-                                            itemId = vec.vectorId,
-                                            rank = collected.size + 1,
-                                            targetIndex = origIdx,
-                                            boundVector = vec.vectorId,
-                                            title = rowTitle,
-                                            category = vec.family,
-                                            endpoint = shownEndpoint,
-                                            tcpMs = tcpRtt,
-                                            tunnelMs = finalRtt,
-                                            status = "VERIFIED",
-                                            score = scoreVal,
-                                            detail = detailStr,
-                                            countryCode = prof.countryCode,
-                                            flagEmoji = prof.flagEmoji
-                                        )
-                                    )
-                                    val ranked = collected.sortedBy { it.tunnelMs }
-                                        .mapIndexed { i, r -> r.copy(rank = i + 1) }
-                                    _scanRows.value = ranked
-
-                                    if (useCleanIp && cleanIpEngine.isCloudflareEdgeProfile(prof) && activeEp != prof.originalHost) {
-                                        val updatedItem = cleanIpEngine.buildProfileWithCleanIp(
-                                            prof,
-                                            com.alan.ripdpi.ui.CleanIpHit(activeEp, prof.port, finalRtt, colo = "CF"),
-                                            0
-                                        )
-                                        if (updatedItem != null) {
-                                            val mut = _profiles.value.toMutableList()
-                                            if (origIdx in mut.indices) {
-                                                mut[origIdx] = updatedItem.copy(
-                                                    uid = mut[origIdx].uid,
-                                                    name = mut[origIdx].name,
-                                                    cachedVectorId = ranked.first().boundVector,
-                                                    pingMs = ranked.first().tunnelMs,
-                                                    status = "VERIFIED",
-                                                    isSelected = mut[origIdx].isSelected
-                                                )
-                                                _profiles.value = mut
-                                            }
-                                        }
-                                    } else {
-                                        updateProfileStatus(prof.uid, ranked.first().boundVector, ranked.first().tunnelMs, "VERIFIED")
-                                    }
-
-                                    val bestRow = ranked.first()
-                                    winnerForAutoConnect = Triple(bestRow.targetIndex, bestRow.boundVector, bestRow.endpoint)
-                                    if (autoConnect && targets.size == 1 && upOk) break
-                                    if (targets.size > 1) break
+                            for ((wIdx, waveVecs) in waves.withIndex()) {
+                                if (!isActive) break
+                                val pct = if (targets.size == 1) {
+                                    (12 + (((wIdx + 1) * 86) / waves.size.coerceAtLeast(1))).coerceIn(12, 99)
+                                } else {
+                                    (8 + (((tPos * waves.size + wIdx + 1) * 90) / (targets.size * waves.size).coerceAtLeast(1))).coerceIn(8, 99)
                                 }
-                            } finally {
-                                xrayCoreManager.stopCore()
-                                bridge.stop()
+                                val waveLabel = waveVecs.joinToString("/") { it.vectorId }
+                                _scanState.value = _scanState.value.copy(
+                                    percent = pct,
+                                    summary = "موج ${wIdx + 1}/${waves.size}: تست همزمان [$waveLabel]..."
+                                )
+
+                                val laneSpecs = waveVecs.map { prof to activeEp }
+                                val multiSession = try {
+                                    UriConfigCodec.compileMultiLaneProbeSession(laneSpecs, cfg)
+                                } catch (_: Throwable) {
+                                    null
+                                } ?: continue
+
+                                val bridges = ArrayList<FullDuplexMutatorBridge>(multiSession.lanes.size)
+                                try {
+                                    for ((lIdx, lane) in multiSession.lanes.withIndex()) {
+                                        val vec = waveVecs[lIdx]
+                                        val br = FullDuplexMutatorBridge(
+                                            listenPort = lane.bridgePort,
+                                            initialRemoteHost = activeEp,
+                                            initialRemotePort = prof.port,
+                                            initialVector = vec,
+                                            initialCustomStride = cfg.forwardStrideBytes,
+                                            initialJitterBytes = cfg.strideJitterBytes,
+                                            initialRawPassthrough = vec.family == "DIRECT"
+                                        )
+                                        br.start()
+                                        bridges.add(br)
+                                    }
+
+                                    if (!xrayCoreManager.startCore(multiSession.configJson)) continue
+                                    waitLocalHttpReady(multiSession.lanes.first().httpPort, 480L)
+
+                                    val waveHits = coroutineScope {
+                                        multiSession.lanes.mapIndexed { lIdx, lane ->
+                                            async(Dispatchers.IO) {
+                                                if (!isActive) return@async null
+                                                val vec = waveVecs[lIdx]
+                                                val geoRes = TunnelStreamVerifier.probeTunnelAndGeo(
+                                                    httpPort = lane.httpPort,
+                                                    timeoutMs = 2600L,
+                                                    fetchGeo = (detectedCountryOnNode == "UN" || detectedCountryOnNode.isBlank())
+                                                )
+                                                if (!geoRes.ok) return@async null
+                                                val (upOk, upKbps) = TunnelStreamVerifier.quickUploadCheck(lane.httpPort, 1600L)
+                                                Triple(vec, geoRes, upOk to upKbps)
+                                            }
+                                        }.awaitAll()
+                                    }.filterNotNull()
+
+                                    for ((vec, geoRes, upPair) in waveHits) {
+                                        val (upOk, upKbps) = upPair
+                                        if (geoRes.countryCode != "UN" && geoRes.countryCode.length == 2) {
+                                            detectedCountryOnNode = geoRes.countryCode
+                                        }
+                                        val cSpec = CountryPaletteRegistry.resolveByCode(detectedCountryOnNode)
+                                        val finalRtt = geoRes.latencyMs.coerceAtLeast(1)
+                                        val detailStr = if (upOk && upKbps > 0.0) {
+                                            "${cSpec.flagEmoji} ${cSpec.nameFa} | Up=${upKbps.toInt()} KB/s | ${vec.codeName}"
+                                        } else {
+                                            "${cSpec.flagEmoji} ${cSpec.nameFa} | ${finalRtt}ms | ${vec.codeName}"
+                                        }
+                                        val rowTitle = if (targets.size == 1) {
+                                            "${vec.vectorId} • ${vec.codeName}"
+                                        } else {
+                                            "${cSpec.flagEmoji} ${prof.name} [${vec.vectorId}]"
+                                        }
+                                        val shownEndpoint = if (useCleanIp) "$activeEp:${prof.port}" else "${prof.host}:${prof.port}"
+                                        val scoreVal = (100f - (finalRtt / 24f)).coerceIn(15f, 100f)
+
+                                        collected.add(
+                                            ScanResultRow(
+                                                scanType = "vector",
+                                                itemId = vec.vectorId,
+                                                rank = collected.size + 1,
+                                                targetIndex = origIdx,
+                                                boundVector = vec.vectorId,
+                                                title = rowTitle,
+                                                category = vec.family,
+                                                endpoint = shownEndpoint,
+                                                tcpMs = tcpRtt,
+                                                tunnelMs = finalRtt,
+                                                status = "VERIFIED",
+                                                score = scoreVal,
+                                                detail = detailStr,
+                                                countryCode = cSpec.code,
+                                                flagEmoji = cSpec.flagEmoji
+                                            )
+                                        )
+                                    }
+
+                                    if (waveHits.isNotEmpty()) {
+                                        val ranked = collected.sortedBy { it.tunnelMs }
+                                            .mapIndexed { i, r -> r.copy(rank = i + 1) }
+                                        _scanRows.value = ranked
+
+                                        val topForThisNode = ranked.firstOrNull { it.targetIndex == origIdx } ?: ranked.first()
+                                        val mut = _profiles.value.toMutableList()
+                                        if (origIdx in mut.indices) {
+                                            val curItem = mut[origIdx]
+                                            val renamedItem = buildFormattedProfileWithCountry(
+                                                item = curItem.copy(
+                                                    cachedVectorId = topForThisNode.boundVector,
+                                                    status = "VERIFIED"
+                                                ),
+                                                countryCode = detectedCountryOnNode,
+                                                seqNum = origIdx + 1,
+                                                pingMs = topForThisNode.tunnelMs,
+                                                renameRemark = cfg.autoRenameOnScan
+                                            )
+                                            mut[origIdx] = renamedItem
+                                            _profiles.value = mut
+                                        }
+
+                                        val bestOverall = ranked.first()
+                                        winnerForAutoConnect = Triple(bestOverall.targetIndex, bestOverall.boundVector, bestOverall.endpoint)
+                                        if (autoConnect && targets.size == 1) break
+                                        if (targets.size > 1) break
+                                    }
+                                } finally {
+                                    xrayCoreManager.stopCore()
+                                    bridges.forEach { it.stop() }
+                                }
                             }
                         }
                     } finally {
@@ -1610,6 +1622,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             }
         }
     }
+
+
 
 
 
@@ -1713,16 +1727,16 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val dispName = if (isHiddenAutoNode) "Alan Smart Auto-Server" else rawNode.name
         val pinnedVecId = rawNode.preferredVectorId.trim().takeIf { it.isNotEmpty() && !it.equals("AUTO", true) }
 
-        // Direct Fast-Lock when user explicitly pinned a method in Lab Scanner or Config Editor!
+        // FAST PATH 1: Explicit pinned vector from Lab or Editor -> Instant Direct Lock (<0.6s)!
         if (pinnedVecId != null && !isHiddenAutoNode) {
             val pinnedVec = VectorCatalog.findVector(pinnedVecId)
-            val targetHost = cleanIpEngine.resolveUnpoisonedIpv4Blocking(rawNode.host.ifBlank { rawNode.originalHost }, 1300)
+            val targetHost = cleanIpEngine.resolveUnpoisonedIpv4Blocking(rawNode.host.ifBlank { rawNode.originalHost }, 1200)
                 .ifBlank { rawNode.host.ifBlank { rawNode.originalHost } }
             val tcpMs = cleanIpEngine.fastTcpPingBlocking(targetHost, rawNode.port, 1200)
             if (tcpMs >= 0 && isGenValid(gen)) {
                 updateStageState(2, "DONE", "پینگ سرور: ${tcpMs}ms", "${tcpMs}ms")
                 updateStageState(3, "DONE", "هسته Xray v26 آماده", "XRAY")
-                updateStageState(4, "DONE", "قفل مستقیم متد آزمایشگاه: ${pinnedVec.vectorId}", pinnedVec.vectorId)
+                updateStageState(4, "DONE", "قفل مستقیم متد انتخابی: ${pinnedVec.vectorId}", pinnedVec.vectorId)
                 finalizeAndLockWinnerUnlocked(
                     gen = gen,
                     baseNode = rawNode,
@@ -1736,150 +1750,90 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             }
         }
 
-        val session = try {
-            UriConfigCodec.compileXraySession(rawNode, cfg, 0, 0, 0, forceLogSilent = true)
-        } catch (e: Throwable) {
-            appendLog("[Xray] Compile error on '$dispName': ${e.message}")
-            return false
-        }
+        val candidateEndpoints = resolveCandidateEndpointsForNode(rawNode, gen, sampleCount = 32)
+        if (candidateEndpoints.isEmpty()) return false
 
-        val planAll = UriConfigCodec.buildVectorPlan(rawNode, cfg)
-        val vectorsToTry = planAll.take(maxVectors.coerceAtLeast(1))
-        val initialHost = rawNode.host.ifBlank { rawNode.originalHost }
-
-        val bridge = FullDuplexMutatorBridge(
-            listenPort = session.bridgePort,
-            initialRemoteHost = initialHost,
-            initialRemotePort = rawNode.port,
-            initialVector = vectorsToTry.first(),
-            initialCustomStride = cfg.forwardStrideBytes,
-            initialJitterBytes = cfg.strideJitterBytes,
-            initialRawPassthrough = vectorsToTry.first().family == "DIRECT"
-        )
-
+        val balancedPlan = UriConfigCodec.buildBalancedRacePlan(rawNode, cfg).take(maxVectors.coerceAtLeast(1))
         var winningOutcome: Triple<String, BypassVector, Long>? = null
-        val softWinners = ArrayList<Triple<Long, String, BypassVector>>()
 
-        xrayCoreManager.probeSilentMode = true
-        try {
-            bridge.start()
-            if (!xrayCoreManager.startCore(session.configJson)) {
-                appendLog("[Xray] Probe core failed on '$dispName'.")
-                return false
-            }
-            waitLocalHttpReady(session.httpPort, 500L)
+        outerEndpointLoop@ for (ep in candidateEndpoints) {
+            if (!isGenValid(gen)) return false
+            val tcpMs = cleanIpEngine.fastTcpPingBlocking(ep, rawNode.port, 1150)
+            if (tcpMs < 0) continue
 
-            if (pinnedVecId == null && rawNode.cachedVectorId.isNotBlank() && !rawNode.cachedVectorId.equals("AUTO", true)) {
-                val fastEp = cleanIpEngine.resolveUnpoisonedIpv4Blocking(rawNode.host, 1000)
-                if (fastEp.isNotEmpty() && cleanIpEngine.fastTcpPingBlocking(fastEp, rawNode.port, 950) >= 0) {
-                    val cachedVec = VectorCatalog.findVector(rawNode.cachedVectorId)
-                    updateStageState(4, "ACTIVE", "اتصال سریع کش: $dispName", cachedVec.vectorId)
-                    bridge.updateRoute(
-                        remoteHost = fastEp,
-                        remotePort = rawNode.port,
-                        vector = cachedVec,
-                        customStride = cfg.forwardStrideBytes,
-                        jitterBytes = cfg.strideJitterBytes,
-                        rawPassthrough = cachedVec.family == "DIRECT",
-                        flushExistingPool = true
+            updateStageState(2, "DONE", "پینگ TCP: ${tcpMs}ms", "${tcpMs}ms")
+            updateStageState(3, "DONE", "هسته ۶ مسیره موازی Xray v26 آماده", "6-LANE")
+
+            // Split vectors into parallel waves of up to 6 simultaneous lanes!
+            val waves = balancedPlan.chunked(6)
+            for ((wIdx, waveVecs) in waves.withIndex()) {
+                if (!isGenValid(gen)) return false
+                val pct = (32 + (((wIdx + 1) * 58) / waves.size.coerceAtLeast(1))).coerceIn(32, 92)
+                val vecLabels = waveVecs.joinToString("/") { it.vectorId }
+                _telemetry.update {
+                    it.copy(
+                        progressPercent = pct,
+                        statusDetail = "مسابقه موازی [$vecLabels] روی $dispName..."
                     )
-                    val fp = TunnelStreamVerifier.fastProbe(session.httpPort, 2200L)
-                    if (!isGenValid(gen)) return false
-                    if (fp.ok) {
-                        winningOutcome = Triple(fastEp, cachedVec, fp.latencyMs.coerceAtLeast(1L))
-                    }
                 }
-            }
+                updateStageState(5, "ACTIVE", "تست همزمان ${waveVecs.size} متد روی $dispName", waveVecs.first().vectorId)
 
-            if (winningOutcome == null) {
-                val candidateEndpoints = resolveCandidateEndpointsForNode(rawNode, gen, sampleCount = 34)
-                val totalSteps = (candidateEndpoints.size * vectorsToTry.size).coerceAtLeast(1)
-                var stepCounter = 0
+                val laneSpecs = waveVecs.map { rawNode to ep }
+                val multiSession = try {
+                    UriConfigCodec.compileMultiLaneProbeSession(laneSpecs, cfg)
+                } catch (_: Throwable) {
+                    null
+                } ?: continue
 
-                outerLoop@ for (ep in candidateEndpoints) {
-                    if (!isGenValid(gen)) return false
-                    val tcpMs = cleanIpEngine.fastTcpPingBlocking(ep, rawNode.port, 1100)
-                    if (tcpMs < 0) {
-                        stepCounter += vectorsToTry.size
-                        continue
-                    }
-                    updateStageState(2, "DONE", "پینگ TCP: ${tcpMs}ms", "${tcpMs}ms")
-                    updateStageState(3, "DONE", "هسته Xray و پل ضد DPI آماده", "READY")
-
-                    for (vec in vectorsToTry) {
-                        if (!isGenValid(gen)) return false
-                        stepCounter++
-                        val pct = (28 + ((stepCounter * 64) / totalSteps)).coerceIn(28, 94)
-                        _telemetry.update {
-                            it.copy(
-                                progressPercent = pct,
-                                statusDetail = "آزمایش ${vec.vectorId} (${vec.codeName})"
-                            )
-                        }
-                        updateStageState(5, "ACTIVE", "آزمایش ${vec.vectorId} روی $dispName", vec.vectorId)
-
-                        bridge.updateRoute(
-                            remoteHost = ep,
-                            remotePort = rawNode.port,
-                            vector = vec,
-                            customStride = cfg.forwardStrideBytes,
-                            jitterBytes = cfg.strideJitterBytes,
-                            rawPassthrough = vec.family == "DIRECT",
-                            flushExistingPool = true
+                val bridges = ArrayList<FullDuplexMutatorBridge>(multiSession.lanes.size)
+                xrayCoreManager.probeSilentMode = true
+                try {
+                    for ((lIdx, lane) in multiSession.lanes.withIndex()) {
+                        val vec = waveVecs[lIdx]
+                        val br = FullDuplexMutatorBridge(
+                            listenPort = lane.bridgePort,
+                            initialRemoteHost = ep,
+                            initialRemotePort = rawNode.port,
+                            initialVector = vec,
+                            initialCustomStride = cfg.forwardStrideBytes,
+                            initialJitterBytes = cfg.strideJitterBytes,
+                            initialRawPassthrough = vec.family == "DIRECT"
                         )
-
-                        val fp = TunnelStreamVerifier.fastProbe(session.httpPort, 2200L)
-                        if (!isGenValid(gen)) return false
-                        if (!fp.ok) continue
-
-                        val qMsFast = fp.latencyMs.coerceAtLeast(1L)
-                        softWinners.add(Triple(qMsFast, ep, vec))
-
-                        if (cfg.requireYoutube6s) {
-                            updateStageState(6, "ACTIVE", "تست پایداری ۶ ثانیه‌ای یوتیوب (${qMsFast}ms)...", "${qMsFast}ms")
-                            val qual = TunnelStreamVerifier.runFullQualification(
-                                httpPort = session.httpPort,
-                                verifyUploadStream = cfg.verifyUploadStream,
-                                requireYoutube6s = true
-                            )
-                            if (!isGenValid(gen)) return false
-                            if (qual.fullyQualified) {
-                                winningOutcome = Triple(ep, vec, qual.latencyMs.coerceAtLeast(1L))
-                                break@outerLoop
-                            }
-                        } else if (cfg.verifyUploadStream) {
-                            updateStageState(6, "ACTIVE", "تایید سریع استریم آپلود (${qMsFast}ms)...", "${qMsFast}ms")
-                            val (upOk, _) = withContext(Dispatchers.IO) {
-                                TunnelStreamVerifier.quickUploadCheck(session.httpPort, 1700L)
-                            }
-                            if (!isGenValid(gen)) return false
-                            if (upOk) {
-                                winningOutcome = Triple(ep, vec, qMsFast)
-                                break@outerLoop
-                            }
-                        } else {
-                            winningOutcome = Triple(ep, vec, qMsFast)
-                            break@outerLoop
-                        }
-
-                        if (softWinners.size >= 2) {
-                            val bestSoft = softWinners.minByOrNull { it.first }!!
-                            winningOutcome = Triple(bestSoft.second, bestSoft.third, bestSoft.first)
-                            break@outerLoop
-                        }
+                        br.start()
+                        bridges.add(br)
                     }
-                }
 
-                if (winningOutcome == null && softWinners.isNotEmpty() && isGenValid(gen)) {
-                    val bestSoft = softWinners.minByOrNull { it.first }!!
-                    winningOutcome = Triple(bestSoft.second, bestSoft.third, bestSoft.first)
+                    if (!xrayCoreManager.startCore(multiSession.configJson)) continue
+                    waitLocalHttpReady(multiSession.lanes.first().httpPort, 480L)
+
+                    val waveResults: List<Pair<BypassVector, Long>?> = coroutineScope {
+                        multiSession.lanes.mapIndexed { lIdx, lane ->
+                            async(Dispatchers.IO) {
+                                if (!isGenValid(gen)) return@async null
+                                val vec = waveVecs[lIdx]
+                                val fp = TunnelStreamVerifier.fastProbe(lane.httpPort, 2300L)
+                                if (!fp.ok) return@async null
+                                val rtt = fp.latencyMs.coerceAtLeast(1L)
+                                if (cfg.verifyUploadStream) {
+                                    val (upOk, _) = TunnelStreamVerifier.quickUploadCheck(lane.httpPort, 1600L)
+                                    if (!upOk) return@async (vec to (rtt + 250L))
+                                }
+                                vec to rtt
+                            }
+                        }.awaitAll()
+                    }
+
+                    val bestInWave = waveResults.filterNotNull().minByOrNull { it.second }
+                    if (bestInWave != null) {
+                        winningOutcome = Triple(ep, bestInWave.first, bestInWave.second)
+                        break@outerEndpointLoop
+                    }
+                } finally {
+                    xrayCoreManager.stopCore()
+                    bridges.forEach { it.stop() }
+                    xrayCoreManager.probeSilentMode = false
                 }
             }
-        } finally {
-            // Stop probe core BEFORE starting production tunnel -> NEVER triggers 'Core stopped' after connect!
-            xrayCoreManager.stopCore()
-            bridge.stop()
-            xrayCoreManager.probeSilentMode = false
         }
 
         val winner = winningOutcome ?: return false
@@ -1895,6 +1849,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         )
         return true
     }
+
+
 
     private suspend fun finalizeAndLockWinnerUnlocked(
         gen: Long,
@@ -1976,22 +1932,30 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         }
         _settings.update { it.copy(autoPilot = true) }
 
+        val targetCountry = _settings.value.preferredAutoCountry.trim().uppercase(Locale.US).ifBlank { "AUTO" }
+        val targetSpec = if (targetCountry == "AUTO") null else CountryPaletteRegistry.resolveByCode(targetCountry)
+        val targetBanner = if (targetSpec != null && targetCountry != "AUTO") {
+            "${targetSpec.flagEmoji} ${targetSpec.nameFa}"
+        } else {
+            "سریع‌ترین لوکیشن"
+        }
+
         _engineState.value = EngineState.HUNTING_BEST
         _telemetry.update {
             it.copy(
                 selectedIndex = -1,
                 activeProfileUid = "__SMART_AUTO__",
-                activeProfileName = "Alan Smart Auto-Server",
+                activeProfileName = "Alan Smart Auto-Server ($targetBanner)",
                 uiPhase = "HUNTING",
                 isConnecting = true,
                 isConnected = false,
                 progressPercent = 8,
-                statusHeadline = "در حال اتصال از ریپازیتوری خودکار...",
+                statusHeadline = "اتصال خودکار ($targetBanner)...",
                 statusDetail = "دریافت سرورهای ریپازیتوری هوشمند گیت‌هاب..."
             )
         }
-        updateStageState(1, "ACTIVE", "دریافت ریپازیتوری هوشمند گیت‌هاب...", "AUTO")
-        _taskProgress.value = TaskProgressState(active = true, percent = 8, message = "دریافت ریپازیتوری خودکار...")
+        updateStageState(1, "ACTIVE", "دریافت ریپازیتوری گیت‌هاب ($targetBanner)...", targetCountry)
+        _taskProgress.value = TaskProgressState(active = true, percent = 8, message = "دریافت ریپازیتوری ($targetBanner)...")
 
         val repoNodes = syncInternalOfficialAutoPoolSuspend()
         if (repoNodes.isEmpty()) {
@@ -2010,31 +1974,43 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             return
         }
 
-        updateStageState(1, "DONE", "${detectNetworkOperatorLabel()} • ${repoNodes.size} سرور آماده", "${repoNodes.size}")
+        // Filter by user's desired country from the Auto-Repo Location Menu!
+        val filteredByCountry = if (targetCountry != "AUTO") {
+            repoNodes.filter { it.countryCode.equals(targetCountry, ignoreCase = true) }
+        } else {
+            repoNodes
+        }
+        val activePool = if (filteredByCountry.isNotEmpty()) {
+            filteredByCountry
+        } else {
+            appendLog("[AutoPool] No servers found for $targetCountry in current repo; falling back to all locations.")
+            repoNodes
+        }
 
-        // Instant Fast-Resume on top 2 prior verified Auto-Repo winners
-        val priorWinners = repoNodes
+        updateStageState(1, "DONE", "${detectNetworkOperatorLabel()} • ${activePool.size} سرور ($targetBanner)", "${activePool.size}")
+
+        // Step 1: Fast-Resume on top prior verified winner matching target country
+        val priorWinners = activePool
             .filter { it.status == "VERIFIED" && it.cachedVectorId.isNotBlank() }
             .sortedBy { if (it.pingMs > 0) it.pingMs else 99999 }
-        for (fastNode in priorWinners.take(2)) {
+        for (fastNode in priorWinners.take(1)) {
             if (!isGenValid(gen)) return
-            if (executeSingleNodePipelineUnlocked(gen, fastNode, maxVectors = 4, isHiddenAutoNode = true, rawUriForMeta = fastNode.uri)) {
+            if (executeSingleNodePipelineUnlocked(gen, fastNode, maxVectors = 6, isHiddenAutoNode = true, rawUriForMeta = fastNode.uri)) {
                 return
             }
         }
 
-        val verifiedH = repoNodes.filter { it.status == "VERIFIED" }
-        val othersH = repoNodes.filter { it.status != "VERIFIED" }.shuffled()
-        val allNodes = verifiedH + othersH.take(96)
+        val verifiedH = activePool.filter { it.status == "VERIFIED" }
+        val othersH = activePool.filter { it.status != "VERIFIED" }.shuffled()
+        val allNodes = verifiedH + othersH.take(70)
 
         val portEdgeCache = HashMap<Int, List<String>>()
         val cdnPorts = allNodes.filter { cleanIpEngine.isCloudflareEdgeProfile(it) }.map { it.port }.distinct().sorted()
         if (_settings.value.autoCleanIpForCf && cdnPorts.isNotEmpty()) {
             updateStageState(2, "ACTIVE", "کشف لبه‌های تمیز CDN...", "EDGE")
-            _telemetry.update { it.copy(progressPercent = 16, statusDetail = "کشف لبه‌های تمیز کلادفلر...") }
             for (pNum in cdnPorts.take(2)) {
                 if (!isGenValid(gen)) return
-                val edges = cleanIpEngine.quickFindBestCleanIps(port = pNum, neededCount = 2, sampleCount = 30)
+                val edges = cleanIpEngine.quickFindBestCleanIps(port = pNum, neededCount = 2, sampleCount = 28)
                 if (edges.isNotEmpty()) {
                     portEdgeCache[pNum] = edges.map { it.ip }
                 }
@@ -2042,13 +2018,11 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         }
 
         if (!isGenValid(gen)) return
-        updateStageState(2, "ACTIVE", "غربالگری موازی TCP روی ${allNodes.size} سرور ریپازیتوری...", "SCAN")
-        _telemetry.update { it.copy(progressPercent = 28, statusDetail = "غربالگری موازی ${allNodes.size} سرور ریپازیتوری...") }
+        updateStageState(2, "ACTIVE", "غربالگری موازی TCP روی ${allNodes.size} سرور ($targetBanner)...", "SCAN")
+        _telemetry.update { it.copy(progressPercent = 28, statusDetail = "غربالگری موازی ${allNodes.size} سرور ($targetBanner)...") }
 
         val tcpSem = Semaphore(24)
-        val priorVerified = java.util.Collections.synchronizedList(ArrayList<Triple<Int, ProfileItem, String>>())
-        val foreignCandidates = java.util.Collections.synchronizedList(ArrayList<Triple<Int, ProfileItem, String>>())
-        val domesticCandidates = java.util.Collections.synchronizedList(ArrayList<Triple<Int, ProfileItem, String>>())
+        val reachablePool = java.util.Collections.synchronizedList(ArrayList<Triple<Int, ProfileItem, String>>())
 
         coroutineScope {
             allNodes.map { nd ->
@@ -2063,19 +2037,13 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                             if (nd.host != orig && !CleanIpScannerEngine.isPoisonedIranIp(nd.host)) {
                                 nd.host
                             } else {
-                                cleanIpEngine.resolveUnpoisonedIpv4Blocking(orig, 1250)
+                                cleanIpEngine.resolveUnpoisonedIpv4Blocking(orig, 1200)
                             }
                         }
                         if (ep.isEmpty()) return@withPermit
-                        val ms = cleanIpEngine.fastTcpPingBlocking(ep, nd.port, 1150)
-                        if (ms < 0) return@withPermit
-
-                        if (nd.status == "VERIFIED" || nd.cachedVectorId.isNotBlank()) {
-                            priorVerified.add(Triple(ms, nd, ep))
-                        } else if (cleanIpEngine.isDomesticOrDirectTunnel(nd)) {
-                            domesticCandidates.add(Triple(ms, nd, ep))
-                        } else {
-                            foreignCandidates.add(Triple(ms, nd, ep))
+                        val ms = cleanIpEngine.fastTcpPingBlocking(ep, nd.port, 1100)
+                        if (ms >= 0) {
+                            reachablePool.add(Triple(ms, nd, ep))
                         }
                     }
                 }
@@ -2083,11 +2051,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         }
 
         if (!isGenValid(gen)) return
-
-        val shortlist = ArrayList<Triple<Int, ProfileItem, String>>()
-        shortlist.addAll(priorVerified.sortedBy { it.first }.take(5))
-        shortlist.addAll(foreignCandidates.sortedBy { it.first }.take(7))
-        shortlist.addAll(domesticCandidates.sortedBy { it.first }.take(5))
+        val shortlist = reachablePool.sortedBy { it.first }.take(12)
 
         if (shortlist.isEmpty()) {
             updateStageState(2, "FAILED", "پاسخی از سرورها دریافت نشد", "TIMEOUT")
@@ -2099,124 +2063,118 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     isConnecting = false,
                     isConnected = false,
                     statusHeadline = "سرور فعالی پاسخ نداد",
-                    statusDetail = "اینترنت یا وضعیت اپراتور را بررسی کنید."
+                    statusDetail = "لوکیشن دیگری انتخاب کنید یا وضعیت اینترنت را بررسی کنید."
                 )
             }
             return
         }
 
-        updateStageState(2, "DONE", "${shortlist.size} سرور برتر انتخاب شد", "${shortlist.first().first}ms")
-        updateStageState(3, "DONE", "هسته Xray v26 و پل چندریختی آماده", "XRAY")
-        updateStageState(4, "SKIPPED", "ارزیابی سریع کاندیداهای ریپازیتوری", "AUTO")
+        updateStageState(2, "DONE", "${shortlist.size} سرور برتر آماده مسابقه موازی", "${shortlist.first().first}ms")
+        updateStageState(3, "DONE", "موتور ۶ مسیره موازی Xray v26 آماده", "6-LANE")
 
         val cfg = _settings.value
-        var qualifiedWinner: Triple<Long, ProfileItem, Pair<String, BypassVector>>? = null
-        val softWinners = ArrayList<Triple<Long, ProfileItem, Pair<String, BypassVector>>>()
+        val candidateBatches = shortlist.chunked(6)
+        val roundVecIds = listOf("VEC-21", "VEC-17", "VEC-11")
 
-        for ((cIdx, candTriple) in shortlist.withIndex()) {
+        for ((bIdx, batch) in candidateBatches.withIndex()) {
             if (!isGenValid(gen)) return
-            val (_, candNode, candEp) = candTriple
-
-            val session = try {
-                UriConfigCodec.compileXraySession(candNode, cfg, 0, 0, 0, forceLogSilent = true)
+            val laneSpecs = batch.map { it.second to it.third }
+            val multiSession = try {
+                UriConfigCodec.compileMultiLaneProbeSession(laneSpecs, cfg)
             } catch (_: Throwable) {
-                continue
-            }
+                null
+            } ?: continue
 
-            val nodePlan = UriConfigCodec.buildVectorPlan(candNode, cfg)
-            val probeVecs = if (cleanIpEngine.isDomesticOrDirectTunnel(candNode)) nodePlan.take(2) else nodePlan.take(5)
-
-            val bridge = FullDuplexMutatorBridge(
-                listenPort = session.bridgePort,
-                initialRemoteHost = candEp,
-                initialRemotePort = candNode.port,
-                initialVector = probeVecs.first(),
-                initialCustomStride = cfg.forwardStrideBytes,
-                initialJitterBytes = cfg.strideJitterBytes,
-                initialRawPassthrough = probeVecs.first().family == "DIRECT"
-            )
-
+            val bridges = ArrayList<FullDuplexMutatorBridge>(multiSession.lanes.size)
             xrayCoreManager.probeSilentMode = true
             try {
-                bridge.start()
-                if (!xrayCoreManager.startCore(session.configJson)) continue
-                waitLocalHttpReady(session.httpPort, 450L)
+                for ((lIdx, lane) in multiSession.lanes.withIndex()) {
+                    val initVec = if (cleanIpEngine.isDomesticOrDirectTunnel(lane.profile)) {
+                        VectorCatalog.findVector("VEC-00")
+                    } else {
+                        VectorCatalog.findVector(lane.profile.cachedVectorId.ifBlank { roundVecIds.first() })
+                    }
+                    val br = FullDuplexMutatorBridge(
+                        listenPort = lane.bridgePort,
+                        initialRemoteHost = batch[lIdx].third,
+                        initialRemotePort = lane.remotePort,
+                        initialVector = initVec,
+                        initialCustomStride = cfg.forwardStrideBytes,
+                        initialJitterBytes = cfg.strideJitterBytes,
+                        initialRawPassthrough = initVec.family == "DIRECT"
+                    )
+                    br.start()
+                    bridges.add(br)
+                }
 
-                for ((vIdx, vec) in probeVecs.withIndex()) {
+                if (!xrayCoreManager.startCore(multiSession.configJson)) continue
+                waitLocalHttpReady(multiSession.lanes.first().httpPort, 450L)
+
+                for ((rIdx, roundVid) in roundVecIds.withIndex()) {
                     if (!isGenValid(gen)) return
-                    val pct = (34 + (((cIdx * probeVecs.size + vIdx + 1) * 60) / (shortlist.size * probeVecs.size).coerceAtLeast(1))).coerceIn(34, 95)
-                    val msg = "[${cIdx + 1}/${shortlist.size}] تست «Alan Smart Auto-Server» با ${vec.vectorId}..."
+                    val pct = (42 + (((bIdx * roundVecIds.size + rIdx + 1) * 50) / (candidateBatches.size * roundVecIds.size).coerceAtLeast(1))).coerceIn(42, 94)
+                    val msg = "مسابقه همزمان ${batch.size} سرور ($targetBanner) • موج ${rIdx + 1}..."
                     _telemetry.update { it.copy(progressPercent = pct, statusDetail = msg) }
                     _taskProgress.value = TaskProgressState(active = true, percent = pct, message = msg)
-                    updateStageState(5, "ACTIVE", msg, vec.vectorId)
+                    updateStageState(5, "ACTIVE", msg, roundVid)
 
-                    bridge.updateRoute(
-                        remoteHost = candEp,
-                        remotePort = candNode.port,
-                        vector = vec,
-                        customStride = cfg.forwardStrideBytes,
-                        jitterBytes = cfg.strideJitterBytes,
-                        rawPassthrough = vec.family == "DIRECT",
-                        flushExistingPool = true
-                    )
+                    val activeVecs = ArrayList<BypassVector>(multiSession.lanes.size)
+                    for ((lIdx, lane) in multiSession.lanes.withIndex()) {
+                        val vec = if (cleanIpEngine.isDomesticOrDirectTunnel(lane.profile)) {
+                            VectorCatalog.findVector("VEC-00")
+                        } else if (rIdx == 0 && lane.profile.cachedVectorId.isNotBlank()) {
+                            VectorCatalog.findVector(lane.profile.cachedVectorId)
+                        } else {
+                            VectorCatalog.findVector(roundVid)
+                        }
+                        activeVecs.add(vec)
+                        if (rIdx > 0) {
+                            bridges[lIdx].updateRoute(
+                                remoteHost = batch[lIdx].third,
+                                remotePort = lane.remotePort,
+                                vector = vec,
+                                customStride = cfg.forwardStrideBytes,
+                                jitterBytes = cfg.strideJitterBytes,
+                                rawPassthrough = vec.family == "DIRECT",
+                                flushExistingPool = true
+                            )
+                        }
+                    }
 
-                    val fp = TunnelStreamVerifier.fastProbe(session.httpPort, 2100L)
-                    if (!isGenValid(gen)) return
-                    if (!fp.ok) continue
+                    val roundWinners = coroutineScope {
+                        multiSession.lanes.mapIndexed { lIdx, lane ->
+                            async(Dispatchers.IO) {
+                                if (!isGenValid(gen)) return@async null
+                                val fp = TunnelStreamVerifier.fastProbe(lane.httpPort, 2200L)
+                                if (!fp.ok) return@async null
+                                val rtt = fp.latencyMs.coerceAtLeast(1L)
+                                Triple(rtt, batch[lIdx], activeVecs[lIdx])
+                            }
+                        }.awaitAll()
+                    }.filterNotNull().sortedBy { it.first }
 
-                    val qMs = fp.latencyMs.coerceAtLeast(1L)
-                    softWinners.add(Triple(qMs, candNode, candEp to vec))
-
-                    if (cfg.requireYoutube6s) {
-                        updateStageState(6, "ACTIVE", "تست پایداری ۶ ثانیه‌ای یوتیوب (${qMs}ms)...", "${qMs}ms")
-                        val qual = TunnelStreamVerifier.runFullQualification(
-                            httpPort = session.httpPort,
-                            verifyUploadStream = cfg.verifyUploadStream,
-                            requireYoutube6s = true
+                    if (roundWinners.isNotEmpty()) {
+                        val (winMs, winTriple, winVec) = roundWinners.first()
+                        xrayCoreManager.stopCore()
+                        bridges.forEach { it.stop() }
+                        xrayCoreManager.probeSilentMode = false
+                        finalizeAndLockWinnerUnlocked(
+                            gen = gen,
+                            baseNode = winTriple.second,
+                            endpointIp = winTriple.third,
+                            vec = winVec,
+                            pingMs = winMs,
+                            isHiddenAutoNode = true,
+                            rawUriForMeta = winTriple.second.uri
                         )
-                        if (!isGenValid(gen)) return
-                        if (qual.fullyQualified) {
-                            qualifiedWinner = Triple(qual.latencyMs.coerceAtLeast(1L), candNode, candEp to vec)
-                            break
-                        }
-                    } else if (cfg.verifyUploadStream) {
-                        updateStageState(6, "ACTIVE", "تایید سریع آپلود (${qMs}ms)...", "${qMs}ms")
-                        val (upOk, _) = withContext(Dispatchers.IO) {
-                            TunnelStreamVerifier.quickUploadCheck(session.httpPort, 1700L)
-                        }
-                        if (!isGenValid(gen)) return
-                        if (upOk) {
-                            qualifiedWinner = Triple(qMs, candNode, candEp to vec)
-                            break
-                        }
-                    } else {
-                        qualifiedWinner = Triple(qMs, candNode, candEp to vec)
-                        break
+                        return
                     }
                 }
             } finally {
                 xrayCoreManager.stopCore()
-                bridge.stop()
+                bridges.forEach { it.stop() }
                 xrayCoreManager.probeSilentMode = false
             }
-
-            if (qualifiedWinner != null) break
-        }
-
-        if (!isGenValid(gen)) return
-        val winner = qualifiedWinner ?: softWinners.minByOrNull { it.first }
-        if (winner != null) {
-            val (winMs, winNode, epAndVec) = winner
-            finalizeAndLockWinnerUnlocked(
-                gen = gen,
-                baseNode = winNode,
-                endpointIp = epAndVec.first,
-                vec = epAndVec.second,
-                pingMs = winMs,
-                isHiddenAutoNode = true,
-                rawUriForMeta = winNode.uri
-            )
-            return
         }
 
         updateStageState(5, "FAILED", "هیچ سروری تونل پایدار باز نکرد", "FAIL")
@@ -2228,8 +2186,429 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 isConnecting = false,
                 isConnected = false,
                 statusHeadline = "اتصال خودکار ناموفق بود",
-                statusDetail = "مجدداً تلاش کنید یا وضعیت اینترنت را بررسی کنید."
+                statusDetail = "لوکیشن دیگری انتخاب کنید یا مجدداً تلاش کنید."
             )
+        }
+    }
+
+
+
+    private fun rebuildAvailableRepoLocations(nodes: List<ProfileItem>, reportJsonRaw: String = "") {
+        val reportPingMap = HashMap<String, Int>()
+        var updatedLabel = SimpleDateFormat("HH:mm", Locale.US).format(Date())
+        var totalScanned = nodes.size
+        var totalVerified = nodes.size
+
+        if (reportJsonRaw.isNotBlank()) {
+            try {
+                val j = org.json.JSONObject(reportJsonRaw)
+                totalScanned = j.optInt("total_candidates_scanned", nodes.size).coerceAtLeast(nodes.size)
+                totalVerified = j.optInt("total_verified_exported", nodes.size)
+                val isoStr = j.optString("generated_at_iso", "")
+                if (isoStr.length >= 16) {
+                    updatedLabel = isoStr.substring(11, 16)
+                }
+                val locArr = j.optJSONArray("available_locations")
+                if (locArr != null) {
+                    for (i in 0 until locArr.length()) {
+                        val o = locArr.getJSONObject(i)
+                        val c = o.optString("code", "").uppercase(Locale.US)
+                        val p = o.optInt("avg_ping_ms", -1)
+                        if (c.length == 2 && p > 0) reportPingMap[c] = p
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
+        val grouped = nodes.groupBy { it.countryCode.uppercase(Locale.US).ifBlank { "UN" } }
+        val countryOptions = ArrayList<RepoLocationOption>()
+
+        val globalPings = nodes.mapNotNull { it.pingMs.takeIf { p -> p > 0 } }
+        val globalAvg = if (globalPings.isNotEmpty()) globalPings.average().toInt() else -1
+
+        countryOptions.add(
+            RepoLocationOption(
+                countryCode = "AUTO",
+                countryNameFa = "سریع‌ترین (همه لوکیشن‌ها)",
+                countryNameEn = "Smart Fastest",
+                flagEmoji = "⚡",
+                flagStripeColors = listOf(0xFFF5C451, 0xFF10B981, 0xFFF5C451),
+                serverCount = nodes.size,
+                avgPingMs = globalAvg
+            )
+        )
+
+        grouped.entries
+            .sortedByDescending { (if (it.key != "UN") 100000 else 0) + it.value.size }
+            .forEach { (cc, list) ->
+                val spec = CountryPaletteRegistry.resolveByCode(cc)
+                val pings = list.mapNotNull { it.pingMs.takeIf { p -> p > 0 } }
+                val avgP = when {
+                    pings.isNotEmpty() -> pings.average().toInt()
+                    reportPingMap.containsKey(cc) -> reportPingMap[cc] ?: -1
+                    else -> -1
+                }
+                countryOptions.add(
+                    RepoLocationOption(
+                        countryCode = spec.code,
+                        countryNameFa = if (spec.code == "UN") "سایر لوکیشن‌ها" else spec.nameFa,
+                        countryNameEn = spec.nameEn,
+                        flagEmoji = spec.flagEmoji,
+                        flagStripeColors = spec.stripeColors,
+                        serverCount = list.size,
+                        avgPingMs = avgP
+                    )
+                )
+            }
+
+        _availableRepoLocations.value = countryOptions
+        _repoScanReport.value = RepoScanReportSummary(
+            updatedAtLabel = updatedLabel,
+            totalScanned = totalScanned,
+            totalVerified = totalVerified,
+            activeLocationsCount = (countryOptions.size - 1).coerceAtLeast(1),
+            sourceLabel = "GitHub Auto-Repo"
+        )
+    }
+
+    override fun selectAutoRepoCountry(countryCode: String, reconnectIfActive: Boolean) {
+        val cleanCode = countryCode.trim().uppercase(Locale.US).ifBlank { "AUTO" }
+        _selectedIndex.value = -1
+        if (_profiles.value.any { it.isSelected }) {
+            _profiles.value = _profiles.value.map { it.copy(isSelected = false) }
+        }
+        _settings.update { it.copy(autoPilot = true, preferredAutoCountry = cleanCode) }
+        saveSettingsToDisk()
+
+        val locSpec = if (cleanCode == "AUTO") null else CountryPaletteRegistry.resolveByCode(cleanCode)
+        val labelFa = if (locSpec == null || cleanCode == "AUTO") {
+            "حالت خودکار • سریع‌ترین لوکیشن"
+        } else {
+            "حالت خودکار • ${locSpec.flagEmoji} ${locSpec.nameFa}"
+        }
+
+        if (!_telemetry.value.isConnected || reconnectIfActive) {
+            _telemetry.update {
+                it.copy(
+                    selectedIndex = -1,
+                    activeProfileUid = "__SMART_AUTO__",
+                    activeProfileName = labelFa,
+                    countryCode = locSpec?.code ?: "UN",
+                    countryName = locSpec?.nameFa ?: "خودکار",
+                    flagEmoji = locSpec?.flagEmoji ?: "⚡",
+                    flagStripeColors = locSpec?.stripeColors ?: it.flagStripeColors
+                )
+            }
+        }
+        appendLog("[AutoPool] Target location filter set to: $cleanCode")
+
+        if (reconnectIfActive) {
+            if (_engineState.value == EngineState.CONNECTED || _telemetry.value.isConnecting || _telemetry.value.isConnected) {
+                disconnectTunnel()
+            }
+            startSmartConnect()
+        }
+    }
+
+    override fun refreshAutoRepoCatalog() {
+        scope.launch(Dispatchers.IO) {
+            _taskProgress.value = TaskProgressState(active = true, percent = 25, message = "بروزرسانی لیست لوکیشن‌های ریپازیتوری...")
+            val nodes = syncInternalOfficialAutoPoolSuspend()
+            _taskProgress.value = TaskProgressState(
+                active = false,
+                percent = 100,
+                message = if (nodes.isNotEmpty()) "ریپازیتوری بروز شد (${nodes.size} سرور فعال)" else "خطا در دریافت ریپازیتوری"
+            )
+        }
+    }
+
+    private fun buildFormattedProfileWithCountry(
+        item: ProfileItem,
+        countryCode: String,
+        seqNum: Int,
+        pingMs: Int = item.pingMs,
+        renameRemark: Boolean = true
+    ): ProfileItem {
+        val cleanCc = countryCode.trim().uppercase(Locale.US).let { if (it == "UK") "GB" else it }
+        val spec = CountryPaletteRegistry.resolveByCode(if (cleanCc.length == 2) cleanCc else item.countryCode)
+        val afterBracket = if (item.name.contains("]")) item.name.substringAfter("]") else item.name
+        val strippedBase = afterBracket
+            .substringBefore("[⚡")
+            .substringBefore("[Edge-")
+            .dropWhile { !it.isLetterOrDigit() }
+            .trim()
+            .ifBlank { item.protocol }
+
+        val formattedTitle = if (renameRemark && spec.code != "UN") {
+            "${spec.flagEmoji} ${spec.nameFa} [${spec.code}-${"%02d".format(seqNum.coerceAtLeast(1))}] • ${strippedBase.take(26)}"
+        } else {
+            item.name
+        }
+        val updatedUri = if (renameRemark && formattedTitle != item.name) {
+            UriConfigCodec.updateUriRemarkName(item.uri, formattedTitle)
+        } else {
+            item.uri
+        }
+
+        return item.copy(
+            name = formattedTitle,
+            uri = updatedUri,
+            pingMs = pingMs,
+            countryCode = spec.code,
+            countryName = spec.nameFa,
+            flagEmoji = spec.flagEmoji,
+            flagStripeColors = spec.stripeColors,
+            accentPrimaryColor = spec.accentPrimary,
+            accentSecondaryColor = spec.accentSecondary
+        )
+    }
+
+    override fun autoRenameConfigsWithLocation(onlySelectedIndices: List<Int>) {
+        val current = _profiles.value
+        if (current.isEmpty()) return
+        val selSet = onlySelectedIndices.toSet()
+        val perCountryCounter = HashMap<String, Int>()
+
+        val updated = current.mapIndexed { idx, item ->
+            if (selSet.isNotEmpty() && idx !in selSet) {
+                item
+            } else {
+                val explicitIso = UriConfigCodec.extractExplicitIsoFromTitle(item.name)
+                val detected = when {
+                    explicitIso.isNotEmpty() -> explicitIso
+                    item.countryCode != "UN" && item.countryCode.isNotBlank() -> item.countryCode
+                    else -> CountryPaletteRegistry.detectCountry(item.name, item.originalHost.ifBlank { item.host }, item.sni).code
+                }
+                val nextSeq = (perCountryCounter[detected] ?: 0) + 1
+                perCountryCounter[detected] = nextSeq
+                buildFormattedProfileWithCountry(item, detected, nextSeq, item.pingMs, renameRemark = true)
+            }
+        }
+        _profiles.value = updated
+        saveRepositoryToDisk()
+        appendLog("[Repository] Auto-renamed configs with location flags & ISO tags.")
+    }
+
+    override fun deleteSelectedConfigs(indices: List<Int>) {
+        val toRemove = indices.toSet()
+        if (toRemove.isEmpty()) return
+        val remaining = _profiles.value.filterIndexed { idx, _ -> idx !in toRemove }
+        _profiles.value = remaining
+        if (_selectedIndex.value >= remaining.size) {
+            _selectedIndex.value = (remaining.size - 1).coerceAtLeast(-1)
+        }
+        saveRepositoryToDisk()
+        appendLog("[Repository] Deleted ${toRemove.size} selected profile(s).")
+    }
+
+    override fun importQrPayload(rawQrText: String): Int {
+        val clean = rawQrText.trim()
+        if (clean.isEmpty()) return 0
+        if (clean.startsWith("http://", true) || clean.startsWith("https://", true)) {
+            addSubscription(clean, "QR-Subscription")
+            return 1
+        }
+        val beforeCount = _profiles.value.size
+        importConfigs(clean)
+        return (_profiles.value.size - beforeCount).coerceAtLeast(0)
+    }
+
+    override fun shareOrExportSelectedConfigs(indices: List<Int>, asBase64Sub: Boolean): String {
+        val current = _profiles.value
+        val picked = if (indices.isEmpty()) current else indices.mapNotNull { current.getOrNull(it) }
+        val rawText = picked.joinToString("\n") { it.uri }
+        if (!asBase64Sub || rawText.isEmpty()) return rawText
+        return android.util.Base64.encodeToString(rawText.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+    }
+
+    override fun pingSingleConfig(index: Int, realTunnelPing: Boolean) {
+        if (realTunnelPing) {
+            realTunnelPingConfigs(selectedIndices = listOf(index), autoRenameWithLocation = _settings.value.autoRenameOnScan)
+        } else {
+            scope.launch(Dispatchers.IO) {
+                val list = _profiles.value
+                val item = list.getOrNull(index) ?: return@launch
+                val rtt = cleanIpEngine.fastTcpPingBlocking(item.host.ifBlank { item.originalHost }, item.port, 1600)
+                val mut = _profiles.value.toMutableList()
+                if (index in mut.indices) {
+                    mut[index] = mut[index].copy(
+                        pingMs = rtt,
+                        status = if (rtt > 0) "HEALTHY" else "DEAD"
+                    )
+                    _profiles.value = mut
+                    saveRepositoryToDisk()
+                }
+            }
+        }
+    }
+
+    override fun realTunnelPingConfigs(selectedIndices: List<Int>, autoRenameWithLocation: Boolean) {
+        scope.launch {
+            val all = _profiles.value
+            if (all.isEmpty()) return@launch
+            val targetPairs = if (selectedIndices.isNotEmpty()) {
+                selectedIndices.distinct().filter { it in all.indices }.map { it to all[it] }
+            } else {
+                all.mapIndexed { idx, item -> idx to item }
+            }
+            if (targetPairs.isEmpty()) return@launch
+
+            _taskProgress.value = TaskProgressState(
+                active = true,
+                percent = 6,
+                message = "پینگ واقعی تونل و تشخیص لوکیشن روی ${targetPairs.size} کانفیگ..."
+            )
+
+            val cfg = _settings.value
+            val resultsMap = java.util.concurrent.ConcurrentHashMap<String, LaneGeoPingResult>()
+            var sharedCfIp = ""
+            if (cfg.autoCleanIpForCf && targetPairs.any { cleanIpEngine.isCloudflareEdgeProfile(it.second) }) {
+                val bestCf = cleanIpEngine.quickFindBestCleanIps(port = 443, neededCount = 1, sampleCount = 24)
+                if (bestCf.isNotEmpty()) sharedCfIp = bestCf.first().ip
+            }
+
+            pipelineMutex.withLock {
+                if (_engineState.value == EngineState.CONNECTED) {
+                    teardownActiveRuntime()
+                    _engineState.value = EngineState.DISCONNECTED
+                }
+                val chunkSize = 6
+                val chunks = targetPairs.chunked(chunkSize)
+                for ((cIdx, chunk) in chunks.withIndex()) {
+                    if (!isActive) break
+                    val laneSpecs = ArrayList<Pair<ProfileItem, String>>()
+                    for ((_, prof) in chunk) {
+                        val origHost = prof.host.ifBlank { prof.originalHost }
+                        var ep = withContext(Dispatchers.IO) {
+                            cleanIpEngine.resolveUnpoisonedIpv4Blocking(origHost, 1200)
+                        }
+                        if (ep.isEmpty() && sharedCfIp.isNotEmpty() && cleanIpEngine.isCloudflareEdgeProfile(prof)) {
+                            ep = sharedCfIp
+                        }
+                        if (ep.isNotEmpty()) {
+                            laneSpecs.add(prof to ep)
+                        } else {
+                            resultsMap[prof.uid] = LaneGeoPingResult(ok = false, latencyMs = -1, detail = "DNS Fail")
+                        }
+                    }
+
+                    if (laneSpecs.isNotEmpty()) {
+                        val multiSession = try {
+                            UriConfigCodec.compileMultiLaneProbeSession(laneSpecs, cfg)
+                        } catch (_: Throwable) {
+                            null
+                        }
+                        if (multiSession != null && multiSession.lanes.isNotEmpty()) {
+                            val bridges = ArrayList<FullDuplexMutatorBridge>(multiSession.lanes.size)
+                            xrayCoreManager.probeSilentMode = true
+                            try {
+                                for (lane in multiSession.lanes) {
+                                    val plan = UriConfigCodec.buildBalancedRacePlan(lane.profile, cfg)
+                                    val vec = plan.first()
+                                    val br = FullDuplexMutatorBridge(
+                                        listenPort = lane.bridgePort,
+                                        initialRemoteHost = lane.remoteHost,
+                                        initialRemotePort = lane.remotePort,
+                                        initialVector = vec,
+                                        initialCustomStride = cfg.forwardStrideBytes,
+                                        initialJitterBytes = cfg.strideJitterBytes,
+                                        initialRawPassthrough = vec.family == "DIRECT"
+                                    )
+                                    br.start()
+                                    bridges.add(br)
+                                }
+                                if (xrayCoreManager.startCore(multiSession.configJson)) {
+                                    waitLocalHttpReady(multiSession.lanes.first().httpPort, 500L)
+                                    coroutineScope {
+                                        multiSession.lanes.mapIndexed { lIdx, lane ->
+                                            async(Dispatchers.IO) {
+                                                var res = TunnelStreamVerifier.probeTunnelAndGeo(
+                                                    httpPort = lane.httpPort,
+                                                    timeoutMs = 2600L,
+                                                    fetchGeo = true
+                                                )
+                                                if (!res.ok) {
+                                                    // Second chance with Zero-OOB fallback vector (VEC-17) for Railway/Envoy servers!
+                                                    val plan = UriConfigCodec.buildBalancedRacePlan(lane.profile, cfg)
+                                                    val altVec = plan.firstOrNull { it.vectorId == "VEC-17" } ?: plan.getOrNull(1)
+                                                    if (altVec != null) {
+                                                        bridges[lIdx].updateRoute(
+                                                            remoteHost = lane.remoteHost,
+                                                            remotePort = lane.remotePort,
+                                                            vector = altVec,
+                                                            customStride = cfg.forwardStrideBytes,
+                                                            jitterBytes = cfg.strideJitterBytes,
+                                                            rawPassthrough = altVec.family == "DIRECT",
+                                                            flushExistingPool = true
+                                                        )
+                                                        res = TunnelStreamVerifier.probeTunnelAndGeo(
+                                                            httpPort = lane.httpPort,
+                                                            timeoutMs = 2600L,
+                                                            fetchGeo = true
+                                                        )
+                                                    }
+                                                }
+                                                resultsMap[lane.profile.uid] = res
+                                            }
+                                        }.awaitAll()
+                                    }
+                                }
+                            } finally {
+                                xrayCoreManager.stopCore()
+                                bridges.forEach { it.stop() }
+                                xrayCoreManager.probeSilentMode = false
+                            }
+                        }
+                    }
+
+                    val doneCount = ((cIdx + 1) * chunkSize).coerceAtMost(targetPairs.size)
+                    val pct = (10 + ((doneCount * 88) / targetPairs.size.coerceAtLeast(1))).coerceIn(10, 98)
+                    _taskProgress.value = TaskProgressState(
+                        active = true,
+                        percent = pct,
+                        message = "پینگ واقعی و تشخیص لوکیشن ($doneCount/${targetPairs.size})..."
+                    )
+                }
+            }
+
+            val countrySeq = HashMap<String, Int>()
+            var aliveCount = 0
+            val updatedList = _profiles.value.map { item ->
+                val res = resultsMap[item.uid] ?: return@map item
+                if (res.ok && res.latencyMs > 0) {
+                    aliveCount++
+                    val cc = if (res.countryCode != "UN" && res.countryCode.length == 2) {
+                        res.countryCode
+                    } else {
+                        UriConfigCodec.extractExplicitIsoFromTitle(item.name).ifBlank { item.countryCode }
+                    }
+                    val seq = (countrySeq[cc] ?: 0) + 1
+                    countrySeq[cc] = seq
+                    buildFormattedProfileWithCountry(
+                        item = item.copy(status = "VERIFIED"),
+                        countryCode = cc,
+                        seqNum = seq,
+                        pingMs = res.latencyMs,
+                        renameRemark = autoRenameWithLocation
+                    )
+                } else {
+                    item.copy(pingMs = -1, status = "DEAD")
+                }
+            }
+
+            _profiles.value = updatedList
+            if (selectedIndices.isEmpty()) {
+                sortConfigs("ping")
+            } else {
+                saveRepositoryToDisk()
+            }
+            _taskProgress.value = TaskProgressState(
+                active = false,
+                percent = 100,
+                message = "تست کامل شد: $aliveCount از ${targetPairs.size} کانفیگ فعال و لوکیشن‌گذاری شدند"
+            )
+            appendLog("[RealPing] Verified $aliveCount/${targetPairs.size} configs with live GeoIP.")
         }
     }
 
@@ -4079,11 +4458,14 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val autoRepoUrls = listOf(
             "https://raw.githubusercontent.com/DrAlanK/Alan-RIP-Dpi/refs/heads/main/Alan-RIP-Dpi-Sub.txt"
         )
+        val reportUrl = "https://raw.githubusercontent.com/DrAlanK/Alan-RIP-Dpi/refs/heads/main/Alan-RIP-Dpi-Report.json"
         val ctx = appContext ?: return@withContext emptyList()
         val cacheFile = java.io.File(ctx.filesDir, ".pool_cache.dat")
+        val reportCacheFile = java.io.File(ctx.filesDir, ".pool_report.json")
+
         val clientBuilder = okhttp3.OkHttpClient.Builder()
-            .connectTimeout(7000L, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .readTimeout(8000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .connectTimeout(6500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(7500L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
 
@@ -4091,13 +4473,13 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             clientBuilder.socketFactory(object : javax.net.SocketFactory() {
                 override fun createSocket(): Socket = CleanIpScannerEngine.createProtectedRawSocket()
                 override fun createSocket(h: String?, p: Int): Socket =
-                    CleanIpScannerEngine.createProtectedRawSocket().apply { connect(InetSocketAddress(h, p), 4500) }
+                    CleanIpScannerEngine.createProtectedRawSocket().apply { connect(InetSocketAddress(h, p), 4200) }
                 override fun createSocket(h: String?, p: Int, lh: InetAddress?, lp: Int): Socket =
-                    CleanIpScannerEngine.createProtectedRawSocket().apply { connect(InetSocketAddress(h, p), 4500) }
+                    CleanIpScannerEngine.createProtectedRawSocket().apply { connect(InetSocketAddress(h, p), 4200) }
                 override fun createSocket(h: InetAddress?, p: Int): Socket =
-                    CleanIpScannerEngine.createProtectedRawSocket().apply { connect(InetSocketAddress(h, p), 4500) }
+                    CleanIpScannerEngine.createProtectedRawSocket().apply { connect(InetSocketAddress(h, p), 4200) }
                 override fun createSocket(a: InetAddress?, p: Int, la: InetAddress?, lp: Int): Socket =
-                    CleanIpScannerEngine.createProtectedRawSocket().apply { connect(InetSocketAddress(a, p), 4500) }
+                    CleanIpScannerEngine.createProtectedRawSocket().apply { connect(InetSocketAddress(a, p), 4200) }
             })
         }
 
@@ -4123,32 +4505,74 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             }
         }
 
-        if (collectedUris.isNotEmpty()) {
+        var reportJsonStr = ""
+        try {
+            val repReq = okhttp3.Request.Builder()
+                .url(reportUrl)
+                .header("User-Agent", "Alan-RIP-DPI-Android/1.4.0")
+                .get()
+                .build()
+            httpClient.newCall(repReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string().orEmpty().trim()
+                    if (body.startsWith("{")) {
+                        reportJsonStr = body
+                        reportCacheFile.writeText(body, Charsets.UTF_8)
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+        }
+        if (reportJsonStr.isEmpty() && reportCacheFile.exists()) {
+            try { reportJsonStr = reportCacheFile.readText(Charsets.UTF_8) } catch (_: Throwable) {}
+        }
+
+        val rawNodes: List<ProfileItem> = if (collectedUris.isNotEmpty()) {
             try {
                 val rawBytes = collectedUris.joinToString("\n").toByteArray(Charsets.UTF_8)
                 val b64 = android.util.Base64.encodeToString(rawBytes, android.util.Base64.NO_WRAP)
                 cacheFile.writeText(b64, Charsets.UTF_8)
             } catch (_: Throwable) {
             }
-            val parsed = collectedUris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
-            return@withContext hydrateAutoPoolNodesWithMeta(parsed)
-        }
-
-        if (cacheFile.exists()) {
+            collectedUris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
+        } else if (cacheFile.exists()) {
             try {
                 val rawB64 = cacheFile.readText(Charsets.UTF_8).trim()
                 val decoded = String(android.util.Base64.decode(rawB64, android.util.Base64.DEFAULT), Charsets.UTF_8)
-                val cachedUris = UriConfigCodec.extractConfigLinesFromSubscriptionBody(decoded)
-                val parsed = cachedUris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
-                if (parsed.isNotEmpty()) {
-                    return@withContext hydrateAutoPoolNodesWithMeta(parsed)
-                }
+                UriConfigCodec.extractConfigLinesFromSubscriptionBody(decoded).mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
             } catch (_: Throwable) {
+                emptyList()
+            }
+        } else {
+            emptyList()
+        }
+
+        if (rawNodes.isEmpty()) return@withContext emptyList()
+
+        // Enrich country metadata from explicit [ISO-01] tags or CountryPaletteRegistry
+        val enriched = hydrateAutoPoolNodesWithMeta(rawNodes).map { item ->
+            val explicitCode = UriConfigCodec.extractExplicitIsoFromTitle(item.name)
+            if (explicitCode.isNotEmpty() && explicitCode != item.countryCode) {
+                val cSpec = CountryPaletteRegistry.resolveByCode(explicitCode)
+                item.copy(
+                    countryCode = cSpec.code,
+                    countryName = cSpec.nameFa,
+                    flagEmoji = cSpec.flagEmoji,
+                    flagStripeColors = cSpec.stripeColors,
+                    accentPrimaryColor = cSpec.accentPrimary,
+                    accentSecondaryColor = cSpec.accentSecondary
+                )
+            } else {
+                item
             }
         }
 
-        emptyList()
+        cachedAutoRepoNodes = enriched
+        rebuildAvailableRepoLocations(enriched, reportJsonStr)
+        enriched
     }
+
+
 
     private fun loadPersistentData() {
         synchronized(storageLock) {

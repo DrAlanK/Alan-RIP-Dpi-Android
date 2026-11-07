@@ -35,6 +35,14 @@ data class EgressGeoInfo(
     val countryCode: String
 )
 
+data class LaneGeoPingResult(
+    val ok: Boolean,
+    val latencyMs: Int,
+    val egressIp: String = "",
+    val countryCode: String = "UN",
+    val detail: String = ""
+)
+
 object TunnelStreamVerifier {
 
     private const val URL_GSTATIC_204 = "https://www.gstatic.com/generate_204"
@@ -508,5 +516,89 @@ object TunnelStreamVerifier {
         } catch (_: Throwable) {
             false to 0.0
         }
+    }
+
+    fun probeTunnelAndGeo(httpPort: Int, timeoutMs: Long = 3200L, fetchGeo: Boolean = true): LaneGeoPingResult {
+        val client = okhttp3.OkHttpClient.Builder()
+            .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
+            .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .callTimeout(timeoutMs + 900L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .build()
+
+        var pingMs = -1
+        for (url in listOf("https://www.gstatic.com/generate_204", "http://connectivitycheck.gstatic.com/generate_204")) {
+            val t0 = System.nanoTime()
+            try {
+                val req = okhttp3.Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0")
+                    .get()
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    if (resp.code == 200 || resp.code == 204) {
+                        pingMs = ((System.nanoTime() - t0) / 1_000_000L).toInt().coerceAtLeast(1)
+                    }
+                }
+                if (pingMs > 0) break
+            } catch (_: Throwable) {
+            }
+        }
+
+        if (pingMs <= 0) {
+            return LaneGeoPingResult(ok = false, latencyMs = -1, detail = "Timeout")
+        }
+        if (!fetchGeo) {
+            return LaneGeoPingResult(ok = true, latencyMs = pingMs, detail = "OK")
+        }
+
+        // Reuse warm proxy connection to grab exit IP & ISO-2 country code rapidly!
+        try {
+            val traceReq = okhttp3.Request.Builder()
+                .url("https://www.cloudflare.com/cdn-cgi/trace")
+                .header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0")
+                .get()
+                .build()
+            client.newCall(traceReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    var ipVal = ""
+                    var locVal = ""
+                    resp.body?.string().orEmpty().lineSequence().forEach { ln ->
+                        if (ln.startsWith("ip=")) ipVal = ln.substringAfter("=").trim()
+                        else if (ln.startsWith("loc=")) locVal = ln.substringAfter("=").trim().uppercase(java.util.Locale.US)
+                    }
+                    if (locVal == "UK") locVal = "GB"
+                    if (locVal.length == 2 && locVal != "XX") {
+                        return LaneGeoPingResult(ok = true, latencyMs = pingMs, egressIp = ipVal, countryCode = locVal, detail = "OK")
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+        }
+
+        try {
+            val geoReq = okhttp3.Request.Builder()
+                .url("https://api.country.is/")
+                .header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0")
+                .get()
+                .build()
+            client.newCall(geoReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val j = org.json.JSONObject(resp.body?.string().orEmpty())
+                    val ipVal = j.optString("ip", "").trim()
+                    var cc = j.optString("country", "").trim().uppercase(java.util.Locale.US)
+                    if (cc == "UK") cc = "GB"
+                    if (cc.length == 2) {
+                        return LaneGeoPingResult(ok = true, latencyMs = pingMs, egressIp = ipVal, countryCode = cc, detail = "OK")
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+        }
+
+        return LaneGeoPingResult(ok = true, latencyMs = pingMs, detail = "OK")
     }
 }
