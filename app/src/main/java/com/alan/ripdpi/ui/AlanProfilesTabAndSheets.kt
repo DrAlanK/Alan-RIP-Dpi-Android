@@ -109,6 +109,7 @@ fun ProfilesTabScreen(
     onGetEditable: (Int) -> EditableConfigFields,
     onSaveEditable: (Int, EditableConfigFields) -> Unit,
     onSendToMethodScanner: (Int) -> Unit,
+    onSendAllToDpiLab: () -> Unit = {},
     onAddSubscription: (String, String) -> Unit,
     onRefreshSubscriptions: () -> Unit,
     onDeleteSubscription: (Int) -> Unit,
@@ -396,7 +397,67 @@ fun ProfilesTabScreen(
             )
         }
 
-        // Location Filter Chips Row (همه + کشورهای موجود با پرچم و تعداد)
+        
+        if (profiles.isNotEmpty()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1.25f)
+                        .height(38.dp)
+                        .alanGlassCard(highlighted = true, cornerRadius = 12.dp, accentBorderColor = p.accentGold)
+                        .clickable { onSendAllToDpiLab() }
+                        .padding(horizontal = 10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(Icons.Outlined.Radar, null, tint = p.accentGold, modifier = Modifier.size(16.dp))
+                        Text(
+                            text = "ارسال کل مخزن به آزمایشگاه DPI",
+                            color = p.accentGold,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 11.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(38.dp)
+                        .alanNeuInset(cornerRadius = 12.dp)
+                        .clickable {
+                            onRealTunnelPingConfigs(emptyList(), false)
+                            feedback = "پینگ واقعی تونل روی کل مخزن آغاز شد..."
+                        }
+                        .padding(horizontal = 10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(Icons.Outlined.NetworkCheck, null, tint = p.emerald, modifier = Modifier.size(15.dp))
+                        Text(
+                            text = "پینگ واقعی همه",
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+
+        // Location Filter Chips Row
         if (profiles.isNotEmpty()) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -550,19 +611,17 @@ fun ProfilesTabScreen(
                 }
             )
             "PING" -> listOf(
-                "⚡ پینگ واقعی تونل + تشخیص لوکیشن و نام‌گذاری خودکار" to {
+                "تست پینگ واقعی تونل (Real-Ping)" to {
                     val targets = if (multiSelectMode && selectedIndices.isNotEmpty()) selectedIndices.toList() else emptyList()
-                    onRealTunnelPingConfigs(targets, true)
-                    feedback = "پینگ واقعی تونل و نام‌گذاری هوشمند آغاز شد..."
+                    onRealTunnelPingConfigs(targets, false)
+                    feedback = "تست پینگ واقعی تونل آغاز شد..."
                 },
                 "پینگ سریع TCP همه کانفیگ‌ها" to {
                     onQuickPingAll()
                     feedback = "پینگ سریع TCP آغاز شد..."
                 },
-                "نام‌گذاری مرتب همه کانفیگ‌ها با پرچم و کشور" to {
-                    val targets = if (multiSelectMode && selectedIndices.isNotEmpty()) selectedIndices.toList() else emptyList()
-                    onAutoRenameConfigsWithLocation(targets)
-                    feedback = "نام‌گذاری کانفیگ‌ها با پرچم و لوکیشن انجام شد."
+                "ارسال کل مخزن به آزمایشگاه DPI" to {
+                    onSendAllToDpiLab()
                 }
             )
             "SORT" -> listOf(
@@ -743,21 +802,34 @@ private fun V2ServerRowCard(
     onOpenActions: () -> Unit
 ) {
     val p = LocalAlanPalette.current
-    val countrySpec = remember(item.countryCode, item.name, item.host, item.sni) {
-        CountryPaletteRegistry.detectCountry(item.name, item.host, item.sni, item.countryCode)
+    val uriLow = remember(item.uri) { item.uri.lowercase(Locale.US) }
+    val transportTag = remember(uriLow) {
+        when {
+            uriLow.contains("type=ws") || uriLow.contains("\"net\":\"ws\"") -> "ws"
+            uriLow.contains("type=grpc") || uriLow.contains("\"net\":\"grpc\"") -> "grpc"
+            uriLow.contains("type=httpupgrade") -> "httpupgrade"
+            uriLow.contains("type=xhttp") || uriLow.contains("type=splithttp") -> "xhttp"
+            else -> "tcp"
+        }
     }
-    val flagAccent = item.accentPrimaryColor.toThemeAwareAccent(p.accentGold)
+    val securityTag = remember(uriLow) {
+        when {
+            uriLow.contains("security=reality") -> "reality"
+            uriLow.contains("security=tls") || uriLow.contains("\"tls\":\"tls\"") -> "tls"
+            else -> "none"
+        }
+    }
 
     val pingColor = when {
         item.status.equals("DEAD", true) || item.pingMs < 0 -> p.danger
-        item.pingMs in 1..250 -> p.emerald
-        item.pingMs > 250 -> p.accentGold
+        item.pingMs in 1..260 -> p.emerald
+        item.pingMs > 260 -> p.accentGold
         else -> p.textMuted
     }
     val pingText = when {
-        item.status.equals("DEAD", true) || item.pingMs < 0 -> "Timeout"
+        item.status.equals("DEAD", true) || item.pingMs < 0 -> "timeout"
         item.pingMs > 0 -> "${item.pingMs} ms"
-        else -> "تست‌نشده"
+        else -> "—"
     }
     val vectorTag = item.cachedVectorId.ifBlank { item.preferredVectorId.ifBlank { "AUTO" } }
 
@@ -768,28 +840,28 @@ private fun V2ServerRowCard(
             .height(IntrinsicSize.Min)
             .then(
                 if (item.isSelected || isChecked) {
-                    Modifier.alanNeuInset(cornerRadius = 16.dp, accented = true)
+                    Modifier.alanNeuInset(cornerRadius = 15.dp, accented = true)
                 } else {
-                    Modifier.alanGlassCard(cornerRadius = 16.dp)
+                    Modifier.alanGlassCard(cornerRadius = 15.dp)
                 }
             )
             .clickable(onClick = onSelect)
     ) {
-        // Left/Right Accent Bar
+        // v2rayNG-style Selection Indicator Bar
         Box(
             modifier = Modifier
-                .width(if (item.isSelected || isChecked) 5.5.dp else 3.5.dp)
+                .width(if (item.isSelected || isChecked) 5.dp else 3.dp)
                 .fillMaxHeight()
-                .background(if (item.isSelected || isChecked) p.accentGold else flagAccent.copy(alpha = 0.72f))
+                .background(if (item.isSelected || isChecked) p.emerald else p.cardBorder)
         )
 
         Column(
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
                 .weight(1f)
-                .padding(horizontal = 12.dp, vertical = 11.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            // Top Row: Multi-select checkbox (if active) + Location Badge + Config Name + Colored Ping
+            // Row 1: Remark Name + Numeric Ping
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -797,89 +869,69 @@ private fun V2ServerRowCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     if (multiSelectMode) {
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .size(21.dp)
+                                .size(20.dp)
                                 .then(
                                     if (isChecked) {
-                                        Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(p.accentGold)
+                                        Modifier.clip(RoundedCornerShape(5.dp)).background(p.accentGold)
                                     } else {
-                                        Modifier.alanNeuInset(cornerRadius = 6.dp)
+                                        Modifier.alanNeuInset(cornerRadius = 5.dp)
                                     }
                                 )
                         ) {
                             if (isChecked) {
-                                Icon(Icons.Outlined.Check, null, tint = p.onAccent, modifier = Modifier.size(14.dp))
+                                Icon(Icons.Outlined.Check, null, tint = p.onAccent, modifier = Modifier.size(13.dp))
                             }
                         }
                     }
 
-                    // Country Pill Badge (🇩🇪 آلمان)
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier
-                            .alanNeuInset(cornerRadius = 8.dp)
-                            .padding(horizontal = 7.dp, vertical = 3.dp)
-                    ) {
-                        FlagStripeBadge(countrySpec.stripeColors, countrySpec.code, 18.dp, 12.dp)
-                        Text(
-                            text = "${countrySpec.flagEmoji} ${countrySpec.nameFa}",
-                            color = p.textSecondary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 9.5.sp,
-                            maxLines = 1
-                        )
-                    }
-
                     Text(
-                        text = item.name,
+                        text = item.name.ifBlank { "${item.protocol} Server" },
                         color = p.textPrimary,
                         fontWeight = if (item.isSelected) FontWeight.ExtraBold else FontWeight.Bold,
-                        fontSize = 12.5.sp,
+                        fontSize = 13.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
                 }
 
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
 
                 LtrContent {
                     Text(
                         text = pingText,
                         color = pingColor,
                         fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.ExtraBold,
+                        fontWeight = FontWeight.Bold,
                         fontSize = 11.5.sp
                     )
                 }
             }
 
-            // Bottom Row: Protocol & Anti-DPI Vector Tags + Host + Quick Actions (Single Ping, QR, Menu)
+            // Row 2: v2rayNG Entity Metadata (Protocol | Transport | Security | Vector | Host:Port) + Action Icons
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .alanNeuInset(cornerRadius = 6.dp)
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                LtrContent {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
-                        LtrContent {
+                        Box(
+                            modifier = Modifier
+                                .alanNeuInset(cornerRadius = 5.dp)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
                             Text(
                                 text = item.protocol.uppercase(Locale.US),
                                 color = p.emerald,
@@ -888,25 +940,35 @@ private fun V2ServerRowCard(
                                 fontSize = 9.sp
                             )
                         }
-                    }
 
-                    Box(
-                        modifier = Modifier
-                            .alanNeuInset(cornerRadius = 6.dp)
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        LtrContent {
+                        Box(
+                            modifier = Modifier
+                                .alanNeuInset(cornerRadius = 5.dp)
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "$transportTag+$securityTag",
+                                color = p.textSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 9.sp
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .alanNeuInset(cornerRadius = 5.dp)
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
                             Text(
                                 text = vectorTag,
                                 color = p.accentGold,
                                 fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.ExtraBold,
+                                fontWeight = FontWeight.Bold,
                                 fontSize = 9.sp
                             )
                         }
-                    }
 
-                    LtrContent {
                         Text(
                             text = "${item.host}:${item.port}",
                             color = p.textMuted,

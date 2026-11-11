@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -526,10 +527,22 @@ fun LogsTabScreen(
     val listState = rememberLazyListState()
     var copied by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var activeFilter by remember { mutableStateOf("ALL") }
 
-    val filteredLogs = remember(logs, searchQuery) {
+    val filteredLogs = remember(logs, searchQuery, activeFilter) {
         val q = searchQuery.trim().lowercase(Locale.ROOT)
-        if (q.isEmpty()) logs else logs.filter { it.lowercase(Locale.ROOT).contains(q) }
+        logs.filter { line ->
+            val low = line.lowercase(Locale.ROOT)
+            val catOk = when (activeFilter) {
+                "DPI" -> low.contains("mutator") || low.contains("vec-") || low.contains("tls-hello") || low.contains("dpi") || low.contains("lab")
+                "DNS" -> low.contains("dns") || low.contains("doh")
+                "CLEAN" -> low.contains("clean-ip") || low.contains("edge") || low.contains("tcp-dial")
+                "XRAY" -> low.contains("xray") || low.contains("alantun") || low.contains("egress")
+                "ERR" -> low.contains("err") || low.contains("fail") || low.contains("timeout")
+                else -> true
+            }
+            catOk && (q.isEmpty() || low.contains(q))
+        }
     }
 
     LaunchedEffect(filteredLogs.size) {
@@ -539,10 +552,10 @@ fun LogsTabScreen(
     }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -551,15 +564,15 @@ fun LogsTabScreen(
         ) {
             Column {
                 Text(
-                    text = "لاگ‌های زنده سیستم",
+                    text = "کنسول لاگ عمیق مهندسی",
                     color = p.textPrimary,
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 16.sp
+                    fontSize = 15.5.sp
                 )
                 Text(
-                    text = if (copied) "در کلیپ‌بورد کپی شد." else "${filteredLogs.size} خط نمایش داده‌شده",
+                    text = if (copied) "تمام خطوط در کلیپ‌بورد کپی شد." else "${filteredLogs.size} رویداد ثبت‌شده",
                     color = if (copied) p.emerald else p.textSecondary,
-                    fontSize = 11.sp
+                    fontSize = 10.5.sp
                 )
             }
 
@@ -567,11 +580,11 @@ fun LogsTabScreen(
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .height(38.dp)
+                        .height(36.dp)
                         .alanGlassCard(cornerRadius = 11.dp)
                         .clickable {
                             if (filteredLogs.isNotEmpty()) {
-                                copyPlainTextToClipboard(context, "Logs", filteredLogs.joinToString("\n"))
+                                copyPlainTextToClipboard(context, "AlanDeepLogs", filteredLogs.joinToString("\n"))
                                 copied = true
                             }
                         }
@@ -580,14 +593,14 @@ fun LogsTabScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.ContentCopy, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
                         Spacer(Modifier.width(5.dp))
-                        Text("کپی", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                        Text("کپی لاگ", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
                 }
 
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .height(38.dp)
+                        .height(36.dp)
                         .alanGlassCard(cornerRadius = 11.dp)
                         .clickable {
                             copied = false
@@ -596,16 +609,56 @@ fun LogsTabScreen(
                         .padding(horizontal = 12.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.DeleteOutline, null, tint = p.danger, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Outlined.DeleteOutline, null, tint = p.danger, modifier = Modifier.size(15.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("پاک کردن", color = p.danger, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                        Text("پاک‌سازی", color = p.danger, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
                 }
             }
         }
 
+        // Category Filter Chips
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+        ) {
+            listOf(
+                "ALL" to "همه (${logs.size})",
+                "DPI" to "DPI / Mutator",
+                "DNS" to "DNS / DoH",
+                "CLEAN" to "Clean-IP / TCP",
+                "XRAY" to "Xray / TUN",
+                "ERR" to "خطاها"
+            ).forEach { (key, title) ->
+                val sel = activeFilter == key
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .height(32.dp)
+                        .then(
+                            if (sel) {
+                                Modifier.alanNeuInset(cornerRadius = 10.dp, accented = true)
+                            } else {
+                                Modifier.alanGlassCard(cornerRadius = 10.dp)
+                            }
+                        )
+                        .clickable { activeFilter = key }
+                        .padding(horizontal = 11.dp)
+                ) {
+                    Text(
+                        text = title,
+                        color = if (sel) p.accentGold else p.textSecondary,
+                        fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        fontSize = 10.5.sp
+                    )
+                }
+            }
+        }
+
         AlanSheetTextField(
-            label = "جستجو در لاگ‌ها...",
+            label = "جستجو در جزئیات پکت، SNI، آی‌پی یا متد...",
             value = searchQuery,
             onValueChange = { searchQuery = it },
             ltr = true
@@ -619,38 +672,38 @@ fun LogsTabScreen(
         ) {
             if (filteredLogs.isEmpty()) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Text("لاگی برای نمایش وجود ندارد.", color = p.textMuted, fontSize = 12.sp)
+                    Text("لاگی در این دسته وجود ندارد.", color = p.textMuted, fontSize = 12.sp)
                 }
             } else {
                 LtrContent {
                     LazyColumn(
                         state = listState,
-                        contentPadding = PaddingValues(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        itemsIndexed(filteredLogs, key = { idx, _ -> idx }) { _, line ->
+                        itemsIndexed(filteredLogs, key = { idx, _ -> idx }) { idx, line ->
                             val low = line.lowercase(Locale.ROOT)
                             val col: Color = when {
                                 low.contains("error") || low.contains("fail") || low.contains("blocked") || low.contains("timeout") -> p.danger
-                                low.contains("up:") || low.contains("verified") || low.contains("qualified") || low.contains("winner") || low.contains("ready") -> p.emerald
-                                low.contains("vec-") || low.contains("stage") -> p.accentGold
+                                low.contains("up:") || low.contains("verified") || low.contains("doh-ok") || low.contains("winner") || low.contains("ready") -> p.emerald
+                                low.contains("vec-") || low.contains("dpi-bridge") || low.contains("tls-hello") || low.contains("clean-ip") -> p.accentGold
                                 else -> p.textPrimary
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                Box(
-                                    modifier = Modifier
-                                        .padding(top = 6.dp)
-                                        .size(5.dp)
-                                        .clip(CircleShape)
-                                        .background(col)
+                                Text(
+                                    text = "%03d".format(idx + 1),
+                                    color = p.textMuted.copy(alpha = 0.6f),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    lineHeight = 16.sp
                                 )
                                 Text(
                                     text = line,
                                     color = col,
                                     fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.5.sp,
-                                    lineHeight = 17.sp
+                                    fontSize = 11.sp,
+                                    lineHeight = 16.sp
                                 )
                             }
                         }

@@ -120,48 +120,41 @@ object TunnelStreamVerifier {
         }
     }
 
-    fun fastProbe(httpPort: Int, timeoutMs: Long = 4200L): ProbeVerdict {
+        fun fastProbe(httpPort: Int, timeoutMs: Long = 3500L): ProbeVerdict {
         val client = okhttp3.OkHttpClient.Builder()
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
-            .connectTimeout(timeoutMs.coerceAtLeast(1500L), java.util.concurrent.TimeUnit.MILLISECONDS)
-            .readTimeout(timeoutMs.coerceAtLeast(1500L), java.util.concurrent.TimeUnit.MILLISECONDS)
-            .callTimeout((timeoutMs + 800L).coerceAtLeast(2200L), java.util.concurrent.TimeUnit.MILLISECONDS)
+            .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .callTimeout(timeoutMs + 700L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .followRedirects(false)
             .followSslRedirects(false)
             .retryOnConnectionFailure(false)
             .build()
 
+        // 1-RTT HTTP probe inside the already-encrypted VLESS/VMess/Trojan tunnel (matches Windows speed!)
         val urls = listOf(
-            "https://www.gstatic.com/generate_204",
-            "http://connectivitycheck.gstatic.com/generate_204"
+            "http://cp.cloudflare.com/generate_204",
+            "http://connectivitycheck.gstatic.com/generate_204",
+            "https://www.gstatic.com/generate_204"
         )
-        var lastCode = 0
-        var failReason = "Timeout"
-        for (url in urls) {
+        for (u in urls) {
             val t0 = System.nanoTime()
             try {
                 val req = okhttp3.Request.Builder()
-                    .url(url)
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+                    .url(u)
+                    .header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0")
                     .get()
                     .build()
                 client.newCall(req).execute().use { resp ->
-                    val code = resp.code
-                    lastCode = code
-                    val rtt = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
-                    if (code == 200 || code == 204) {
-                        return ProbeVerdict(ok = true, latencyMs = rtt, httpCode = code, fatalUpstreamError = false, reason = "OK")
-                    }
-                    if (code == 502 || code == 503) {
-                        failReason = "HTTP $code"
-                        return ProbeVerdict(ok = false, latencyMs = -1L, httpCode = lastCode, fatalUpstreamError = false, reason = failReason)
+                    if (resp.code == 204 || resp.code == 200) {
+                        val ms = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+                        return ProbeVerdict(true, ms, resp.code)
                     }
                 }
-            } catch (e: Throwable) {
-                failReason = e.javaClass.simpleName
+            } catch (_: Throwable) {
             }
         }
-        return ProbeVerdict(ok = false, latencyMs = -1L, httpCode = lastCode, fatalUpstreamError = false, reason = failReason)
+        return ProbeVerdict(false, -1L, 0)
     }
 
     fun checkGeminiAccess(httpPort: Int, timeoutMs: Long = 4500L): Pair<Boolean, String> {

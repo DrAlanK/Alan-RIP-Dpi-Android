@@ -142,7 +142,9 @@ data class EngineSettings(
     val autoCleanIpForCf: Boolean = true,
     val preferredAutoCountry: String = "AUTO",
     val autoRenameOnScan: Boolean = true,
-    val bridgePort: Int = 20809
+    val bridgePort: Int = 20809,
+    val tunnelMode: String = "VPN",
+    val activeDohUrl: String = "https://cloudflare-dns.com/dns-query"
 )
 
 data class VectorSpec(
@@ -217,6 +219,29 @@ data class RepoScanReportSummary(
     val totalVerified: Int = 0,
     val activeLocationsCount: Int = 0,
     val sourceLabel: String = "GitHub Auto-Repo"
+)
+
+
+data class DohServerUiItem(
+    val id: String,
+    val name: String,
+    val url: String,
+    val category: String = "Global",
+    val latencyMs: Int = -1,
+    val resolvedIp: String = "",
+    val isHealthy: Boolean = false,
+    val isSelected: Boolean = false,
+    val statusDetail: String = ""
+)
+
+data class DohScanUiState(
+    val isRunning: Boolean = false,
+    val percent: Int = 0,
+    val testedCount: Int = 0,
+    val totalCount: Int = 0,
+    val activeDohUrl: String = "https://cloudflare-dns.com/dns-query",
+    val activeDohName: String = "Cloudflare DoH",
+    val summary: String = "آماده اسکن سرورهای DoH (DNSveil)"
 )
 
 interface AlanEngineController {
@@ -347,6 +372,24 @@ interface AlanEngineController {
     fun importQrPayload(rawQrText: String): Int = 0
 
     fun shareOrExportSelectedConfigs(indices: List<Int>, asBase64Sub: Boolean = false): String = ""
+
+    val dohServers: StateFlow<List<DohServerUiItem>>
+        get() = MutableStateFlow(emptyList())
+
+    val dohScanState: StateFlow<DohScanUiState>
+        get() = MutableStateFlow(DohScanUiState())
+
+    fun startDohScan(testDomain: String = "github.com") {}
+
+    fun stopDohScan() {}
+
+    fun selectActiveDoh(url: String, connectDohVeilNow: Boolean = false) {}
+
+    fun addCustomDohList(rawUrls: String) {}
+
+    fun setTunnelOperationMode(mode: String) {}
+
+    fun sendAllConfigsToDpiLab(autoConnectBest: Boolean = true, useCleanIp: Boolean = true) {}
 }
 
 

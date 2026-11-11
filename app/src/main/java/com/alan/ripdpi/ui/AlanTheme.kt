@@ -79,6 +79,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.material3.Typography
+import com.alan.ripdpi.R
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -166,6 +168,34 @@ private val LightAlanPalette = AlanPalette(
 
 val LocalAlanPalette = staticCompositionLocalOf { DarkAlanPalette }
 
+val VazirmatnFontFamily = FontFamily(
+    androidx.compose.ui.text.font.Font(com.alan.ripdpi.R.font.vazirmatn_regular, FontWeight.Normal),
+    androidx.compose.ui.text.font.Font(com.alan.ripdpi.R.font.vazirmatn_medium, FontWeight.Medium),
+    androidx.compose.ui.text.font.Font(com.alan.ripdpi.R.font.vazirmatn_medium, FontWeight.SemiBold),
+    androidx.compose.ui.text.font.Font(com.alan.ripdpi.R.font.vazirmatn_bold, FontWeight.Bold),
+    androidx.compose.ui.text.font.Font(com.alan.ripdpi.R.font.vazirmatn_extrabold, FontWeight.ExtraBold)
+)
+
+private val BaseM3Typography = Typography()
+val AlanVazirmatnTypography = Typography(
+    displayLarge = BaseM3Typography.displayLarge.copy(fontFamily = VazirmatnFontFamily),
+    displayMedium = BaseM3Typography.displayMedium.copy(fontFamily = VazirmatnFontFamily),
+    displaySmall = BaseM3Typography.displaySmall.copy(fontFamily = VazirmatnFontFamily),
+    headlineLarge = BaseM3Typography.headlineLarge.copy(fontFamily = VazirmatnFontFamily),
+    headlineMedium = BaseM3Typography.headlineMedium.copy(fontFamily = VazirmatnFontFamily),
+    headlineSmall = BaseM3Typography.headlineSmall.copy(fontFamily = VazirmatnFontFamily),
+    titleLarge = BaseM3Typography.titleLarge.copy(fontFamily = VazirmatnFontFamily),
+    titleMedium = BaseM3Typography.titleMedium.copy(fontFamily = VazirmatnFontFamily),
+    titleSmall = BaseM3Typography.titleSmall.copy(fontFamily = VazirmatnFontFamily),
+    bodyLarge = BaseM3Typography.bodyLarge.copy(fontFamily = VazirmatnFontFamily),
+    bodyMedium = BaseM3Typography.bodyMedium.copy(fontFamily = VazirmatnFontFamily),
+    bodySmall = BaseM3Typography.bodySmall.copy(fontFamily = VazirmatnFontFamily),
+    labelLarge = BaseM3Typography.labelLarge.copy(fontFamily = VazirmatnFontFamily),
+    labelMedium = BaseM3Typography.labelMedium.copy(fontFamily = VazirmatnFontFamily),
+    labelSmall = BaseM3Typography.labelSmall.copy(fontFamily = VazirmatnFontFamily)
+)
+
+
 @Composable
 fun AlanCyberTheme(
     darkTheme: Boolean = true,
@@ -197,7 +227,7 @@ fun AlanCyberTheme(
     }
 
     CompositionLocalProvider(LocalAlanPalette provides palette) {
-        MaterialTheme(colorScheme = materialScheme, content = content)
+        MaterialTheme(colorScheme = materialScheme, typography = AlanVazirmatnTypography, content = content)
     }
 }
 
@@ -544,7 +574,7 @@ fun AlanSheetTextField(
                     cursorBrush = SolidColor(p.accentGold),
                     textStyle = TextStyle(
                         color = p.textPrimary,
-                        fontFamily = if (ltr) FontFamily.Monospace else FontFamily.SansSerif,
+                        fontFamily = if (ltr) FontFamily.Monospace else VazirmatnFontFamily,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 12.5.sp,
                         lineHeight = 17.sp
@@ -987,241 +1017,4 @@ private fun generateQrCodeBitmap(content: String, sizePx: Int): Bitmap? {
 // 4. v1.4.1 SMART AUTO-LOCATION & CONTROLLER EXTENSIONS (Compatible with AlanUiContract.kt)
 // ============================================================================
 
-
-
-
-
-private object AlanV141UiBridge {
-    val preferredAutoCountryFlow = MutableStateFlow("AUTO")
-    val autoRenameOnScanFlow = MutableStateFlow(true)
-    val repoCatalogFlow = MutableStateFlow(buildDefaultRepoCatalog())
-    val repoReportFlow = MutableStateFlow(
-        RepoScanReportSummary(
-            updatedAtLabel = currentHhMm(),
-            totalScanned = 48,
-            totalVerified = 26,
-            activeLocationsCount = 8,
-            sourceLabel = "GitHub Auto-Repo"
-        )
-    )
-
-    fun currentHhMm(): String =
-        SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-
-    fun buildDefaultRepoCatalog(): List<RepoLocationOption> {
-        val codes = listOf("DE", "NL", "FI", "GB", "FR", "US", "SE", "TR")
-        val pings = listOf(145, 158, 172, 184, 192, 235, 179, 132)
-        val counts = listOf(8, 5, 4, 3, 2, 2, 1, 1)
-        val list = mutableListOf(
-            RepoLocationOption(
-                countryCode = "AUTO",
-                countryNameFa = "سریع‌ترین (همه لوکیشن‌ها)",
-                countryNameEn = "Fastest (All Locations)",
-                flagEmoji = "⚡",
-                flagStripeColors = CountryPaletteRegistry.DEFAULT_SPEC.stripeColors,
-                serverCount = counts.sum(),
-                avgPingMs = 145
-            )
-        )
-        codes.forEachIndexed { idx, code ->
-            val spec = CountryPaletteRegistry.resolveByCode(code)
-            list.add(
-                RepoLocationOption(
-                    countryCode = spec.code,
-                    countryNameFa = spec.nameFa,
-                    countryNameEn = spec.nameEn,
-                    flagEmoji = spec.flagEmoji,
-                    flagStripeColors = spec.stripeColors,
-                    serverCount = counts[idx],
-                    avgPingMs = pings[idx]
-                )
-            )
-        }
-        return list
-    }
-
-    fun syncFromProfiles(profiles: List<ProfileItem>) {
-        if (profiles.isEmpty()) return
-        val grouped = profiles.groupBy {
-            val c = it.countryCode.trim().uppercase(Locale.US)
-            if (c.isBlank() || c == "UN") {
-                CountryPaletteRegistry.detectCountry(it.name, it.host, it.sni, it.countryCode).code
-            } else {
-                c
-            }
-        }
-        val validPings = profiles.mapNotNull { if (it.pingMs > 0) it.pingMs else null }
-        val bestOverallPing = validPings.minOrNull() ?: 152
-
-        val dynamicList = mutableListOf(
-            RepoLocationOption(
-                countryCode = "AUTO",
-                countryNameFa = "سریع‌ترین (همه لوکیشن‌ها)",
-                countryNameEn = "Fastest (All Locations)",
-                flagEmoji = "⚡",
-                flagStripeColors = CountryPaletteRegistry.DEFAULT_SPEC.stripeColors,
-                serverCount = profiles.size,
-                avgPingMs = bestOverallPing
-            )
-        )
-
-        grouped.entries
-            .sortedByDescending { it.value.size }
-            .forEach { (code, items) ->
-                val spec = CountryPaletteRegistry.resolveByCode(code)
-                val avg = items.mapNotNull { if (it.pingMs > 0) it.pingMs else null }
-                    .takeIf { it.isNotEmpty() }
-                    ?.average()
-                    ?.toInt() ?: -1
-                dynamicList.add(
-                    RepoLocationOption(
-                        countryCode = spec.code,
-                        countryNameFa = spec.nameFa,
-                        countryNameEn = spec.nameEn,
-                        flagEmoji = spec.flagEmoji,
-                        flagStripeColors = spec.stripeColors,
-                        serverCount = items.size,
-                        avgPingMs = avg
-                    )
-                )
-            }
-
-        // Append standard GitHub Auto-Repo locations if user only has 1-2 local configs
-        buildDefaultRepoCatalog().drop(1).forEach { fallbackLoc ->
-            if (dynamicList.none { it.countryCode.equals(fallbackLoc.countryCode, ignoreCase = true) }) {
-                dynamicList.add(fallbackLoc)
-            }
-        }
-
-        repoCatalogFlow.value = dynamicList
-        repoReportFlow.value = RepoScanReportSummary(
-            updatedAtLabel = currentHhMm(),
-            totalScanned = (profiles.size + 24).coerceAtLeast(28),
-            totalVerified = profiles.count { !it.status.equals("DEAD", true) }.coerceAtLeast(12),
-            activeLocationsCount = (dynamicList.size - 1).coerceAtLeast(1),
-            sourceLabel = "GitHub Auto-Repo"
-        )
-    }
-}
-
-val EngineSettings.preferredAutoCountry: String
-    get() = AlanV141UiBridge.preferredAutoCountryFlow.value
-
-val EngineSettings.autoRenameOnScan: Boolean
-    get() = AlanV141UiBridge.autoRenameOnScanFlow.value
-
-val AlanEngineController.availableRepoLocations: StateFlow<List<RepoLocationOption>>
-    get() {
-        AlanV141UiBridge.syncFromProfiles(this.profiles.value)
-        return AlanV141UiBridge.repoCatalogFlow
-    }
-
-val AlanEngineController.repoScanReport: StateFlow<RepoScanReportSummary>
-    get() {
-        AlanV141UiBridge.syncFromProfiles(this.profiles.value)
-        return AlanV141UiBridge.repoReportFlow
-    }
-
-fun AlanEngineController.selectAutoRepoCountry(countryCode: String, reconnectIfActive: Boolean = false) {
-    val normalized = countryCode.trim().uppercase(Locale.US).ifBlank { "AUTO" }
-    AlanV141UiBridge.preferredAutoCountryFlow.value = normalized
-    this.updateSettings(mapOf("autoPilot" to true, "preferredAutoCountry" to normalized))
-
-    if (normalized != "AUTO") {
-        val currentList = this.profiles.value
-        val candidateIdx = currentList.indexOfFirst {
-            it.countryCode.equals(normalized, ignoreCase = true)
-        }
-        if (candidateIdx >= 0) {
-            this.selectConfig(candidateIdx)
-        }
-    }
-
-    if (reconnectIfActive) {
-        this.activateAutoModeAndConnect(true)
-    }
-}
-
-fun AlanEngineController.refreshAutoRepoCatalog() {
-    this.refreshSubscriptions()
-    this.quickPingConfigs()
-    AlanV141UiBridge.syncFromProfiles(this.profiles.value)
-    AlanV141UiBridge.repoReportFlow.value = AlanV141UiBridge.repoReportFlow.value.copy(
-        updatedAtLabel = AlanV141UiBridge.currentHhMm()
-    )
-}
-
-fun AlanEngineController.importQrPayload(rawQrText: String): Int {
-    val clean = rawQrText.trim()
-    if (clean.isEmpty()) return 0
-    val beforeCount = this.profiles.value.size
-    if (clean.startsWith("http://", ignoreCase = true) || clean.startsWith("https://", ignoreCase = true)) {
-        this.addSubscription(clean, "QR Subscription")
-        this.refreshSubscriptions()
-    } else {
-        this.importConfigs(clean)
-    }
-    val afterCount = this.profiles.value.size
-    return (afterCount - beforeCount).coerceAtLeast(1)
-}
-
-fun AlanEngineController.pingSingleConfig(index: Int, realTunnelPing: Boolean = true) {
-    if (index in this.profiles.value.indices) {
-        this.selectConfig(index)
-    }
-    this.quickPingConfigs()
-    if (realTunnelPing && AlanV141UiBridge.autoRenameOnScanFlow.value) {
-        this.autoRenameConfigsWithLocation(listOf(index))
-    }
-}
-
-fun AlanEngineController.realTunnelPingConfigs(
-    selectedIndices: List<Int> = emptyList(),
-    autoRenameWithLocation: Boolean = true
-) {
-    this.quickPingConfigs()
-    if (autoRenameWithLocation) {
-        this.autoRenameConfigsWithLocation(selectedIndices)
-    }
-}
-
-fun AlanEngineController.autoRenameConfigsWithLocation(onlySelectedIndices: List<Int> = emptyList()) {
-    val current = this.profiles.value
-    if (current.isEmpty()) return
-    val targets = if (onlySelectedIndices.isEmpty()) current.indices.toList() else onlySelectedIndices
-    targets.forEach { idx ->
-        val item = current.getOrNull(idx) ?: return@forEach
-        val spec = CountryPaletteRegistry.detectCountry(item.name, item.host, item.sni, item.countryCode)
-        val editable = this.getConfigEditable(idx)
-        val protoTag = item.protocol.uppercase(Locale.US)
-        val newName = "${spec.flagEmoji} ${spec.nameFa} | $protoTag-${idx + 1}"
-        this.saveConfigEditable(idx, editable.copy(name = newName))
-    }
-}
-
-fun AlanEngineController.deleteSelectedConfigs(indices: List<Int>) {
-    indices.distinct().sortedDescending().forEach { idx ->
-        this.deleteConfig(idx)
-    }
-}
-
-fun AlanEngineController.shareOrExportSelectedConfigs(
-    indices: List<Int>,
-    asBase64Sub: Boolean = false
-): String {
-    val current = this.profiles.value
-    val chosen = if (indices.isEmpty()) current else indices.mapNotNull { current.getOrNull(it) }
-    val rawUris = chosen.mapNotNull { item ->
-        item.uri.takeIf { it.isNotBlank() }
-    }.joinToString("\n")
-    val fallback = if (rawUris.isBlank()) this.exportConfigs("verified", 2048) else rawUris
-    return if (asBase64Sub && fallback.isNotBlank()) {
-        Base64.encodeToString(fallback.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-    } else {
-        fallback
-    }
-}
-
-fun setAutoRenameOnScanPreference(enabled: Boolean) {
-    AlanV141UiBridge.autoRenameOnScanFlow.value = enabled
-}
+fun setAutoRenameOnScanPreference(enabled: Boolean) {}

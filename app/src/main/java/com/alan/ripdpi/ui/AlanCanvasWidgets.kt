@@ -196,47 +196,58 @@ fun CenterPowerOrbButton(
     val isDark = p.isDark
     val isError = uiPhase.equals("ERROR", ignoreCase = true)
 
-    val ledColor = when {
+    val primaryColor = when {
         isConnected -> p.emerald
         isConnecting -> p.accentGold
         isError -> p.danger
-        else -> if (isDark) p.accentGold else Color(0xFFD97706)
+        else -> if (isDark) Color(0xFF2B3346) else Color(0xFFD5E0F0)
     }
 
-    val inf = rememberInfiniteTransition(label = "tactileOrb")
-    val spinDeg by inf.animateFloat(
+    val inf = rememberInfiniteTransition(label = "morphingNeuOrb")
+    val phaseRad by inf.animateFloat(
         initialValue = 0f,
-        targetValue = 360f,
+        targetValue = (2.0 * PI).toFloat(),
         animationSpec = infiniteRepeatable(
             animation = tween(
                 durationMillis = when {
-                    isConnecting -> 1150
-                    isConnected -> 3900
-                    else -> 3100
+                    isConnecting -> 2400
+                    isConnected -> 4600
+                    else -> 6200
                 },
                 easing = LinearEasing
             )
         ),
-        label = "spinDeg"
+        label = "phaseRad"
     )
-    val glowPulse by inf.animateFloat(
-        initialValue = 0.20f,
-        targetValue = 0.45f,
+    val orbitDeg by inf.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = FastOutSlowInEasing),
+            animation = tween(
+                durationMillis = if (isConnecting) 6500 else 14000,
+                easing = LinearEasing
+            )
+        ),
+        label = "orbitDeg"
+    )
+    val breathScale by inf.animateFloat(
+        initialValue = 0.96f,
+        targetValue = 1.04f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1900, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "glowPulse"
+        label = "breathScale"
     )
 
     val centerLabel = when {
-        isConnecting -> "لغو اتصال"
+        isConnecting -> "در حال برقراری"
         isConnected -> "قطع اتصال"
         isError -> "تلاش مجدد"
         else -> "اتصال"
     }
 
-    val appliedModifier = if (modifier === Modifier) Modifier.size(182.dp) else modifier
+    val appliedModifier = if (modifier === Modifier) Modifier.size(196.dp) else modifier
 
     Box(
         contentAlignment = Alignment.Center,
@@ -247,157 +258,193 @@ fun CenterPowerOrbButton(
         )
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            if (size.minDimension <= 8f) return@Canvas
+            if (size.minDimension <= 12f) return@Canvas
             val cx = size.width / 2f
             val cy = size.height / 2f
             val maxR = size.minDimension / 2f
 
-            // 1. Extruded Outer Neumorphic Disc with soft BlurMaskFilter shadows
-            val discR = maxR * 0.88f
-            val shadowOff = 4.dp.toPx()
-            val lightShadowCol = if (isDark) Color(0xFF2B3242).copy(alpha = 0.78f) else Color(0xFFFFFFFF).copy(alpha = 0.95f)
-            val darkShadowCol = if (isDark) Color(0xFF11141B).copy(alpha = 0.92f) else Color(0xFFBCC7D8).copy(alpha = 0.85f)
+            val lightShadowCol = if (isDark) Color(0xFF2E3648).copy(alpha = 0.78f) else Color.White.copy(alpha = 0.95f)
+            val darkShadowCol = if (isDark) Color(0xFF0E1117).copy(alpha = 0.92f) else Color(0xFFB5C2D6).copy(alpha = 0.85f)
 
+            // 1. Subtle Orbital Guide Rings (Neumorphic Engraved Grooves)
+            val outerOrbitR = maxR * 0.90f
+            val midOrbitR = maxR * 0.78f
+            drawCircle(
+                color = p.cardBorder.copy(alpha = if (isDark) 0.42f else 0.55f),
+                radius = outerOrbitR,
+                center = Offset(cx, cy),
+                style = Stroke(width = 1.dp.toPx())
+            )
+            drawCircle(
+                color = p.cardBorder.copy(alpha = if (isDark) 0.28f else 0.38f),
+                radius = midOrbitR,
+                center = Offset(cx, cy),
+                style = Stroke(width = 0.8.dp.toPx())
+            )
+
+            // 2. Tactile Neumorphic Micro-Orbs (دونه‌های دایره‌ای کوچک نئومورفیک در حال چرخش و تغییر شکل)
+            val particleCount = 14
+            for (i in 0 until particleCount) {
+                val baseAngle = (i * (360f / particleCount)) + (if (i % 2 == 0) orbitDeg else -orbitDeg * 0.65f)
+                val rad = baseAngle * (PI / 180.0)
+                val waveR = sin(phaseRad + i * 0.9f) * (maxR * 0.045f)
+                val trackR = (if (i % 3 == 0) outerOrbitR else midOrbitR) + waveR
+                val px = cx + (cos(rad) * trackR).toFloat()
+                val py = cy + (sin(rad) * trackR).toFloat()
+
+                val baseDotR = (if (i % 3 == 0) 4.4.dp else if (i % 2 == 0) 3.2.dp else 2.3.dp).toPx()
+                val dotR = baseDotR * (0.82f + 0.30f * sin(phaseRad * 2f + i).toFloat())
+
+                // Neumorphic 3D drop shadow & highlight on each floating micro-orb
+                drawCircle(
+                    color = darkShadowCol.copy(alpha = 0.70f),
+                    radius = dotR,
+                    center = Offset(px + 1.8.dp.toPx(), py + 1.8.dp.toPx())
+                )
+                drawCircle(
+                    color = lightShadowCol.copy(alpha = 0.55f),
+                    radius = dotR,
+                    center = Offset(px - 1.2.dp.toPx(), py - 1.2.dp.toPx())
+                )
+
+                val dotTint = when {
+                    isConnected -> if (i % 2 == 0) p.emerald else Color(0xFF4ADE80)
+                    isConnecting -> if (i % 2 == 0) p.accentGold else p.emerald
+                    isError -> p.danger
+                    else -> if (i % 3 == 0) p.accentGold.copy(alpha = 0.72f) else p.textMuted.copy(alpha = 0.55f)
+                }
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = if (isConnected || isConnecting) 0.75f else 0.35f),
+                            dotTint,
+                            dotTint.copy(alpha = 0.85f)
+                        ),
+                        center = Offset(px - dotR * 0.3f, py - dotR * 0.3f),
+                        radius = dotR * 1.4f
+                    ),
+                    radius = dotR,
+                    center = Offset(px, py)
+                )
+            }
+
+            // 3. Organic Morphing Neumorphic Core Blob
+            val baseBlobR = maxR * 0.63f * breathScale
+            val morphAmp = when {
+                isConnecting -> baseBlobR * 0.085f
+                isConnected -> baseBlobR * 0.058f
+                else -> baseBlobR * 0.036f
+            }
+
+            fun buildMorphPath(offsetX: Float, offsetY: Float, scale: Float = 1f): Path {
+                val path = Path()
+                val steps = 72
+                for (s in 0..steps) {
+                    val theta = (s.toFloat() / steps.toFloat()) * (2.0 * PI).toFloat()
+                    val harmonic =
+                        0.50f * sin(3f * theta + phaseRad) +
+                        0.32f * cos(2f * theta - phaseRad * 1.3f) +
+                        0.18f * sin(5f * theta + phaseRad * 0.7f)
+                    val r = (baseBlobR * scale) + morphAmp * harmonic
+                    val x = cx + offsetX + r * cos(theta)
+                    val y = cy + offsetY + r * sin(theta)
+                    if (s == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                path.close()
+                return path
+            }
+
+            val shadowShift = 5.5.dp.toPx()
+            val sunkenPedestalR = maxR * 0.70f
+
+            // Sunken Neumorphic Pedestal Well behind the morphing orb
+            drawCircle(
+                color = p.subtleBg,
+                radius = sunkenPedestalR,
+                center = Offset(cx, cy)
+            )
+            drawCircle(
+                color = p.cardBorder,
+                radius = sunkenPedestalR,
+                center = Offset(cx, cy),
+                style = Stroke(width = 1.4.dp.toPx())
+            )
+
+            // Soft Blur Shadows for the Morphing Blob
             drawIntoCanvas { canvas ->
                 val darkPaint = Paint().asFrameworkPaint().apply {
                     isAntiAlias = true
                     color = darkShadowCol.toArgb()
-                    maskFilter = BlurMaskFilter(18f, BlurMaskFilter.Blur.NORMAL)
+                    maskFilter = BlurMaskFilter(22f, BlurMaskFilter.Blur.NORMAL)
                 }
-                canvas.nativeCanvas.drawCircle(cx + shadowOff, cy + shadowOff, discR, darkPaint)
+                canvas.nativeCanvas.drawCircle(cx + shadowShift, cy + shadowShift, baseBlobR * 0.96f, darkPaint)
 
                 val lightPaint = Paint().asFrameworkPaint().apply {
                     isAntiAlias = true
-                    color = lightShadowCol.toArgb()
-                    maskFilter = BlurMaskFilter(18f, BlurMaskFilter.Blur.NORMAL)
+                    color = (if (isConnected) p.emerald.copy(alpha = 0.35f) else lightShadowCol).toArgb()
+                    maskFilter = BlurMaskFilter(20f, BlurMaskFilter.Blur.NORMAL)
                 }
-                canvas.nativeCanvas.drawCircle(cx - shadowOff, cy - shadowOff, discR, lightPaint)
+                canvas.nativeCanvas.drawCircle(cx - shadowShift, cy - shadowShift, baseBlobR * 0.96f, lightPaint)
             }
 
-            val outerTop = if (isDark) Color(0xFF252B39) else Color(0xFFF3F7FD)
-            val outerBottom = if (isDark) Color(0xFF181C26) else Color(0xFFD8E2F0)
-            drawCircle(
-                brush = Brush.linearGradient(
-                    colors = listOf(outerTop, p.cardBg, outerBottom),
-                    start = Offset(cx - discR, cy - discR),
-                    end = Offset(cx + discR, cy + discR)
-                ),
-                radius = discR,
-                center = Offset(cx, cy)
-            )
-            drawCircle(
+            val blobPath = buildMorphPath(0f, 0f, 1f)
+            val blobBrush = when {
+                isConnected -> Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFF4ADE80),
+                        Color(0xFF10B981),
+                        Color(0xFF059669)
+                    ),
+                    start = Offset(cx - baseBlobR, cy - baseBlobR),
+                    end = Offset(cx + baseBlobR, cy + baseBlobR)
+                )
+                isConnecting -> Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFFFDE047),
+                        p.accentGold,
+                        Color(0xFFD97706)
+                    ),
+                    start = Offset(cx - baseBlobR, cy - baseBlobR),
+                    end = Offset(cx + baseBlobR, cy + baseBlobR)
+                )
+                isError -> Brush.linearGradient(
+                    colors = listOf(Color(0xFFF87171), p.danger, Color(0xFFB91C1C)),
+                    start = Offset(cx - baseBlobR, cy - baseBlobR),
+                    end = Offset(cx + baseBlobR, cy + baseBlobR)
+                )
+                isDark -> Brush.linearGradient(
+                    colors = listOf(Color(0xFF283040), Color(0xFF1E2430), Color(0xFF161B24)),
+                    start = Offset(cx - baseBlobR, cy - baseBlobR),
+                    end = Offset(cx + baseBlobR, cy + baseBlobR)
+                )
+                else -> Brush.linearGradient(
+                    colors = listOf(Color(0xFFF8FAFF), Color(0xFFE6ECF5), Color(0xFFD2DCEB)),
+                    start = Offset(cx - baseBlobR, cy - baseBlobR),
+                    end = Offset(cx + baseBlobR, cy + baseBlobR)
+                )
+            }
+
+            drawPath(path = blobPath, brush = blobBrush)
+
+            // Tactile Specular Bevel Rim on the Morphing Blob
+            drawPath(
+                path = blobPath,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = if (isDark) 0.12f else 0.90f),
-                        if (isDark) Color.Black.copy(alpha = 0.55f) else Color(0xFFB4C2D8)
+                        Color.White.copy(alpha = if (isConnected || isConnecting) 0.45f else if (isDark) 0.14f else 0.90f),
+                        Color.Black.copy(alpha = if (isDark) 0.50f else 0.18f)
                     ),
-                    start = Offset(cx - discR, cy - discR),
-                    end = Offset(cx + discR, cy + discR)
+                    start = Offset(cx - baseBlobR, cy - baseBlobR),
+                    end = Offset(cx + baseBlobR, cy + baseBlobR)
                 ),
-                radius = discR,
-                center = Offset(cx, cy),
-                style = Stroke(width = 1.3.dp.toPx())
+                style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
             )
+        }
 
-            // 2. Concave Sunken LED Groove Channel
-            val grooveR = maxR * 0.72f
-            drawCircle(
-                color = p.subtleBg,
-                radius = grooveR + 3.5.dp.toPx(),
-                center = Offset(cx, cy)
-            )
-            drawCircle(
-                color = ledColor.copy(alpha = if (isDark) 0.18f else 0.22f),
-                radius = grooveR,
-                center = Offset(cx, cy),
-                style = Stroke(width = 5.dp.toPx())
-            )
-
-            val sweepAngle = when {
-                isConnecting && progressPercent > 0 -> (progressPercent.coerceIn(12, 95) * 3.4f)
-                isConnecting -> 150f
-                isConnected -> 360f
-                else -> 215f
-            }
-
-            if (isConnected) {
-                drawCircle(
-                    color = ledColor.copy(alpha = glowPulse),
-                    radius = grooveR,
-                    center = Offset(cx, cy),
-                    style = Stroke(width = 8.dp.toPx())
-                )
-                drawCircle(
-                    color = ledColor,
-                    radius = grooveR,
-                    center = Offset(cx, cy),
-                    style = Stroke(width = 4.2.dp.toPx())
-                )
-            } else {
-                rotate(degrees = spinDeg, pivot = Offset(cx, cy)) {
-                    drawArc(
-                        brush = Brush.sweepGradient(
-                            0.00f to Color.Transparent,
-                            0.18f to ledColor.copy(alpha = 0.25f),
-                            0.72f to ledColor,
-                            1.00f to Color.Transparent,
-                            center = Offset(cx, cy)
-                        ),
-                        startAngle = 0f,
-                        sweepAngle = sweepAngle,
-                        useCenter = false,
-                        topLeft = Offset(cx - grooveR, cy - grooveR),
-                        size = Size(grooveR * 2f, grooveR * 2f),
-                        style = Stroke(width = 4.5.dp.toPx(), cap = StrokeCap.Round)
-                    )
-                }
-
-                val tipRad = (spinDeg + sweepAngle) * (PI / 180.0)
-                val tipPos = Offset(
-                    cx + (cos(tipRad) * grooveR).toFloat(),
-                    cy + (sin(tipRad) * grooveR).toFloat()
-                )
-                drawCircle(
-                    color = ledColor.copy(alpha = 0.42f),
-                    radius = 6.dp.toPx(),
-                    center = tipPos
-                )
-                drawCircle(
-                    color = Color.White,
-                    radius = 2.4.dp.toPx(),
-                    center = tipPos
-                )
-            }
-
-            // 3. Center Tactile Cap (Concave/Pressed when Connected, Extruded Dome when Disconnected)
-            val capR = maxR * 0.61f
-            val capTop = when {
-                isConnected && isDark -> Color(0xFF151922)
-                isConnected && !isDark -> Color(0xFFD5DFEE)
-                isDark -> Color(0xFF262D3D)
-                else -> Color(0xFFF6F9FE)
-            }
-            val capBottom = when {
-                isConnected && isDark -> Color(0xFF232A38)
-                isConnected && !isDark -> Color(0xFFF2F6FC)
-                isDark -> Color(0xFF171B24)
-                else -> Color(0xFFD9E3F1)
-            }
-            drawCircle(
-                brush = Brush.linearGradient(
-                    colors = listOf(capTop, capBottom),
-                    start = Offset(cx - capR, cy - capR),
-                    end = Offset(cx + capR, cy + capR)
-                ),
-                radius = capR,
-                center = Offset(cx, cy)
-            )
-            drawCircle(
-                color = if (isConnected) ledColor.copy(alpha = 0.55f) else p.cardBorder,
-                radius = capR,
-                center = Offset(cx, cy),
-                style = Stroke(width = 1.2.dp.toPx())
-            )
+        val contentColor = when {
+            isConnected || isConnecting -> Color(0xFF0B1310)
+            isError -> Color.White
+            else -> p.textPrimary
         }
 
         Column(
@@ -407,22 +454,22 @@ fun CenterPowerOrbButton(
             Icon(
                 imageVector = Icons.Outlined.PowerSettingsNew,
                 contentDescription = centerLabel,
-                tint = ledColor,
-                modifier = Modifier.size(38.dp)
+                tint = if (!isConnected && !isConnecting && !isError) p.accentGold else contentColor,
+                modifier = Modifier.size(34.dp)
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(5.dp))
             Text(
                 text = centerLabel,
-                color = if (isConnected || isError) ledColor else p.textPrimary,
+                color = contentColor,
                 fontWeight = FontWeight.ExtraBold,
-                fontSize = 13.5.sp,
+                fontSize = 14.sp,
                 maxLines = 1
             )
             if (isConnecting && progressPercent > 0) {
                 LtrContent {
                     Text(
                         text = "${progressPercent.coerceIn(1, 99)}%",
-                        color = p.accentGold,
+                        color = contentColor.copy(alpha = 0.85f),
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 10.sp

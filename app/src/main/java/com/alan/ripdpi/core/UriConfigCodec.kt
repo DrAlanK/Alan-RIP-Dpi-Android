@@ -102,6 +102,8 @@ object UriConfigCodec {
     }
 
     fun parseUriToProfileItem(rawUri: String): ProfileItem? {
+        val rawCheck = rawUri.trim()
+        if (rawCheck.isEmpty()) return null
         val uri = rawUri.trim()
         if (uri.isEmpty()) return null
         val spec = parseFullConfig(uri) ?: return null
@@ -1173,6 +1175,7 @@ object UriConfigCodec {
             val singleJson = org.json.JSONObject(single.configJson)
             val singleOut = singleJson.getJSONArray("outbounds").getJSONObject(0)
             singleOut.put("tag", outTag)
+            singleOut.optJSONObject("streamSettings")?.optJSONObject("sockopt")?.remove("dialerProxy")
             outboundsArr.put(singleOut)
 
             rulesArr.put(

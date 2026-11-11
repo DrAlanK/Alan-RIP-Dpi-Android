@@ -46,6 +46,19 @@ import kotlin.random.Random
 class CleanIpScannerEngine(context: Context) {
 
     companion object {
+        fun isSubscriptionAnnouncementOrFakeNode(item: com.alan.ripdpi.ui.ProfileItem): Boolean {
+            val nameLow = item.name.lowercase(java.util.Locale.ROOT)
+            val hostLow = item.host.lowercase(java.util.Locale.ROOT).trim()
+            if (item.port <= 1) return true
+            if (hostLow in setOf("0.0.0.0", "127.0.0.1", "localhost", "1.1.1.1", "8.8.8.8", "::", "::1")) return true
+            if (nameLow.contains("اطلاعیه") || nameLow.contains("نود اتصال نیست") || nameLow.contains("مصرف:") || nameLow.contains("اعتبار:")) {
+                if (hostLow.isEmpty() || hostLow == "127.0.0.1" || hostLow == "0.0.0.0" || item.name.contains("[اطلاعیه")) {
+                    return true
+                }
+            }
+            return false
+        }
+
         const val DEFAULT_GITHUB_SUBNETS_URL =
             "https://raw.githubusercontent.com/DrAlanK/Alan-RIP-Dpi-Android/main/subnets.txt"
 
@@ -294,6 +307,10 @@ class CleanIpScannerEngine(context: Context) {
     }
 
     fun resolveUnpoisonedIpv4Blocking(host: String, timeoutMs: Int = 1800): String {
+        val cleanHost = host.trim()
+        if (cleanHost.isNotEmpty() && !cleanHost.any { it.isLetter() } && !isPoisonedIranIp(cleanHost)) return cleanHost
+        val dohIp = AlanDohEngine.resolveDomainViaVerifiedDohBlocking(cleanHost, timeoutMs)
+        if (dohIp.isNotEmpty() && !isPoisonedIranIp(dohIp)) return dohIp
         val clean = host.trim().removePrefix("[").removeSuffix("]").lowercase(Locale.US)
         if (clean.isEmpty()) return ""
         if (clean.all { it.isDigit() || it == '.' }) {
@@ -808,6 +825,30 @@ class CleanIpScannerEngine(context: Context) {
 
     suspend fun quickFindBestCleanIps(port: Int = 443, neededCount: Int = 3, sampleCount: Int = 40): List<CleanIpHit> =
         withContext(Dispatchers.IO) {
+
+        val seedIps = listOf(
+            "172.64.154.14", "172.64.154.88", "172.64.155.42", "172.64.148.65",
+            "104.18.32.47", "104.18.38.112", "162.159.135.42", "162.159.137.77",
+            "104.16.132.229", "104.17.147.22", "172.66.40.91", "172.67.74.120"
+        )
+        val fastHits = ArrayList<com.alan.ripdpi.ui.CleanIpHit>()
+        for (sip in seedIps.shuffled()) {
+            val rtt = fastTcpPingBlocking(sip, port, 950)
+            if (rtt in 1..900) {
+                fastHits.add(
+                    com.alan.ripdpi.ui.CleanIpHit(
+                        ip = sip,
+                        port = port,
+                        latencyMs = rtt,
+                        colo = "CF-Edge",
+                        subnet = sip.substringBeforeLast(".") + ".0/24"
+                    )
+                )
+                if (fastHits.size >= neededCount) break
+            }
+        }
+        if (fastHits.isNotEmpty()) return@withContext fastHits.sortedBy { it.latencyMs }
+
             val safePort = if (port in CF_COMPATIBLE_PORTS) port else 443
             val cachedSnapshot = synchronized(verifiedPool) { verifiedPool.take(8) }
             val aliveCached = ArrayList<CleanIpHit>()

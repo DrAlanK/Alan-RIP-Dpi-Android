@@ -107,6 +107,8 @@ fun AlanMainScreen(
 
     val availableRepoLocations by controller.availableRepoLocations.collectAsState()
     val repoScanReport by controller.repoScanReport.collectAsState()
+    val dohServers by controller.dohServers.collectAsState()
+    val dohScanState by controller.dohScanState.collectAsState()
 
     val vectors = remember(controller) { controller.getVectors() }
 
@@ -377,7 +379,13 @@ fun AlanMainScreen(
                                     controller.refreshAutoRepoCatalog()
                                 },
                                 onImportFromClipboard = { controller.importFromClipboard() },
-                                onSelectProfile = { idx -> controller.selectConfig(idx) }
+                                onSelectProfile = { idx -> controller.selectConfig(idx) },
+                                subscriptions = subscriptions,
+                                dohServers = dohServers,
+                                dohScanState = dohScanState,
+                                onSetTunnelMode = { mode -> controller.setTunnelOperationMode(mode) },
+                                onOpenSubscriptions = { selectTab(1) },
+                                onOpenDohScanner = { selectTab(3) }
                             )
                             1 -> ProfilesTabScreen(
                                 profiles = profiles,
@@ -421,6 +429,10 @@ fun AlanMainScreen(
                                     forcedScannerTarget = idx
                                     selectTab(2)
                                 },
+                                onSendAllToDpiLab = {
+                                    controller.sendAllConfigsToDpiLab(autoConnectBest = true, useCleanIp = true)
+                                    selectTab(2)
+                                },
                                 onAddSubscription = { url, title -> controller.addSubscription(url, title) },
                                 onRefreshSubscriptions = { controller.refreshSubscriptions() },
                                 onDeleteSubscription = { idx -> controller.deleteSubscription(idx) },
@@ -452,6 +464,12 @@ fun AlanMainScreen(
                                 settings = settings,
                                 cleanIpHits = cleanIpHits,
                                 cleanIpState = cleanIpState,
+                                dohServers = dohServers,
+                                dohScanState = dohScanState,
+                                onStartDohScan = { domain -> controller.startDohScan(domain) },
+                                onStopDohScan = { controller.stopDohScan() },
+                                onSelectActiveDoh = { url, connectNow -> controller.selectActiveDoh(url, connectNow) },
+                                onAddCustomDohUrls = { rawUrls -> controller.addCustomDohList(rawUrls) },
                                 onStartScan = { srcMode, customRanges, port, maxHits ->
                                     controller.startCleanIpScan(srcMode, customRanges, port, maxHits)
                                 },

@@ -63,6 +63,12 @@ fun CleanIpScannerScreen(
     settings: EngineSettings,
     cleanIpHits: List<CleanIpHit>,
     cleanIpState: CleanIpScanState,
+    dohServers: List<DohServerUiItem> = emptyList(),
+    dohScanState: DohScanUiState = DohScanUiState(),
+    onStartDohScan: (String) -> Unit = {},
+    onStopDohScan: () -> Unit = {},
+    onSelectActiveDoh: (url: String, connectNow: Boolean) -> Unit = { _, _ -> },
+    onAddCustomDohUrls: (String) -> Unit = {},
     onStartScan: (sourceMode: String, customRanges: String, port: Int, maxResults: Int) -> Unit,
     onStopScan: () -> Unit,
     onRefreshGithubSubnets: () -> Unit,
@@ -78,6 +84,10 @@ fun CleanIpScannerScreen(
     val p = LocalAlanPalette.current
     val context = LocalContext.current
 
+        var activeSubTab by rememberSaveable { mutableStateOf("CLEAN_IP") }
+    var dohTestDomain by rememberSaveable { mutableStateOf("github.com") }
+    var customDohInput by rememberSaveable { mutableStateOf("") }
+    var showAddDohModal by remember { mutableStateOf(false) }
     var sourceMode by rememberSaveable { mutableStateOf("github") }
     var customRangesText by rememberSaveable {
         mutableStateOf("104.16.0.0/20\n172.64.0.0/20\n188.114.96.0/22")
@@ -103,6 +113,273 @@ fun CleanIpScannerScreen(
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
+                // Top Dual-Engine Selector: اسکنر IP تمیز | اسکنر DoH (DNSveil)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .alanNeuInset(cornerRadius = 15.dp)
+                .padding(5.dp)
+        ) {
+            listOf(
+                "CLEAN_IP" to "رادار IP تمیز کلادفلر",
+                "DOH_VEIL" to "اسکنر و تنظیم DoH (DNSveil)"
+            ).forEach { (tabKey, tabTitle) ->
+                val sel = activeSubTab == tabKey
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(37.dp)
+                        .then(
+                            if (sel) {
+                                Modifier.alanGlassCard(
+                                    highlighted = true,
+                                    cornerRadius = 11.dp,
+                                    accentBorderColor = if (tabKey == "DOH_VEIL") p.emerald else p.accentGold
+                                )
+                            } else {
+                                Modifier.clip(RoundedCornerShape(11.dp))
+                            }
+                        )
+                        .clickable { activeSubTab = tabKey }
+                ) {
+                    Text(
+                        text = tabTitle,
+                        color = if (sel) (if (tabKey == "DOH_VEIL") p.emerald else p.accentGold) else p.textSecondary,
+                        fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        fontSize = 11.5.sp
+                    )
+                }
+            }
+        }
+
+        if (activeSubTab == "DOH_VEIL") {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alanGlassCard(cornerRadius = 18.dp)
+                    .padding(14.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "دی‌ان‌اس امن فعال: ${dohScanState.activeDohName}",
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 12.5.sp
+                        )
+                        LtrContent {
+                            Text(
+                                text = dohScanState.activeDohUrl,
+                                color = p.emerald,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .height(34.dp)
+                            .alanGlassCard(cornerRadius = 10.dp)
+                            .clickable { showAddDohModal = !showAddDohModal }
+                            .padding(horizontal = 11.dp)
+                    ) {
+                        Text("افزودن مخزن DoH", color = p.accentGold, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
+                }
+
+                if (showAddDohModal) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        AlanSheetTextField(
+                            label = "لینک سرور DoH (https://.../dns-query)",
+                            value = customDohInput,
+                            onValueChange = { customDohInput = it },
+                            ltr = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .height(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(p.accentGold)
+                                .clickable {
+                                    if (customDohInput.isNotBlank()) {
+                                        onAddCustomDohUrls(customDohInput)
+                                        customDohInput = ""
+                                        showAddDohModal = false
+                                    }
+                                }
+                                .padding(horizontal = 14.dp)
+                        ) {
+                            Text("ثبت", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    AlanSheetTextField(
+                        label = "دامنه تست (github.com / youtube.com)",
+                        value = dohTestDomain,
+                        onValueChange = { dohTestDomain = it },
+                        ltr = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .height(48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (dohScanState.isRunning) p.danger else p.emerald)
+                            .clickable {
+                                if (dohScanState.isRunning) onStopDohScan() else onStartDohScan(dohTestDomain)
+                            }
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        Text(
+                            text = if (dohScanState.isRunning) "توقف" else "اسکن DoH",
+                            color = Color(0xFF09120E),
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 12.5.sp
+                        )
+                    }
+                }
+
+                Text(
+                    text = dohScanState.summary,
+                    color = p.textSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                itemsIndexed(dohServers, key = { _, item -> item.url }) { _, item ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(
+                                if (item.isSelected) {
+                                    Modifier.alanNeuInset(cornerRadius = 15.dp, accented = true)
+                                } else {
+                                    Modifier.alanGlassCard(cornerRadius = 15.dp)
+                                }
+                            )
+                            .clickable { onSelectActiveDoh(item.url, false) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = item.name,
+                                    color = if (item.isSelected) p.accentGold else p.textPrimary,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 12.5.sp
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .alanNeuInset(cornerRadius = 6.dp)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    LtrContent {
+                                        Text(
+                                            text = item.category,
+                                            color = p.textMuted,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 9.sp
+                                        )
+                                    }
+                                }
+                            }
+                            LtrContent {
+                                Text(
+                                    text = item.url,
+                                    color = p.textMuted,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (item.resolvedIp.isNotBlank()) {
+                                LtrContent {
+                                    Text(
+                                        text = "Resolved: ${item.resolvedIp} (${item.statusDetail})",
+                                        color = p.emerald,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.5.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(7.dp)
+                        ) {
+                            if (item.latencyMs > 0) {
+                                LtrContent {
+                                    Text(
+                                        text = "${item.latencyMs} ms",
+                                        color = p.emerald,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 11.5.sp
+                                    )
+                                }
+                            }
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .height(32.dp)
+                                    .clip(RoundedCornerShape(9.dp))
+                                    .background(if (item.isSelected) p.emerald else p.accentGold)
+                                    .clickable { onSelectActiveDoh(item.url, true) }
+                                    .padding(horizontal = 10.dp)
+                            ) {
+                                Text(
+                                    text = if (item.isSelected) "فعال" else "ست روی نت",
+                                    color = p.onAccent,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 10.5.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            return@Column
+        }
+
         // Segmented Inset Control: فایل گیت‌هاب / ساب‌نت پیش‌فرض / رنج دلخواه
         Row(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
