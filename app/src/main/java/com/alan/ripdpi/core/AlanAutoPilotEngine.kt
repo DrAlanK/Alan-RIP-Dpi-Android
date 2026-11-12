@@ -4828,6 +4828,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                                 preferredVectorId = o.optString("preferredVectorId", "AUTO"),
                                 isSelected = false,
                                 uri = uri,
+                            groupName = o.optString("groupName", "دستی").ifBlank { "دستی" },
                                 countryCode = country.code,
                                 countryName = country.nameFa,
                                 flagEmoji = country.flagEmoji,

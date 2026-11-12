@@ -156,33 +156,42 @@ fun ProfilesTabScreen(
         }
     }
 
-    // Group user's profiles by country for filter chips
-    val countryCounts = remember(profiles) {
-        profiles.groupBy {
-            val code = it.countryCode.trim().uppercase(Locale.US)
-            if (code.isBlank() || code == "UN") {
-                CountryPaletteRegistry.detectCountry(it.name, it.host, it.sni, it.countryCode).code
-            } else {
-                code
+    // Group user's profiles by Subscription / Group Name (like v2rayNG Subscription Groups!)
+    val normalizedGroupOf: (ProfileItem) -> String = remember(subscriptions) {
+        { item ->
+            val g = item.groupName.trim()
+            when {
+                g.isEmpty() || g.equals("Manual", ignoreCase = true) || g == "دستی" -> "دستی (Manual)"
+                else -> g
             }
         }
     }
 
-    val indexedFiltered = remember(profiles, searchQuery, countryFilter) {
+    val subscriptionGroups = remember(profiles, subscriptions) {
+        val map = LinkedHashMap<String, MutableList<Pair<Int, ProfileItem>>>()
+        // Ensure registered subscriptions always appear as tabs
+        subscriptions.forEach { sub ->
+            val title = sub.title.trim().ifBlank { "اشتراک" }
+            map.putIfAbsent(title, mutableListOf())
+        }
+        profiles.forEachIndexed { idx, item ->
+            val grp = normalizedGroupOf(item)
+            map.getOrPut(grp) { mutableListOf() }.add(idx to item)
+        }
+        map.filterValues { it.isNotEmpty() }.ifEmpty { map }
+    }
+
+    val indexedFiltered = remember(profiles, searchQuery, countryFilter, subscriptionGroups) {
         val q = searchQuery.trim().lowercase(Locale.ROOT)
         profiles.mapIndexedNotNull { idx, item ->
-            val resolvedCode = item.countryCode.trim().uppercase(Locale.US).let { c ->
-                if (c.isBlank() || c == "UN") {
-                    CountryPaletteRegistry.detectCountry(item.name, item.host, item.sni, item.countryCode).code
-                } else c
-            }
-            val matchesCountry = countryFilter == "ALL" || resolvedCode.equals(countryFilter, ignoreCase = true)
-            if (!matchesCountry) {
+            val grp = normalizedGroupOf(item)
+            val matchesGroup = countryFilter == "ALL" || grp.equals(countryFilter, ignoreCase = true)
+            if (!matchesGroup) {
                 null
             } else if (q.isEmpty()) {
                 idx to item
             } else {
-                val hay = "${item.name} ${item.countryName} ${item.protocol} ${item.host} ${item.sni}".lowercase(Locale.ROOT)
+                val hay = "${item.name} $grp ${item.protocol} ${item.host} ${item.sni}".lowercase(Locale.ROOT)
                 if (hay.contains(q)) idx to item else null
             }
         }
@@ -457,68 +466,78 @@ fun ProfilesTabScreen(
             }
         }
 
-        // Location Filter Chips Row
-        if (profiles.isNotEmpty()) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
+        // Subscription Group Tabs Row (جداسازی ساب‌ها از یکدیگر مشابه v2rayNG)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+        ) {
+            val allSelected = countryFilter == "ALL"
+            Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
+                    .height(36.dp)
+                    .then(
+                        if (allSelected) {
+                            Modifier.alanGlassCard(highlighted = true, cornerRadius = 11.dp)
+                        } else {
+                            Modifier.alanNeuInset(cornerRadius = 11.dp)
+                        }
+                    )
+                    .clickable { countryFilter = "ALL" }
+                    .padding(horizontal = 13.dp)
             ) {
-                val allSelected = countryFilter == "ALL"
+                Text(
+                    text = "همه گروه‌ها (${profiles.size})",
+                    color = if (allSelected) p.accentGold else p.textSecondary,
+                    fontWeight = if (allSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    fontSize = 11.5.sp
+                )
+            }
+
+            subscriptionGroups.forEach { (grpName, listInGroup) ->
+                val isSel = countryFilter.equals(grpName, ignoreCase = true)
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .height(34.dp)
+                        .height(36.dp)
                         .then(
-                            if (allSelected) {
-                                Modifier.alanNeuInset(cornerRadius = 11.dp, accented = true)
+                            if (isSel) {
+                                Modifier.alanGlassCard(highlighted = true, cornerRadius = 11.dp)
                             } else {
-                                Modifier.alanGlassCard(cornerRadius = 11.dp)
+                                Modifier.alanNeuInset(cornerRadius = 11.dp)
                             }
                         )
-                        .clickable { countryFilter = "ALL" }
-                        .padding(horizontal = 12.dp)
+                        .clickable {
+                            countryFilter = if (isSel) "ALL" else grpName
+                        }
+                        .padding(horizontal = 13.dp)
                 ) {
                     Text(
-                        text = "همه (${profiles.size})",
-                        color = if (allSelected) p.accentGold else p.textSecondary,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 11.sp
+                        text = "$grpName (${listInGroup.size})",
+                        color = if (isSel) p.emerald else p.textSecondary,
+                        fontWeight = if (isSel) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        fontSize = 11.5.sp
                     )
                 }
+            }
 
-                countryCounts.entries
-                    .sortedByDescending { it.value.size }
-                    .forEach { (code, listForCountry) ->
-                        val spec = CountryPaletteRegistry.resolveByCode(code)
-                        val isSel = countryFilter.equals(code, ignoreCase = true)
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier
-                                .height(34.dp)
-                                .then(
-                                    if (isSel) {
-                                        Modifier.alanNeuInset(cornerRadius = 11.dp, accented = true)
-                                    } else {
-                                        Modifier.alanGlassCard(cornerRadius = 11.dp)
-                                    }
-                                )
-                                .clickable {
-                                    countryFilter = if (isSel) "ALL" else code
-                                }
-                                .padding(horizontal = 11.dp)
-                        ) {
-                            FlagStripeBadge(spec.stripeColors, spec.code, 19.dp, 13.dp)
-                            Text(
-                                text = "${spec.flagEmoji} ${spec.nameFa} (${listForCountry.size})",
-                                color = if (isSel) p.accentGold else p.textSecondary,
-                                fontWeight = if (isSel) FontWeight.ExtraBold else FontWeight.Bold,
-                                fontSize = 11.sp
-                            )
-                        }
-                    }
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .height(36.dp)
+                    .alanGlassCard(cornerRadius = 11.dp)
+                    .clickable { showSubsSheet = true }
+                    .padding(horizontal = 12.dp)
+            ) {
+                Text(
+                    text = "+ مدیریت ساب‌ها",
+                    color = p.accentGold,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp
+                )
             }
         }
 
@@ -832,6 +851,9 @@ private fun V2ServerRowCard(
         else -> "—"
     }
     val vectorTag = item.cachedVectorId.ifBlank { item.preferredVectorId.ifBlank { "AUTO" } }
+    val groupBadge = item.groupName.trim().let {
+        if (it.isEmpty() || it.equals("Manual", true)) "دستی" else it
+    }
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -889,6 +911,20 @@ private fun V2ServerRowCard(
                                 Icon(Icons.Outlined.Check, null, tint = p.onAccent, modifier = Modifier.size(13.dp))
                             }
                         }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .alanNeuInset(cornerRadius = 6.dp)
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = groupBadge,
+                            color = p.accentGold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 9.5.sp,
+                            maxLines = 1
+                        )
                     }
 
                     Text(

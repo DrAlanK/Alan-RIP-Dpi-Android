@@ -142,34 +142,34 @@ fun HomeTabScreen(
     val isErrorPhase = telemetry.uiPhase.equals("ERROR", ignoreCase = true)
 
     val statusBannerText = when {
-        telemetry.isConnected && isPureAutoMode -> "متصل با سرورهای عمومی هوشمند"
+        telemetry.isConnected && isPureAutoMode -> "متصل از طریق شبکه هوشمند"
         telemetry.isConnected -> "متصل به ${activeProfile?.name ?: telemetry.activeProfileName}"
         telemetry.isConnecting -> telemetry.statusDetail.ifBlank { "در حال مذاکره و قفل مسیر امن..." }
         isErrorPhase -> telemetry.statusDetail.ifBlank { "ارتباط برقرار نشد؛ مجدداً تلاش کنید" }
-        isPureAutoMode -> "آماده اتصال هوشمند"
+        isPureAutoMode -> "آماده برقراری ارتباط هوشمند"
         else -> "آماده برقراری ارتباط"
     }
 
-    val locationValueText = when {
+    val locationTitleText = when {
         !isPureAutoMode && activeProfile != null -> activeProfile.countryName.ifBlank { "انتخابی" }
-        selectedAutoLocation.countryCode == "AUTO" -> "خودکار"
+        selectedAutoLocation.countryCode == "AUTO" -> "خودکار (سریع‌ترین)"
         else -> selectedAutoLocation.countryNameFa
     }
+    val locationSubText = when {
+        !isPureAutoMode && activeProfile != null -> activeProfile.host.take(18)
+        else -> "${selectedAutoLocation.serverCount} سرور مخزن"
+    }
 
-    val connectionValueText = when {
-        isPureAutoMode -> {
-            val vecLabel = if (telemetry.isConnected) telemetry.activeVectorId else "هوشمند"
-            "خودکار • $vecLabel"
-        }
+    val connectionTitleText = when {
+        isPureAutoMode -> "هوشمند خودکار"
         activeProfile != null -> activeProfile.name
         else -> "انتخاب کانفیگ"
     }
-
-    val subscriptionValueText = when {
-        isPureAutoMode -> "عمومی مخزن ابری"
-        subscriptions.isNotEmpty() -> "${subscriptions.first().title} (${profiles.size})"
-        profiles.isNotEmpty() -> "مخزن شخصی (${profiles.size} نود)"
-        else -> "افزودن اشتراک"
+    val activeVecLabel = if (telemetry.isConnected) telemetry.activeVectorId else settings.manualVectorId
+    val connectionSubText = when {
+        isPureAutoMode -> "متد $activeVecLabel"
+        activeProfile != null -> "${activeProfile.protocol.uppercase(Locale.US)} • $activeVecLabel"
+        else -> "${profiles.size} پروفایل آماده"
     }
 
     val activeDohLabel = remember(dohScanState.activeDohName, settings.activeDohUrl) {
@@ -178,34 +178,32 @@ fun HomeTabScreen(
         }
     }
 
-    val footerTechSummary = remember(telemetry, activeProfile, settings, activeDohLabel) {
-        val proto = when {
+    val activeProtoBadge = remember(telemetry, activeProfile, settings) {
+        when {
             settings.tunnelMode == "DOH_VEIL" -> "DoH-Veil"
             telemetry.isConnected && telemetry.activeProtocol.isNotBlank() && telemetry.activeProtocol != "—" -> telemetry.activeProtocol
             activeProfile != null -> activeProfile.protocol.uppercase(Locale.US)
             else -> "VLESS"
         }
-        val vec = if (telemetry.isConnected) telemetry.activeVectorId else settings.manualVectorId
-        "خروجی $proto • متد $vec • $activeDohLabel"
     }
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
         val compact = maxHeight < 640.dp
-        val orbSize = if (compact) 164.dp else 192.dp
+        val orbAreaHeight = if (compact) 186.dp else 222.dp
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxSize()
         ) {
-            // 1. Top Hero: Morphing Neumorphic Orb + Dignified Status Line
+            // 1. Wide Un-caged Morphing Orb + Orbiting 3D Micro-Orbs
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(top = if (compact) 2.dp else 6.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 CenterPowerOrbButton(
                     isConnected = telemetry.isConnected,
@@ -214,15 +212,15 @@ fun HomeTabScreen(
                     progressPercent = telemetry.progressPercent,
                     accentColorLong = telemetry.accentPrimaryColor,
                     onClick = onToggleConnection,
-                    modifier = Modifier.size(orbSize)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(orbAreaHeight)
                 )
-
-                Spacer(Modifier.height(if (compact) 6.dp else 10.dp))
 
                 Text(
                     text = statusBannerText,
                     color = when {
-                        telemetry.isConnected -> p.accentGold
+                        telemetry.isConnected -> p.emerald
                         telemetry.isConnecting -> p.accentGold
                         isErrorPhase -> p.danger
                         else -> p.textSecondary
@@ -240,29 +238,25 @@ fun HomeTabScreen(
                 )
             }
 
-            // 2. Session Timer, Reconnect Button & Live Receive/Send Card (Neumorphic)
+            // 2. Sculpted Neumorphic Telemetry & Traffic Pod (Sunken Wells + Raised Reconnect Pill)
             Column(
-                verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 10.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .alanGlassCard(
-                        highlighted = telemetry.isConnected,
-                        cornerRadius = 20.dp,
-                        accentBorderColor = p.emerald.copy(alpha = 0.50f)
-                    )
-                    .padding(horizontal = 15.dp, vertical = if (compact) 11.dp else 13.dp)
+                    .alanGlassCard(cornerRadius = 22.dp)
+                    .padding(horizontal = 13.dp, vertical = if (compact) 10.dp else 12.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    // Raised Tactile Reconnect Button
+                    // Raised Borderless Neumorphic Reconnect Pill
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .height(36.dp)
-                            .alanNeuInset(cornerRadius = 11.dp, accented = telemetry.isConnected)
+                            .alanGlassCard(cornerRadius = 12.dp)
                             .clickable {
                                 if (isPureAutoMode) {
                                     onActivateAutoMode(true)
@@ -270,7 +264,7 @@ fun HomeTabScreen(
                                     onToggleConnection()
                                 }
                             }
-                            .padding(horizontal = 12.dp)
+                            .padding(horizontal = 13.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -284,100 +278,105 @@ fun HomeTabScreen(
                             )
                             Text(
                                 text = "اتصال مجدد",
-                                color = if (telemetry.isConnected) p.emerald else p.textPrimary,
+                                color = p.textPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.5.sp
                             )
                         }
                     }
 
-                    // Digital Session Uptime
-                    LtrContent {
-                        Text(
-                            text = if (telemetry.isConnected) telemetry.uptimeLabel else "00:00:00",
-                            color = p.textPrimary,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 15.5.sp
-                        )
+                    // Recessed Digital Session Timer Well
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .height(36.dp)
+                            .alanNeuInset(cornerRadius = 12.dp)
+                            .padding(horizontal = 14.dp)
+                    ) {
+                        LtrContent {
+                            Text(
+                                text = if (telemetry.isConnected) telemetry.uptimeLabel else "00:00:00",
+                                color = if (telemetry.isConnected) p.emerald else p.textPrimary,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 14.5.sp
+                            )
+                        }
                     }
                 }
 
-                // Subtle Concave Divider
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(p.cardBorder.copy(alpha = 0.75f))
-                )
-
-                // Receive / Send Rates Row
+                // Dual Sunken Traffic Wells (دریافت / ارسال)
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .weight(1f)
+                            .alanNeuInset(cornerRadius = 13.dp)
+                            .padding(horizontal = 11.dp, vertical = 8.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.ArrowDownward,
-                            contentDescription = "دریافت",
-                            tint = p.emerald,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Text(
-                            text = "دریافت",
-                            color = p.textMuted,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 11.5.sp
-                        )
-                        Spacer(Modifier.width(4.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.ArrowDownward,
+                                contentDescription = null,
+                                tint = p.emerald,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text("دریافت", color = p.textMuted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                        }
                         LtrContent {
                             Text(
                                 text = if (telemetry.isConnected) telemetry.rxRateLabel else "0 B/s",
                                 color = p.textPrimary,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.ExtraBold,
-                                fontSize = 13.sp
+                                fontSize = 11.5.sp
                             )
                         }
                     }
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .weight(1f)
+                            .alanNeuInset(cornerRadius = 13.dp)
+                            .padding(horizontal = 11.dp, vertical = 8.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.ArrowUpward,
-                            contentDescription = "ارسال",
-                            tint = p.accentGold,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Text(
-                            text = "ارسال",
-                            color = p.textMuted,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 11.5.sp
-                        )
-                        Spacer(Modifier.width(4.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.ArrowUpward,
+                                contentDescription = null,
+                                tint = p.accentGold,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text("ارسال", color = p.textMuted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                        }
                         LtrContent {
                             Text(
                                 text = if (telemetry.isConnected) telemetry.txRateLabel else "0 B/s",
                                 color = p.textPrimary,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.ExtraBold,
-                                fontSize = 13.sp
+                                fontSize = 11.5.sp
                             )
                         }
                     }
                 }
             }
 
-            // 3. Segmented Neumorphic Mode Switch: وی‌پی‌ان | پروکسی | دی‌ان‌اس DoH
+            // 3. Borderless Tactile Neumorphic Mode Switcher (وی‌پی‌ان | پروکسی | دی‌ان‌اس DoH)
             Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .alanNeuInset(cornerRadius = 16.dp)
@@ -399,8 +398,7 @@ fun HomeTabScreen(
                                 if (selected) {
                                     Modifier.alanGlassCard(
                                         highlighted = true,
-                                        cornerRadius = 12.dp,
-                                        accentBorderColor = if (modeKey == "VPN") p.emerald else p.accentGold
+                                        cornerRadius = 12.dp
                                     )
                                 } else {
                                     Modifier.clip(RoundedCornerShape(12.dp))
@@ -422,52 +420,187 @@ fun HomeTabScreen(
                 }
             }
 
-            // 4. 4-Row Interactive Configuration Matrix Card (موقعیت / اتصال / سابسکریپشن / دی‌ان‌اس)
+            // 4. Signature Bento Neumorphic Deck (2 Sculpted Tiles + DoH & Protocol Bar — NO Subscription Row!)
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .alanGlassCard(cornerRadius = 20.dp)
-                    .padding(horizontal = 15.dp, vertical = if (compact) 8.dp else 10.dp)
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                HomeSelectorRow(
-                    title = "موقعیت",
-                    valueText = locationValueText,
-                    onClick = { showAutoLocationSheet = true }
-                )
-                HomeMatrixDivider()
-                HomeSelectorRow(
-                    title = "اتصال",
-                    valueText = connectionValueText,
-                    onClick = { showManualServerPicker = true }
-                )
-                HomeMatrixDivider()
-                HomeSelectorRow(
-                    title = "سابسکریپشن",
-                    valueText = subscriptionValueText,
-                    onClick = onOpenSubscriptions
-                )
-                HomeMatrixDivider()
-                HomeSelectorRow(
-                    title = "دی‌ان‌اس امن",
-                    valueText = activeDohLabel,
-                    onClick = onOpenDohScanner
-                )
-                HomeMatrixDivider()
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    // Tile 1: Location Selector Bento Card
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .alanGlassCard(cornerRadius = 20.dp)
+                            .clickable { showAutoLocationSheet = true }
+                            .padding(horizontal = 13.dp, vertical = if (compact) 10.dp else 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .alanNeuInset(cornerRadius = 10.dp)
+                            ) {
+                                if (selectedAutoLocation.countryCode != "AUTO") {
+                                    FlagStripeBadge(
+                                        stripeColors = selectedAutoLocation.flagStripeColors,
+                                        countryCode = selectedAutoLocation.countryCode,
+                                        width = 20.dp,
+                                        height = 13.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Public,
+                                        contentDescription = null,
+                                        tint = p.emerald,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "موقعیت سرور",
+                                color = p.textMuted,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
 
-                Box(
-                    contentAlignment = Alignment.Center,
+                        Text(
+                            text = locationTitleText,
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = locationSubText,
+                            color = p.textSecondary,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // Tile 2: Connection Profile & DPI Method Bento Card
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .alanGlassCard(cornerRadius = 20.dp)
+                            .clickable { showManualServerPicker = true }
+                            .padding(horizontal = 13.dp, vertical = if (compact) 10.dp else 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .alanNeuInset(cornerRadius = 10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Dns,
+                                    contentDescription = null,
+                                    tint = p.accentGold,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
+                            Text(
+                                text = "پروفایل و متد",
+                                color = p.textMuted,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Text(
+                            text = connectionTitleText,
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        LtrContent {
+                            Text(
+                                text = connectionSubText,
+                                color = p.textSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                // Bottom Sculpted DoH & Active Protocol Strip
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 7.dp, bottom = 2.dp)
+                        .alanGlassCard(cornerRadius = 18.dp)
+                        .clickable { onOpenDohScanner() }
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
-                    Text(
-                        text = footerTechSummary,
-                        color = p.textMuted,
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(p.emerald)
+                        )
+                        Text(
+                            text = "دی‌ان‌اس امن:",
+                            color = p.textMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        LtrContent {
+                            Text(
+                                text = activeDohLabel,
+                                color = p.textPrimary,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .alanNeuInset(cornerRadius = 9.dp)
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                    ) {
+                        LtrContent {
+                            Text(
+                                text = "$activeProtoBadge • $activeVecLabel",
+                                color = p.accentGold,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -521,63 +654,6 @@ fun HomeTabScreen(
             onDismiss = { showLiveRouteModal = false }
         )
     }
-}
-
-@Composable
-private fun HomeSelectorRow(
-    title: String,
-    valueText: String,
-    onClick: () -> Unit
-) {
-    val p = LocalAlanPalette.current
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp)
-    ) {
-        Text(
-            text = title,
-            color = p.textMuted,
-            fontWeight = FontWeight.Medium,
-            fontSize = 12.sp
-        )
-        Spacer(Modifier.width(12.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End,
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(
-                text = valueText,
-                color = p.textPrimary,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.5.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(Modifier.width(4.dp))
-            Icon(
-                imageVector = Icons.Outlined.ChevronLeft,
-                contentDescription = null,
-                tint = p.textMuted,
-                modifier = Modifier.size(17.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun HomeMatrixDivider() {
-    val p = LocalAlanPalette.current
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(0.8.dp)
-            .background(p.cardBorder.copy(alpha = 0.55f))
-    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

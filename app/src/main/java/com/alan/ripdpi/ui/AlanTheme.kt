@@ -296,13 +296,25 @@ fun Modifier.alanGlassCard(
 ): Modifier = composed {
     val p = LocalAlanPalette.current
     val isDark = p.isDark
-    val lightShadow = if (isDark) Color(0xFF2B3242).copy(alpha = 0.72f) else Color(0xFFFFFFFF).copy(alpha = 0.92f)
-    val darkShadow = if (isDark) Color(0xFF11141B).copy(alpha = 0.85f) else Color(0xFFBCC7D8).copy(alpha = 0.78f)
+    val lightShadow = if (isDark) {
+        Color(0xFF2E3646).copy(alpha = if (highlighted) 0.88f else 0.72f)
+    } else {
+        Color(0xFFFFFFFF).copy(alpha = if (highlighted) 1.0f else 0.92f)
+    }
+    val darkShadow = if (isDark) {
+        Color(0xFF0E1117).copy(alpha = if (highlighted) 0.95f else 0.85f)
+    } else {
+        Color(0xFFB7C3D6).copy(alpha = if (highlighted) 0.90f else 0.76f)
+    }
 
-    val surfaceTop = if (isDark) Color(0xFF232937) else Color(0xFFECF1F9)
-    val surfaceBottom = if (isDark) Color(0xFF1A1F29) else Color(0xFFDFE7F3)
-    val bevelTop = if (isDark) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.88f)
-    val bevelBottom = if (isDark) Color.Black.copy(alpha = 0.45f) else Color(0xFFB3C0D4).copy(alpha = 0.75f)
+    val tintOverlay = if (highlighted) {
+        (accentBorderColor ?: p.accentGold).copy(alpha = if (isDark) 0.08f else 0.06f)
+    } else {
+        Color.Transparent
+    }
+
+    val surfaceTop = if (isDark) Color(0xFF242B3A) else Color(0xFFF1F5FC)
+    val surfaceBottom = if (isDark) Color(0xFF191E28) else Color(0xFFDEE6F2)
     val shape = RoundedCornerShape(cornerRadius)
 
     this
@@ -310,14 +322,15 @@ fun Modifier.alanGlassCard(
         .drawBehind {
             if (size.width > 4f && size.height > 4f) {
                 val cr = cornerRadius.toPx()
-                val off = 3.5.dp.toPx()
+                val off = (if (highlighted) 4.5.dp else 3.5.dp).toPx()
+                val blurRad = if (highlighted) 17f else 14f
                 val inset = 1.dp.toPx()
 
                 drawIntoCanvas { canvas ->
                     val darkPaint = Paint().asFrameworkPaint().apply {
                         isAntiAlias = true
                         color = darkShadow.toArgb()
-                        maskFilter = BlurMaskFilter(14f, BlurMaskFilter.Blur.NORMAL)
+                        maskFilter = BlurMaskFilter(blurRad, BlurMaskFilter.Blur.NORMAL)
                     }
                     canvas.nativeCanvas.drawRoundRect(
                         inset + off,
@@ -332,7 +345,7 @@ fun Modifier.alanGlassCard(
                     val lightPaint = Paint().asFrameworkPaint().apply {
                         isAntiAlias = true
                         color = lightShadow.toArgb()
-                        maskFilter = BlurMaskFilter(14f, BlurMaskFilter.Blur.NORMAL)
+                        maskFilter = BlurMaskFilter(blurRad, BlurMaskFilter.Blur.NORMAL)
                     }
                     canvas.nativeCanvas.drawRoundRect(
                         inset - off,
@@ -348,17 +361,7 @@ fun Modifier.alanGlassCard(
         }
         .clip(shape)
         .background(Brush.linearGradient(listOf(surfaceTop, p.cardBg, surfaceBottom)))
-        .then(
-            if (highlighted) {
-                Modifier.border(1.4.dp, accentBorderColor ?: p.glowBorder, shape)
-            } else {
-                Modifier.border(
-                    width = 1.dp,
-                    brush = Brush.linearGradient(listOf(bevelTop, bevelBottom)),
-                    shape = shape
-                )
-            }
-        )
+        .background(tintOverlay)
 }
 
 fun Modifier.alanNeuInset(
@@ -367,18 +370,23 @@ fun Modifier.alanNeuInset(
 ): Modifier = composed {
     val p = LocalAlanPalette.current
     val isDark = p.isDark
-    val darkInner = if (isDark) Color(0xFF11141B).copy(alpha = 0.90f) else Color(0xFFBCC7D8).copy(alpha = 0.85f)
-    val lightInner = if (isDark) Color(0xFF2B3242).copy(alpha = 0.55f) else Color(0xFFFFFFFF).copy(alpha = 0.95f)
+    val darkInner = if (isDark) Color(0xFF0E1117).copy(alpha = 0.92f) else Color(0xFFB6C2D5).copy(alpha = 0.88f)
+    val lightInner = if (isDark) Color(0xFF2C3444).copy(alpha = 0.58f) else Color(0xFFFFFFFF).copy(alpha = 0.96f)
     val shape = RoundedCornerShape(cornerRadius)
+    val bgCol = if (accented) {
+        if (isDark) Color(0xFF141821) else Color(0xFFD2DCEC)
+    } else {
+        p.subtleBg
+    }
 
     this
         .clip(shape)
-        .background(p.subtleBg)
+        .background(bgCol)
         .drawBehind {
             if (size.width > 4f && size.height > 4f) {
                 val cr = cornerRadius.toPx()
-                val strokeW = 3.2.dp.toPx()
-                val shift = 1.8.dp.toPx()
+                val strokeW = (if (accented) 3.8.dp else 3.2.dp).toPx()
+                val shift = 1.9.dp.toPx()
 
                 drawIntoCanvas { canvas ->
                     canvas.save()
@@ -400,7 +408,7 @@ fun Modifier.alanNeuInset(
                         style = android.graphics.Paint.Style.STROKE
                         strokeWidth = strokeW
                         color = darkInner.toArgb()
-                        maskFilter = BlurMaskFilter(10f, BlurMaskFilter.Blur.NORMAL)
+                        maskFilter = BlurMaskFilter(11f, BlurMaskFilter.Blur.NORMAL)
                     }
                     canvas.nativeCanvas.drawRoundRect(
                         -shift,
@@ -417,7 +425,7 @@ fun Modifier.alanNeuInset(
                         style = android.graphics.Paint.Style.STROKE
                         strokeWidth = strokeW
                         color = lightInner.toArgb()
-                        maskFilter = BlurMaskFilter(10f, BlurMaskFilter.Blur.NORMAL)
+                        maskFilter = BlurMaskFilter(11f, BlurMaskFilter.Blur.NORMAL)
                     }
                     canvas.nativeCanvas.drawRoundRect(
                         -strokeW,
@@ -429,14 +437,6 @@ fun Modifier.alanNeuInset(
                         lightPaint
                     )
                     canvas.restore()
-                }
-
-                if (accented) {
-                    drawRoundRect(
-                        color = p.accentGold.copy(alpha = 0.78f),
-                        cornerRadius = CornerRadius(cr, cr),
-                        style = Stroke(width = 1.2.dp.toPx())
-                    )
                 }
             }
         }
