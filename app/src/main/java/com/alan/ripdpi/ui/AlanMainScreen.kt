@@ -1,10 +1,8 @@
 package com.alan.ripdpi.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -148,7 +146,7 @@ fun AlanMainScreen(
                 drawerState = drawerState,
                 drawerContent = {
                     ModalDrawerSheet(
-                        drawerContainerColor = p.surfaceBg,
+                        drawerContainerColor = Color.Transparent, // Transparent to let GlassCard handle the Neumorphic background
                         drawerContentColor = p.textPrimary,
                         drawerShape = drawerShape,
                         modifier = Modifier
@@ -234,7 +232,7 @@ fun AlanMainScreen(
                                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                                 modifier = Modifier
                                                     .weight(1f)
-                                                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                                                    .padding(horizontal = 16.dp, vertical = 12.dp)
                                             ) {
                                                 Icon(
                                                     imageVector = item.icon,
@@ -291,7 +289,7 @@ fun AlanMainScreen(
                 }
             ) {
                 Scaffold(
-                    containerColor = p.rootBg,
+                    containerColor = p.rootBg, // The scaffold background relies on Neumorphic root
                     topBar = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,

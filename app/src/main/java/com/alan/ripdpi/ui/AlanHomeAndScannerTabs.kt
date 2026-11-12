@@ -957,7 +957,7 @@ private fun ManualServerPickerDialog(
                             text = "انتخاب سریع کانفیگ شخصی",
                             color = p.accentGold,
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 14.sp
+                            fontSize = 15.sp
                         )
                         AlanNeuIconButton(
                             icon = Icons.Outlined.Close,
@@ -1107,7 +1107,7 @@ private fun LiveStepperHeaderCard(
         verticalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .alanGlassCard(highlighted = telemetry.isConnecting, cornerRadius = 16.dp)
+            .alanGlassCard(highlighted = telemetry.isConnecting, cornerRadius = 18.dp)
             .clickable(onClick = onOpenModal)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
@@ -1158,7 +1158,7 @@ private fun LiveStepperHeaderCard(
                     text = "جزئیات مسیر",
                     color = p.accentGold,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 10.sp
+                    fontSize = 11.sp
                 )
             }
         }
@@ -1174,7 +1174,7 @@ private fun LiveStepperHeaderCard(
                     "DONE" -> p.emerald
                     "ACTIVE" -> p.accentGold
                     "FAILED" -> p.danger
-                    else -> p.cardBorder
+                    else -> p.textMuted
                 }
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -1204,6 +1204,7 @@ private fun LiveStepperHeaderCard(
                 .height(3.dp)
                 .clip(RoundedCornerShape(2.dp))
         ) {
+            // پس‌زمینه نوار پیشرفت (فرورفته نئومورفیک را با کشیدن شبیه‌سازی می‌کنیم یا ساده رندر می‌کنیم)
             drawRect(color = p.subtleBg, size = size)
             when {
                 telemetry.isConnected -> drawRect(color = p.emerald, size = size)
@@ -1234,8 +1235,10 @@ private fun LiveRouteTimelineDialog(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.padding(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier
+                        .alanGlassCard(cornerRadius = 24.dp, highlighted = true)
+                        .padding(20.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1278,7 +1281,7 @@ private fun LiveRouteTimelineDialog(
                     }
 
                     Column(
-                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 340.dp)
@@ -1487,14 +1490,14 @@ fun ScannerTabScreen(
     )
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         // Segmented Inset Control: یک کانفیگ / چند کانفیگ / کل مخزن
         Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .alanNeuInset(cornerRadius = 15.dp)
@@ -1685,7 +1688,29 @@ fun ScannerTabScreen(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { autoConnectFirst = !autoConnectFirst }
+            ) {
+                AlanPillSwitch(checked = autoConnectFirst, onCheckedChange = { autoConnectFirst = it })
+                Spacer(Modifier.width(10.dp))
+                Text("اتصال خودکار به سریع‌ترین متد", color = p.textSecondary, fontSize = 12.sp)
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { useCleanIpInScan = !useCleanIpInScan }
+            ) {
+                AlanPillSwitch(checked = useCleanIpInScan, onCheckedChange = { useCleanIpInScan = it })
+                Spacer(Modifier.width(10.dp))
+                Text("تست همراه با IP تمیز", color = p.textSecondary, fontSize = 12.sp)
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Box(
@@ -1719,7 +1744,7 @@ fun ScannerTabScreen(
                 Text(
                     text = scanState.summary,
                     color = p.textSecondary,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)

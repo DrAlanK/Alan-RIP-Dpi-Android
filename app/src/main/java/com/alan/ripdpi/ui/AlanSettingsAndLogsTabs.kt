@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,7 +19,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoFixHigh
@@ -66,13 +64,7 @@ fun GeneralSettingsScreen(
     var savedMsg by remember { mutableStateOf("") }
 
     val methodOptions = remember(vectors) {
-        vectors.map { spec ->
-            SelectOptionItem(
-                value = spec.id,
-                label = spec.id,
-                subtitle = spec.name.substringAfter("—").trim()
-            )
-        }
+        vectors.map { spec -> SelectOptionItem(spec.id, spec.id, spec.name.substringAfter("—").trim()) }
     }
 
     val modeOptions = remember {
@@ -96,11 +88,11 @@ fun GeneralSettingsScreen(
     }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -161,7 +153,12 @@ fun GeneralSettingsScreen(
                         tint = if (isFindingBestMethod) Color.White else p.onAccent,
                         modifier = Modifier.size(18.dp)
                     )
-                    Spacer(Modifier.width(7.dp))
+                    .clickable { onAutoDetectBestMethod() }
+                    .padding(vertical = 14.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Icon(Icons.Outlined.AutoFixHigh, null, tint = if (isFindingBestMethod) p.danger else p.accentGold, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = if (isFindingBestMethod) {
                             "توقف جستجوی متد"
@@ -188,12 +185,7 @@ fun GeneralSettingsScreen(
                 )
             }
 
-            AlanCustomSelectBox(
-                label = "حالت کاری موتور",
-                selectedValue = settings.engineMode,
-                options = modeOptions,
-                onSelect = { onPatchSettings(mapOf("engineMode" to it)) }
-            )
+            AlanCustomSelectBox("حالت کاری موتور", settings.engineMode, modeOptions, { onPatchSettings(mapOf("engineMode" to it)) })
         }
 
         SimpleSectionCard("ظاهر برنامه") {
@@ -337,11 +329,11 @@ fun XraySettingsScreen(
     var savedMsg by remember { mutableStateOf("") }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Text(
             text = "تنظیمات هسته Xray",
@@ -678,8 +670,8 @@ fun LogsTabScreen(
                 LtrContent {
                     LazyColumn(
                         state = listState,
-                        contentPadding = PaddingValues(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
                         itemsIndexed(filteredLogs, key = { idx, _ -> idx }) { idx, line ->

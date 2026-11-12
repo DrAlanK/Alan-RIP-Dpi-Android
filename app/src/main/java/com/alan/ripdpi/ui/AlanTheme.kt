@@ -497,6 +497,11 @@ fun AlanPillSwitch(
         animationSpec = tween(180),
         label = "swThumbCol"
     )
+    val thumbColor by animateColorAsState(
+        targetValue = if (checked) p.accentGold else p.textMuted,
+        animationSpec = tween(200),
+        label = "swThumbCol"
+    )
 
     LtrContent {
         Box(
@@ -629,7 +634,7 @@ fun AlanCustomSelectBox(
             ?: SelectOptionItem(selectedValue, selectedValue)
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = modifier) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = modifier) {
         if (label.isNotBlank()) {
             Text(
                 text = label,
@@ -720,6 +725,7 @@ fun AlanCustomSelectBox(
                                 .fillMaxWidth()
                                 .heightIn(max = 350.dp)
                                 .verticalScroll(rememberScrollState())
+                                .padding(vertical = 4.dp)
                         ) {
                             options.forEach { opt ->
                                 val isSel = opt.value == selectedValue
@@ -765,7 +771,7 @@ fun AlanCustomSelectBox(
                                             imageVector = Icons.Outlined.Check,
                                             contentDescription = null,
                                             tint = p.accentGold,
-                                            modifier = Modifier.size(17.dp)
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }

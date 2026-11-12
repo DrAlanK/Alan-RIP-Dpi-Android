@@ -68,7 +68,6 @@ fun FlagStripeBadge(
     width: Dp = 26.dp,
     height: Dp = 17.dp
 ) {
-    val p = LocalAlanPalette.current
     val iso = countryCode.trim().uppercase(Locale.US)
     val resolved = remember(stripeColors, iso) {
         val base = if (stripeColors.size >= 3) {
@@ -90,6 +89,13 @@ fun FlagStripeBadge(
     ) {
         val w = size.width
         val h = size.height
+        val clipPath = Path().apply {
+            addRoundRect(androidx.compose.ui.geometry.RoundRect(0f, 0f, w, h, androidx.compose.ui.geometry.CornerRadius(4.dp.toPx())))
+        }
+
+        drawIntoCanvas {
+            it.clipPath(clipPath)
+        }
 
         when (iso) {
             "FR", "IT", "BE", "IE", "RO" -> {

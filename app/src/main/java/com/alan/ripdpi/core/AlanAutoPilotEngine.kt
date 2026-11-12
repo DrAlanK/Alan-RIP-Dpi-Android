@@ -4551,6 +4551,54 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         } catch (_: Throwable) {
             uri.hashCode().toUInt().toString(16)
         }
+
+        val httpClient = clientBuilder.build()
+        val collectedUris = LinkedHashSet<String>()
+
+        for (url in autoRepoUrls) {
+            try {
+                val req = okhttp3.Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "v2rayNG/1.9.5")
+                    .get()
+                    .build()
+                httpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val body = resp.body?.string().orEmpty()
+                        UriConfigCodec.extractConfigLinesFromSubscriptionBody(body).forEach { u ->
+                            if (u.isNotBlank()) collectedUris.add(u.trim())
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
+        if (collectedUris.isNotEmpty()) {
+            try {
+                val rawBytes = collectedUris.joinToString("\n").toByteArray(Charsets.UTF_8)
+                val b64 = android.util.Base64.encodeToString(rawBytes, android.util.Base64.NO_WRAP)
+                cacheFile.writeText(b64, Charsets.UTF_8)
+            } catch (_: Throwable) {
+            }
+            val parsed = collectedUris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
+            return@withContext hydrateAutoPoolNodesWithMeta(parsed)
+        }
+
+        if (cacheFile.exists()) {
+            try {
+                val rawB64 = cacheFile.readText(Charsets.UTF_8).trim()
+                val decoded = String(android.util.Base64.decode(rawB64, android.util.Base64.DEFAULT), Charsets.UTF_8)
+                val cachedUris = UriConfigCodec.extractConfigLinesFromSubscriptionBody(decoded)
+                val parsed = cachedUris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
+                if (parsed.isNotEmpty()) {
+                    return@withContext hydrateAutoPoolNodesWithMeta(parsed)
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
+        emptyList()
     }
 
     private fun loadPoolWinnerMetaMap(): org.json.JSONObject {

@@ -63,7 +63,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -198,10 +197,8 @@ fun ProfilesTabScreen(
     }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         // Top Tactile Neumorphic Toolbar
         Row(
@@ -761,12 +758,19 @@ fun ProfilesTabScreen(
     }
 
     if (showSubsSheet) {
-        SubscriptionManagerSheet(
-            subscriptions = subscriptions,
-            onDismiss = { showSubsSheet = false },
-            onAdd = onAddSubscription,
-            onRefreshAll = onRefreshSubscriptions,
-            onDelete = onDeleteSubscription
+        SubscriptionManagerSheet(subscriptions, { showSubsSheet = false }, onAddSubscription, onRefreshSubscriptions, onDeleteSubscription)
+    }
+
+    val quickCloneIdx = cloneTargetIdx
+    if (quickCloneIdx != null && quickCloneIdx in profiles.indices) {
+        DarkActionMenuDialog(
+            title = "تزریق IP تمیز و کلون",
+            actions = listOf(
+                "شکار ۳ آی‌پی تمیز و کلون" to { onQuickCloneCleanIp(quickCloneIdx, 3); feedback = "در حال شکار ۳ آی‌پی تمیز..." },
+                "شکار ۵ آی‌پی تمیز و کلون" to { onQuickCloneCleanIp(quickCloneIdx, 5); feedback = "در حال شکار ۵ آی‌پی تمیز..." },
+                "شکار ۸ آی‌پی تمیز و کلون" to { onQuickCloneCleanIp(quickCloneIdx, 8); feedback = "در حال شکار ۸ آی‌پی تمیز..." }
+            ),
+            onDismiss = { cloneTargetIdx = null }
         )
     }
 
@@ -1285,10 +1289,7 @@ fun ConfigEditorSheet(
     var rawUri by remember { mutableStateOf(initial.rawUri) }
     var useRawUri by remember { mutableStateOf(initial.useRawUri) }
 
-    val vectorOptions = remember(vectors) {
-        listOf(SelectOptionItem("AUTO", "خودکار (Auto)")) +
-            vectors.map { SelectOptionItem(it.id, it.name) }
-    }
+    val vectorOptions = remember(vectors) { listOf(SelectOptionItem("AUTO", "خودکار (Auto)")) + vectors.map { SelectOptionItem(it.id, it.name) } }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
