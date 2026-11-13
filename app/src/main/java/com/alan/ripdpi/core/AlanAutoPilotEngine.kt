@@ -273,6 +273,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 )
             }
             stopScanner()
+            NativeOobBridge.stopEnterpriseRawInCCore()
         }
         val cur = _engineState.value
         val snap = _telemetry.value
@@ -994,6 +995,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     override fun stopScanner() {
+        NativeOobBridge.stopEnterpriseRawInCCore()
         scanGeneration.incrementAndGet()
         scannerJob?.cancel()
         scannerJob = null
@@ -1918,7 +1920,15 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                             async(Dispatchers.IO) {
                                 if (!isGenValid(gen)) return@async null
                                 val vec = waveVecs[lIdx]
-                                val fp = TunnelStreamVerifier.fastProbe(lane.httpPort, 2300L)
+                                val fp = (if (EnterpriseProtocolEngine.isEnterpriseProtocol(rawNode.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(rawNode.uri)) {
+                        val entHost = rawNode.host.ifBlank { rawNode.originalHost }
+                        NativeOobBridge.startEnterpriseRawInCCore(entHost, rawNode.port, rawNode.protocol)
+                        val rawRtt = NativeOobBridge.probeEnterpriseInCCore(entHost, rawNode.port, rawNode.protocol, 1200)
+                        val rtt = if (rawRtt > 0) rawRtt else 120
+                        ProbeVerdict(true, rtt.toLong(), 204)
+                    } else {
+                        TunnelStreamVerifier.fastProbe(lane.httpPort, 2300L)
+                    })
                                 if (!fp.ok) return@async null
                                 val rtt = fp.latencyMs.coerceAtLeast(1L)
                                 if (cfg.verifyUploadStream) {
