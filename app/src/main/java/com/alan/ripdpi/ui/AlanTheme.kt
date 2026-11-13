@@ -162,6 +162,90 @@ object AlanI18n {
     var lang by mutableStateOf("fa")
 
     private val exactMap = mapOf(
+                "در حال قطع..." to "Disconnecting...",
+        "در حال قطع اتصال..." to "Disconnecting tunnel...",
+        "در حال توقف هسته و بستن تونل..." to "Stopping core & closing tunnel...",
+        "تونل امن روی پروفایل شخصی فعال است" to "Secure Tunnel Active on Personal Profile",
+        "آماده برقراری ارتباط هوشمند" to "Ready for Smart Connection",
+        "یافتن بهترین کانفیگ شما..." to "Finding Your Best Profile...",
+        "تست پینگ و آزمایشگاه DPI" to "Ping & DPI Method Lab",
+        "ابزارها و پاک‌سازی مخزن" to "Repository Tools & Cleanup",
+        "افزودن کانفیگ یا اشتراک" to "Add Profile or Subscription",
+        "مرتب‌سازی لیست کانفیگ‌ها" to "Sort Profiles",
+        "انتخاب چندتایی (Multi-Select)" to "Multi-Select Mode",
+        "غیرفعال کردن انتخاب چندتایی" to "Exit Multi-Select Mode",
+        "بروزرسانی این اشتراک" to "Refresh This Subscription",
+        "اتصال خودکار به بهترین کانفیگ شخصی" to "Auto-Connect to Best Personal Profile",
+        "شکار بهترین سرور از مخزن ابری گیت‌هاب" to "Hunt Best Server from GitHub Cloud Repo",
+        "تغییر حالت اتصال شخصی (ضد DPI / خالص v2ray)" to "Toggle Personal Mode (Anti-DPI / Pure v2ray)",
+        "تست پینگ واقعی تونل (Real-Ping)" to "Real Tunnel Ping (HTTP 204)",
+        "پینگ سریع TCP همه کانفیگ‌ها" to "Fast TCP Ping All Profiles",
+        "ارسال کل مخزن به آزمایشگاه متد ضد DPI" to "Send Entire Repo to 6-Lane DPI Lab",
+        "کلون سریع با IP تمیز کلادفلر" to "Quick Clone with Cloudflare Clean IP",
+        "ارسال به آزمایشگاه متد ضد DPI" to "Send to Anti-DPI Method Lab",
+        "نمایش QR Code کانفیگ" to "Show Profile QR Code",
+        "اشتراک‌گذاری متنی" to "Share URI Text",
+        "حذف کانفیگ" to "Delete Profile",
+        "وارد کردن لینک یا متن گروهی" to "Batch Import Links / Text",
+        "افزودن به مخزن" to "Add to Repository",
+        "تایید و اجرا" to "Confirm & Apply",
+        "پاک کردن" to "Clear",
+        "انتخاب" to "Select",
+        "تنظیمات به حالت پیش‌فرض برگشت." to "Settings reset to defaults.",
+        "تنظیمات شبکه ذخیره شد." to "Network settings saved.",
+        "تنظیمات Xray ذخیره شد." to "Xray settings saved.",
+        "متد عبور از فیلتر" to "Anti-DPI Bypass Method",
+        "انتخاب متد دستی" to "Manual Vector Selection",
+        "پیدا کردن خودکار بهترین متد" to "Auto-Detect Best Method",
+        "توقف جستجوی متد" to "Stop Method Detection",
+        "حالت کاری موتور" to "Engine Operating Mode",
+        "ترکیبی هوشمند (پیشنهادی)" to "Smart Hybrid (Recommended)",
+        "استفاده هم‌زمان از تمام متدها" to "Use all anti-DPI vectors adaptively",
+        "فقط متدهای تزریق پکت" to "Packet Injection Vectors Only",
+        "مخصوص عبور از فیلترینگ شدید SNI" to "Designed for strict SNI inspection",
+        "فقط متدهای فرگمنت" to "Fragment Vectors Only",
+        "مناسب سرورهای کلادفلر و CDN" to "Optimized for Cloudflare & CDN edges",
+        "ظاهر برنامه" to "Appearance",
+        "اتصال هوشمند و مخزن" to "Smart Connect & Repository",
+        "خاموش = اتصال خالص استاندارد v2rayNG به بهترین کانفیگ شما" to "Off = Pure standard v2rayNG connection to your best profile",
+        "استفاده از مخزن ابری گیت‌هاب در دکمه اصلی اتصال" to "Use GitHub cloud repository on main connect button",
+        "ثبت خودکار پرچم و نام کشور پس از تست پینگ واقعی" to "Auto-tag country flag & name after Real-Ping",
+        "جایگزینی خودکار متد در صورت افت اینترنت" to "Auto-switch anti-DPI vector if stream drops",
+        "شبکه و پورت‌ها" to "Network & Local Ports",
+        "MTU تونل" to "Tunnel MTU",
+        "آدرس DNS" to "DNS Address",
+        "پورت SOCKS5" to "SOCKS5 Port",
+        "پورت HTTP" to "HTTP Port",
+        "لینک فایل ساب‌نت گیت‌هاب" to "GitHub Subnets URL",
+        "تنظیمات TLS و مرورگر" to "TLS & Browser Fingerprint",
+        "شبیه‌سازی مرورگر (Fingerprint)" to "uTLS Browser Fingerprint",
+        "تنظیم ALPN" to "ALPN Override",
+        "مقدار Early Data وب‌سوکت" to "WebSocket Early Data",
+        "فرگمنت و برش پکت" to "Fragmentation & Packet Slicing",
+        "طول گام برش (Bytes)" to "Forward Stride (Bytes)",
+        "نوسان تصادفی (Jitter)" to "Stride Jitter (Bytes)",
+        "فرگمنت داخلی Xray (در حالت خالص)" to "Internal Xray Fragment (Pure Mode)",
+        "خرد کردن پکت‌های هندشیک TLS توسط هسته Xray" to "Slice TLS ClientHello packets inside Xray core",
+        "طول تکه (Length)" to "Fragment Length",
+        "وقفه (ms)" to "Fragment Interval (ms)",
+        "ترکیب کانکشن‌ها (Mux)" to "Connection Multiplexing (Mux)",
+        "ارسال هم‌زمان چند درخواست در یک تونل" to "Multiplex concurrent streams over one tunnel",
+        "تعداد هم‌زمانی Mux" to "Mux Concurrency",
+        "مسیر زنده اتصال" to "Live Connection Route",
+        "انجام شد" to "Done",
+        "در حال اجرا" to "Active",
+        "ناموفق" to "Failed",
+        "در انتظار" to "Pending",
+        "همه" to "All",
+        "خطاها" to "Errors",
+        "لاگی در این دسته وجود ندارد." to "No logs in this category.",
+        "دامنه تست (github.com / youtube.com)" to "Test Domain (github.com / youtube.com)",
+        "آماده اسکن سرورهای DoH" to "Ready to scan DoH servers",
+        "آماده اسکن سرورهای DoH (DNSveil)" to "Ready to scan DoH servers (DNSveil)",
+        "آماده اسکن IP تمیز کلادفلر" to "Ready to scan Cloudflare Clean IPs",
+        "آماده شروع اسکن شبکه و متد" to "Ready to scan anti-DPI vectors",
+        "آماده تست" to "Ready",
+        "آماده" to "Ready",
         "خانه" to "Home",
         "کانفیگ‌ها" to "Profiles",
         "اسکنر متد" to "DPI Method Lab",
@@ -333,6 +417,29 @@ object AlanI18n {
         exactMap[input]?.let { return it }
         val trimmed = input.trim()
         exactMap[trimmed]?.let { return it }
+
+                if (trimmed.startsWith("بررسی موازی")) return "Probing personal profiles in parallel..."
+        if (trimmed.startsWith("در حال اسکن")) return "Scanning in progress..."
+        if (trimmed.startsWith("سرورهای تاییدشده:")) return "Verified Servers: " + trimmed.substringAfter(":").trim()
+        if (trimmed.startsWith("بروزرسانی:")) return "Updated: " + trimmed.substringAfter(":").trim()
+        if (trimmed.startsWith("فایل ساب‌نت گیت‌هاب (")) {
+            val n = trimmed.substringAfter("(").substringBefore(" ")
+            return "GitHub Subnets ($n active ranges)"
+        }
+        if (trimmed.startsWith("عبور فقط برنامه‌های انتخابی")) return "Route only selected apps through VPN"
+        if (trimmed.startsWith("عبور مستقیم برنامه‌های انتخابی")) return "Bypass VPN for selected apps"
+        if (trimmed.startsWith("عبور تمام برنامه‌های دستگاه")) return "Route all device apps through VPN"
+        if (trimmed.startsWith("فقط ") && trimmed.endsWith("برنامه")) {
+            val n = trimmed.removePrefix("فقط ").removeSuffix("برنامه").trim()
+            return "Only $n Apps"
+        }
+        if (trimmed.startsWith("استثنا:") && trimmed.endsWith("برنامه")) {
+            val n = trimmed.substringAfter(":").removeSuffix("برنامه").trim()
+            return "Exclude $n Apps"
+        }
+        if (trimmed.startsWith("اسکن هوشمند متدها روی تمام")) {
+            return "Smart 6-lane vector scan across all repository profiles"
+        }
 
         if (trimmed.startsWith("پروفایل‌ها و اشتراک‌ها (")) {
             val n = trimmed.substringAfter("(").substringBefore(")")

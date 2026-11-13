@@ -464,6 +464,7 @@ fun AlanMainScreen(
                                 },
                                 onAddSubscription = { url, title -> controller.addSubscription(url, title) },
                                 onRefreshSubscriptions = { controller.refreshSubscriptions() },
+                                onRefreshSingleSub = { grp -> controller.refreshSingleSubscription(grp) },
                                 onDeleteSubscription = { idx -> controller.deleteSubscription(idx) },
                                 onQuickCloneCleanIp = { idx, count ->
                                     controller.quickCloneConfigWithCleanIps(idx, count)

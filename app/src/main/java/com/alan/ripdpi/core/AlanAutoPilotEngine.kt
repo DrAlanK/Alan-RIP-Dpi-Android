@@ -213,7 +213,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         startTelemetryTicker()
         startSelfHealingWatchdog()
         triggerInstantGeoLocationProbes(_profiles.value.filter { it.countryCode == "UN" }, allowMicroTunnelForCdn = false)
-        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.0.0] Core Ready (${xrayCoreManager.getXrayVersion()})") }
+        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.6.0] Core Ready (${xrayCoreManager.getXrayVersion()})") }
     }
 
     fun bindVpnPermissionRequester(requester: ((() -> Unit) -> Unit)?) {
@@ -261,6 +261,19 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     override fun toggleConnection() {
+        if (_telemetry.value.isConnecting || _telemetry.value.isConnected || _scanState.value.isRunning) {
+            _telemetry.update {
+                it.copy(
+                    uiPhase = "DISCONNECTING",
+                    isConnecting = false,
+                    isConnected = false,
+                    statusHeadline = "در حال قطع اتصال...",
+                    statusDetail = "در حال توقف هسته و بستن تونل...",
+                    buttonText = "در حال قطع..."
+                )
+            }
+            stopScanner()
+        }
         val cur = _engineState.value
         val snap = _telemetry.value
         if (cur == EngineState.CONNECTED || snap.isConnecting || snap.isConnected) {
@@ -269,6 +282,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         }
         startSmartConnect()
     }
+
+
 
     private fun startSmartConnect() {
         runWithVpnConsent {
@@ -407,26 +422,27 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
 
     override fun quickPingConfigs() {
-        scope.launch {
-            val current = _profiles.value
-            if (current.isEmpty()) return@launch
-            appendLog("Running parallel TCP ping across ${current.size} profile(s)...")
-            _taskProgress.value = TaskProgressState(active = true, percent = 15, message = "TCP Ping (${current.size})")
-
-            val sem = Semaphore(16)
-            val pinged = coroutineScope {
+        val current = _profiles.value
+        if (current.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            appendLog("[Ping] شروع تست پینگ موازی روی ${current.size} کانفیگ...")
+            val sem = Semaphore(24)
+            val updated = coroutineScope {
                 current.map { item ->
-                    async {
+                    async(Dispatchers.IO) {
+                        if (CleanIpScannerEngine.isSubscriptionAnnouncementOrFakeNode(item)) {
+                            return@async item.copy(pingMs = -1, status = "DEAD")
+                        }
                         sem.withPermit {
-                            val rtt = TunnelStreamVerifier.tcpReachabilityCheck(
-                                host = item.host,
-                                port = item.port,
-                                timeoutMs = 1600,
-                                protectSocket = { sock -> AlanVpnService.protectRawSocket(sock) }
-                            )
+                            val rawHost = item.host.ifBlank { item.originalHost }.trim()
+                            val rtt = if (EnterpriseProtocolEngine.isEnterpriseProtocol(item.protocol)) {
+                                EnterpriseProtocolEngine.probeEnterpriseEndpointBlocking(rawHost, item.port, item.protocol, 1300)
+                            } else {
+                                val ip = cleanIpEngine.resolveUnpoisonedIpv4Blocking(rawHost, 1200).ifBlank { rawHost }
+                                cleanIpEngine.fastTcpPingBlocking(ip, item.port, 1100)
+                            }
                             if (rtt > 0) {
-                                val nextStatus = if (item.status == "VERIFIED") "VERIFIED" else "ONLINE"
-                                item.copy(pingMs = rtt.toInt(), status = nextStatus)
+                                item.copy(pingMs = rtt, status = "VERIFIED")
                             } else {
                                 item.copy(pingMs = -1, status = "DEAD")
                             }
@@ -434,15 +450,13 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     }
                 }.awaitAll()
             }
-
-            val selIdx = _selectedIndex.value
-            _profiles.value = pinged.mapIndexed { idx, p -> p.copy(isSelected = idx == selIdx) }
-            _taskProgress.value = TaskProgressState(active = false, percent = 0, message = "")
+            _profiles.value = updated
             saveRepositoryToDisk()
-            val aliveCount = pinged.count { it.pingMs > 0 }
-            appendLog("TCP ping finished: $aliveCount/${pinged.size} reachable.")
+            val aliveCount = updated.count { it.pingMs > 0 }
+            appendLog("[Ping] تست پینگ به پایان رسید: $aliveCount از ${updated.size} کانفیگ فعال هستند.")
         }
     }
+
 
     override fun sortConfigs(by: String) {
         val list = _profiles.value
@@ -613,47 +627,79 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     override fun addSubscription(url: String, title: String) {
         val cleanUrl = url.trim()
         if (cleanUrl.isEmpty()) return
-        val derivedTitle = title.trim().ifBlank {
-            try {
-                java.net.URI(cleanUrl).host?.replace("www.", "")?.substringBefore(".")?.replaceFirstChar { it.uppercase() }
-                    ?: "Sub-${_subscriptions.value.size + 1}"
-            } catch (_: Throwable) {
-                "Sub-${_subscriptions.value.size + 1}"
-            }
+        val hostPart = try {
+            java.net.URI(cleanUrl).host?.replace("www.", "")?.substringBefore(".")?.replaceFirstChar { it.uppercase() }.orEmpty()
+        } catch (_: Throwable) { "" }
+
+        var finalTitle = title.trim()
+        if (finalTitle.isEmpty() || finalTitle.equals("Imported Sub", true) || finalTitle.equals("Subscription", true)) {
+            finalTitle = if (hostPart.isNotEmpty()) "Sub-$hostPart-${_subscriptions.value.size + 1}" else "Sub-${_subscriptions.value.size + 1}"
         }
         val existingIdx = _subscriptions.value.indexOfFirst { it.url.equals(cleanUrl, ignoreCase = true) }
         if (existingIdx >= 0) {
             _subscriptions.update { list ->
-                list.mapIndexed { idx, s -> if (idx == existingIdx) s.copy(title = derivedTitle) else s }
+                list.mapIndexed { idx, s -> if (idx == existingIdx) s.copy(title = finalTitle) else s }
             }
         } else {
+            val conflictCount = _subscriptions.value.count { it.title.equals(finalTitle, ignoreCase = true) }
+            if (conflictCount > 0) {
+                finalTitle = "$finalTitle-${_subscriptions.value.size + 1}"
+            }
             val item = SubscriptionItem(
                 id = "sub-${System.currentTimeMillis()}",
-                title = derivedTitle,
+                title = finalTitle,
                 url = cleanUrl,
                 updatedAt = nowTime()
             )
             _subscriptions.value = _subscriptions.value + item
         }
         saveSubscriptionsToDisk()
-        appendLog("[Sub] اشتراک '$derivedTitle' ثبت شد؛ در حال دریافت و دسته‌بندی کانفیگ‌ها...")
-        refreshSubscriptions()
+        appendLog("[Sub] اشتراک '$finalTitle' ثبت شد؛ در حال دریافت کانفیگ‌ها...")
+        refreshSingleSubscription(finalTitle)
     }
 
 
+
     override fun refreshSubscriptions() {
-        val subsSnapshot = _subscriptions.value
-        if (subsSnapshot.isEmpty()) {
+        refreshSubscriptionsInternal(onlyGroupTitle = null)
+    }
+
+    override fun refreshSingleSubscription(groupTitle: String) {
+        refreshSubscriptionsInternal(onlyGroupTitle = groupTitle.trim().takeIf { it.isNotEmpty() && it != "ALL" })
+    }
+
+    private fun refreshSubscriptionsInternal(onlyGroupTitle: String?) {
+        // First disambiguate any duplicate subscription titles in _subscriptions so they NEVER overwrite each other!
+        val rawSubs = _subscriptions.value
+        if (rawSubs.isEmpty()) {
             appendLog("[Sub] هیچ لینک اشتراکی ثبت نشده است.")
             return
         }
+        val seenTitles = HashSet<String>()
+        val dedupedSubs = rawSubs.mapIndexed { idx, s ->
+            var t = s.title.trim().ifBlank { "Sub-${idx + 1}" }
+            if (t.equals("Imported Sub", true) && rawSubs.size > 1) {
+                val h = try { java.net.URI(s.url).host?.replace("www.", "")?.substringBefore(".").orEmpty() } catch (_: Throwable) { "" }
+                t = if (h.isNotEmpty()) "Sub-${idx + 1} ($h)" else "Sub-${idx + 1}"
+            }
+            if (!seenTitles.add(t.lowercase(Locale.ROOT))) {
+                t = "$t-${idx + 1}"
+                seenTitles.add(t.lowercase(Locale.ROOT))
+            }
+            s.copy(title = t)
+        }
+        _subscriptions.value = dedupedSubs
+
         scope.launch(Dispatchers.IO) {
             var totalFetched = 0
             val updatedProfiles = _profiles.value.toMutableList()
-            val updatedSubs = subsSnapshot.toMutableList()
+            val updatedSubs = dedupedSubs.toMutableList()
 
-            for ((sIdx, sub) in subsSnapshot.withIndex()) {
-                val grpTitle = sub.title.trim().ifBlank { "Sub-${sIdx + 1}" }
+            for ((sIdx, sub) in dedupedSubs.withIndex()) {
+                val grpTitle = sub.title.trim()
+                if (onlyGroupTitle != null && !grpTitle.equals(onlyGroupTitle, ignoreCase = true)) {
+                    continue
+                }
                 try {
                     val host = try { java.net.URI(sub.url).host.orEmpty() } catch (_: Throwable) { "" }
                     val resolvedIp = if (host.isNotEmpty()) cleanIpEngine.resolveUnpoisonedIpv4Blocking(host, 1800) else ""
@@ -692,7 +738,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                             }
                         }
                     } catch (e: Throwable) {
-                        appendLog("[Sub] خطا در دریافت مستقیم '$grpTitle': ${e.javaClass.simpleName}")
+                        appendLog("[Sub] خطا در دریافت '$grpTitle': ${e.javaClass.simpleName}")
                     }
 
                     if (rawBody.isNotBlank()) {
@@ -729,9 +775,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
                             totalFetched += parsedGroupItems.size
                             updatedSubs[sIdx] = sub.copy(updatedAt = nowTime())
-                            appendLog("[Sub] اشتراک '$grpTitle' بروزرسانی شد: ${parsedGroupItems.size} کانفیگ در گروه '$grpTitle' دسته‌بندی شد.")
-                        } else {
-                            appendLog("[Sub] هیچ کانفیگ معتبری در لینک '$grpTitle' یافت نشد.")
+                            appendLog("[Sub] اشتراک '$grpTitle' بروزرسانی شد: ${parsedGroupItems.size} کانفیگ در گروه '$grpTitle' قرار گرفت.")
                         }
                     }
                 } catch (e: Throwable) {
@@ -743,9 +787,10 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             _profiles.value = updatedProfiles
             saveSubscriptionsToDisk()
             saveRepositoryToDisk()
-            appendLog("[Sub] بروزرسانی اشتراک‌ها تکمیل شد (مجموع: $totalFetched کانفیگ).")
+            appendLog("[Sub] بروزرسانی تکمیل شد (تعداد دریافتی: $totalFetched کانفیگ).")
         }
     }
+
 
 
     override fun deleteSubscription(index: Int) {
@@ -2488,25 +2533,33 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     override fun pingSingleConfig(index: Int, realTunnelPing: Boolean) {
-        if (realTunnelPing) {
-            realTunnelPingConfigs(selectedIndices = listOf(index), autoRenameWithLocation = _settings.value.autoRenameOnScan)
-        } else {
+        val list = _profiles.value
+        if (index !in list.indices) return
+        val target = list[index]
+        if (EnterpriseProtocolEngine.isEnterpriseProtocol(target.protocol) || !realTunnelPing) {
             scope.launch(Dispatchers.IO) {
-                val list = _profiles.value
-                val item = list.getOrNull(index) ?: return@launch
-                val rtt = cleanIpEngine.fastTcpPingBlocking(item.host.ifBlank { item.originalHost }, item.port, 1600)
-                val mut = _profiles.value.toMutableList()
-                if (index in mut.indices) {
-                    mut[index] = mut[index].copy(
-                        pingMs = rtt,
-                        status = if (rtt > 0) "HEALTHY" else "DEAD"
-                    )
-                    _profiles.value = mut
-                    saveRepositoryToDisk()
+                val rtt = EnterpriseProtocolEngine.probeEnterpriseEndpointBlocking(
+                    target.host.ifBlank { target.originalHost },
+                    target.port,
+                    target.protocol,
+                    1400
+                )
+                _profiles.update { cur ->
+                    cur.mapIndexed { idx, it ->
+                        if (idx == index) {
+                            if (rtt > 0) it.copy(pingMs = rtt, status = "VERIFIED")
+                            else it.copy(pingMs = -1, status = "DEAD")
+                        } else it
+                    }
                 }
+                saveRepositoryToDisk()
+                appendLog("[Ping] '${target.name}' (${target.protocol}) -> ${if (rtt > 0) "${rtt}ms" else "Timeout"}")
             }
+        } else {
+            realTunnelPingConfigs(listOf(index), _settings.value.autoRenameOnScan)
         }
     }
+
 
     override fun realTunnelPingConfigs(selectedIndices: List<Int>, autoRenameWithLocation: Boolean) {
         scope.launch {

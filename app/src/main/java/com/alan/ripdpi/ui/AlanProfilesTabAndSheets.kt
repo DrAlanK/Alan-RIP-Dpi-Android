@@ -34,7 +34,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ContentPaste
@@ -43,10 +42,8 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.NetworkCheck
 import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.QrCodeScanner
-import androidx.compose.material.icons.outlined.Radar
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
-import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
@@ -111,6 +108,7 @@ fun ProfilesTabScreen(
     onSendToMethodScanner: (Int) -> Unit,
     onAddSubscription: (String, String) -> Unit,
     onRefreshSubscriptions: () -> Unit,
+    onRefreshSingleSub: (String) -> Unit = { _ -> onRefreshSubscriptions() },
     onDeleteSubscription: (Int) -> Unit,
     onQuickCloneCleanIp: (Int, Int) -> Unit = { _, _ -> }
 ) {
@@ -164,7 +162,6 @@ fun ProfilesTabScreen(
         }
     }
 
-    // Build Subscription Groups exactly like v2rayNG (includes all registered subscriptions + manual group)
     val subscriptionGroups = remember(profiles, subscriptions) {
         val map = LinkedHashMap<String, MutableList<Pair<Int, ProfileItem>>>()
         subscriptions.forEach { sub ->
@@ -200,7 +197,7 @@ fun ProfilesTabScreen(
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        // 1. Top v2rayNG Action Header
+        // 1. Clean Decluttered v2rayNG Header (+, Bolt, MoreVert)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -228,7 +225,7 @@ fun ProfilesTabScreen(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 AlanNeuIconButton(
                     icon = Icons.Outlined.Add,
                     tint = p.accentGold,
@@ -242,22 +239,6 @@ fun ProfilesTabScreen(
                     onClick = { activeModalMenu = "PING" }
                 )
                 AlanNeuIconButton(
-                    icon = Icons.Outlined.Sort,
-                    tint = p.textPrimary,
-                    size = 38.dp,
-                    onClick = { activeModalMenu = "SORT" }
-                )
-                AlanNeuIconButton(
-                    icon = Icons.Outlined.Checklist,
-                    tint = if (multiSelectMode) p.accentGold else p.textPrimary,
-                    size = 38.dp,
-                    isPressed = multiSelectMode,
-                    onClick = {
-                        multiSelectMode = !multiSelectMode
-                        if (!multiSelectMode) selectedIndices.clear()
-                    }
-                )
-                AlanNeuIconButton(
                     icon = Icons.Outlined.MoreVert,
                     tint = p.textPrimary,
                     size = 38.dp,
@@ -266,7 +247,7 @@ fun ProfilesTabScreen(
             }
         }
 
-        // 2. Multi-Select Batch Action Bar
+        // 2. Multi-Select Batch Action Bar (Only visible when Multi-Select is active)
         AnimatedVisibility(visible = multiSelectMode) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -295,7 +276,10 @@ fun ProfilesTabScreen(
                         modifier = Modifier
                             .height(32.dp)
                             .alanGlassCard(cornerRadius = 9.dp)
-                            .clickable { selectedIndices.clear() }
+                            .clickable {
+                                selectedIndices.clear()
+                                multiSelectMode = false
+                            }
                             .padding(horizontal = 9.dp)
                     ) {
                         Text("لغو", color = p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
@@ -359,7 +343,7 @@ fun ProfilesTabScreen(
             }
         }
 
-        // 3. v2rayNG Subscription Group Tabs Strip
+        // 3. v2rayNG Subscription Group Tabs Strip + Direct Per-Sub Refresh Icon
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -383,7 +367,7 @@ fun ProfilesTabScreen(
                     .padding(horizontal = 13.dp)
             ) {
                 Text(
-                    text = "همه گروه‌ها (${profiles.size})",
+                    text = "همه (${profiles.size})",
                     color = if (allSelected) p.accentGold else p.textSecondary,
                     fontWeight = if (allSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
                     fontSize = 11.sp
@@ -392,8 +376,9 @@ fun ProfilesTabScreen(
 
             subscriptionGroups.forEach { (grpName, listInGroup) ->
                 val isSel = selectedGroupFilter.equals(grpName, ignoreCase = true)
-                Box(
-                    contentAlignment = Alignment.Center,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier
                         .height(35.dp)
                         .then(
@@ -403,10 +388,10 @@ fun ProfilesTabScreen(
                                 Modifier.alanNeuInset(cornerRadius = 11.dp)
                             }
                         )
-                    .clickable {
-                        selectedGroupFilter = if (isSel) "ALL" else grpName
-                    }
-                    .padding(horizontal = 13.dp)
+                        .clickable {
+                            selectedGroupFilter = if (isSel) "ALL" else grpName
+                        }
+                        .padding(horizontal = 12.dp)
                 ) {
                     Text(
                         text = "$grpName (${listInGroup.size})",
@@ -414,6 +399,19 @@ fun ProfilesTabScreen(
                         fontWeight = if (isSel) FontWeight.ExtraBold else FontWeight.SemiBold,
                         fontSize = 11.sp
                     )
+                    if (grpName != "دستی") {
+                        Icon(
+                            imageVector = Icons.Outlined.Refresh,
+                            contentDescription = "بروزرسانی این اشتراک",
+                            tint = if (isSel) p.accentGold else p.textMuted,
+                            modifier = Modifier
+                                .size(15.dp)
+                                .clickable {
+                                    onRefreshSingleSub(grpName)
+                                    feedback = "در حال بروزرسانی اشتراک «$grpName»..."
+                                }
+                        )
+                    }
                 }
             }
 
@@ -432,82 +430,9 @@ fun ProfilesTabScreen(
                     fontSize = 11.sp
                 )
             }
-
-            if (subscriptions.isNotEmpty()) {
-                AlanNeuIconButton(
-                    icon = Icons.Outlined.Refresh,
-                    tint = p.emerald,
-                    size = 35.dp,
-                    onClick = {
-                        onRefreshSubscriptions()
-                        feedback = "در حال بروزرسانی تمام اشتراک‌ها..."
-                    }
-                )
-            }
         }
 
-        // 4. Smart Auto-Connect to User's Best Config Bar (with DPI Toggle & Lab Scanner)
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .alanGlassCard(cornerRadius = 15.dp)
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-        ) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .weight(1.25f)
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(p.emerald)
-                    .clickable {
-                        onConnectBestUserConfig(applyDpiOnUserAuto, selectedGroupFilter)
-                    }
-                    .padding(horizontal = 8.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Icon(Icons.Outlined.Bolt, null, tint = Color(0xFF07130E), modifier = Modifier.size(15.dp))
-                    Text(
-                        text = "اتصال خودکار به بهترینِ من",
-                        color = Color(0xFF07130E),
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 11.sp,
-                        maxLines = 1
-                    )
-                }
-            }
-
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .height(36.dp)
-                    .alanNeuInset(cornerRadius = 10.dp, accented = applyDpiOnUserAuto)
-                    .clickable { onToggleApplyDpiOnUserAuto(!applyDpiOnUserAuto) }
-                    .padding(horizontal = 10.dp)
-            ) {
-                Text(
-                    text = if (applyDpiOnUserAuto) "متد DPI: فعال" else "خالص v2ray",
-                    color = if (applyDpiOnUserAuto) p.accentGold else p.textSecondary,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 10.5.sp,
-                    maxLines = 1
-                )
-            }
-
-            AlanNeuIconButton(
-                icon = Icons.Outlined.Radar,
-                tint = p.accentGold,
-                size = 36.dp,
-                onClick = onSendAllToDpiLab
-            )
-        }
-
-        // 5. Search Bar + Quick QR Scan + Quick Clipboard Paste
+        // 4. Search Bar + Quick QR Scan + Quick Clipboard Paste
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -547,7 +472,7 @@ fun ProfilesTabScreen(
             )
         }
 
-        // 6. Profiles List
+        // 5. Profiles List
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(9.dp),
             contentPadding = PaddingValues(bottom = 20.dp),
@@ -596,7 +521,7 @@ fun ProfilesTabScreen(
                         },
                         onPingSingle = {
                             onPingSingleConfig(origIdx, true)
-                            feedback = "تست پینگ واقعی «${item.name.take(18)}» آغاز شد..."
+                            feedback = "تست پینگ «${item.name.take(18)}» آغاز شد..."
                         },
                         onShowQr = { qrPreviewProfile = item },
                         onOpenActions = { itemMoreMenuIdx = origIdx }
@@ -606,7 +531,7 @@ fun ProfilesTabScreen(
         }
     }
 
-    // Top Toolbar Action Menus (ADD, PING, SORT, MORE)
+    // Top Action Menus (ADD, PING, MORE)
     if (activeModalMenu.isNotEmpty()) {
         val actions: List<Pair<String, () -> Unit>> = when (activeModalMenu) {
             "ADD" -> listOf(
@@ -637,25 +562,40 @@ fun ProfilesTabScreen(
                 }
             )
             "PING" -> listOf(
+                "اتصال خودکار به بهترین کانفیگ شخصی" to {
+                    onConnectBestUserConfig(applyDpiOnUserAuto, selectedGroupFilter)
+                },
+                "تغییر حالت اتصال شخصی (ضد DPI / خالص v2ray)" to {
+                    onToggleApplyDpiOnUserAuto(!applyDpiOnUserAuto)
+                    feedback = if (!applyDpiOnUserAuto) "متد ضد DPI برای اتصال شخصی فعال شد." else "حالت خالص v2ray فعال شد."
+                },
                 "تست پینگ واقعی تونل (Real-Ping)" to {
                     val targets = if (multiSelectMode && selectedIndices.isNotEmpty()) selectedIndices.toList() else indexedFiltered.map { it.first }
                     onRealTunnelPingConfigs(targets, false)
-                    feedback = "پینگ واقعی تونل آغاز شد..."
+                    feedback = "پینگ واقعی آغاز شد..."
                 },
                 "پینگ سریع TCP همه کانفیگ‌ها" to {
                     onQuickPingAll()
-                    feedback = "پینگ سریع TCP آغاز شد..."
+                    feedback = "پینگ سریع آغاز شد..."
                 },
                 "ارسال کل مخزن به آزمایشگاه متد ضد DPI" to {
                     onSendAllToDpiLab()
-                },
-                "تشخیص کشور و نام‌گذاری خودکار با پرچم" to {
-                    val targets = if (multiSelectMode && selectedIndices.isNotEmpty()) selectedIndices.toList() else indexedFiltered.map { it.first }
-                    onAutoRenameConfigsWithLocation(targets)
-                    feedback = "نام‌گذاری کانفیگ‌ها با پرچم انجام شد."
                 }
             )
-            "SORT" -> listOf(
+            else -> listOf(
+                (if (multiSelectMode) "غیرفعال کردن انتخاب چندتایی" else "انتخاب چندتایی (Multi-Select)") to {
+                    multiSelectMode = !multiSelectMode
+                    if (!multiSelectMode) selectedIndices.clear()
+                },
+                (if (selectedGroupFilter != "ALL" && selectedGroupFilter != "دستی") "بروزرسانی این اشتراک" else "بروزرسانی همه اشتراک‌ها") to {
+                    if (selectedGroupFilter != "ALL" && selectedGroupFilter != "دستی") {
+                        onRefreshSingleSub(selectedGroupFilter)
+                        feedback = "در حال بروزرسانی اشتراک «$selectedGroupFilter»..."
+                    } else {
+                        onRefreshSubscriptions()
+                        feedback = "در حال بروزرسانی تمام اشتراک‌ها..."
+                    }
+                },
                 "مرتب‌سازی بر اساس پینگ (سریع‌ترین)" to {
                     onSortConfigs("ping")
                     feedback = "بر اساس پینگ مرتب شد."
@@ -664,25 +604,9 @@ fun ProfilesTabScreen(
                     onSortConfigs("group")
                     feedback = "بر اساس گروه اشتراک مرتب شد."
                 },
-                "مرتب‌سازی بر اساس نام" to {
-                    onSortConfigs("name")
-                    feedback = "بر اساس نام مرتب شد."
-                },
                 "مرتب‌سازی بر اساس پروتکل" to {
                     onSortConfigs("protocol")
                     feedback = "بر اساس پروتکل مرتب شد."
-                }
-            )
-            else -> listOf(
-                "بروزرسانی لینک‌های اشتراک (${subscriptions.size})" to {
-                    onRefreshSubscriptions()
-                    feedback = "در حال بروزرسانی اشتراک‌ها..."
-                },
-                "اتصال خودکار به بهترین کانفیگ شخصی" to {
-                    onConnectBestUserConfig(applyDpiOnUserAuto, selectedGroupFilter)
-                },
-                "شکار بهترین سرور از مخزن ابری گیت‌هاب" to {
-                    onHuntBest()
                 },
                 "حذف کانفیگ‌های تکراری" to {
                     onDeduplicate()
@@ -691,13 +615,6 @@ fun ProfilesTabScreen(
                 "حذف کانفیگ‌های ازکارافتاده (DEAD)" to {
                     onRemoveDead()
                     feedback = "سرورهای ازکارافتاده حذف شدند."
-                },
-                "کپی همه کانفیگ‌های سالم" to {
-                    val out = onExportVerifiedEarlyData()
-                    if (out.isNotBlank()) {
-                        copyPlainTextToClipboard(context, "VerifiedConfigs", out)
-                        feedback = "کانفیگ‌های سالم در کلیپ‌بورد کپی شدند."
-                    }
                 },
                 "خروجی Base64 همه کانفیگ‌ها" to {
                     val b64 = onShareOrExportSelected(emptyList(), true)
@@ -717,8 +634,7 @@ fun ProfilesTabScreen(
             title = when (activeModalMenu) {
                 "ADD" -> "افزودن کانفیگ یا اشتراک"
                 "PING" -> "تست پینگ و آزمایشگاه DPI"
-                "SORT" -> "مرتب‌سازی لیست کانفیگ‌ها"
-                else -> "ابزارها و پاک‌سازی مخزن"
+                else -> "ابزارها و مرتب‌سازی مخزن"
             },
             actions = actions,
             onDismiss = { activeModalMenu = "" }
@@ -778,6 +694,7 @@ fun ProfilesTabScreen(
             onDismiss = { showSubsSheet = false },
             onAdd = onAddSubscription,
             onRefreshAll = onRefreshSubscriptions,
+            onRefreshSingle = onRefreshSingleSub,
             onDelete = onDeleteSubscription
         )
     }
@@ -840,8 +757,8 @@ private fun V2ServerRowCard(
     val transportAndSec = remember(uriLow, protoUp) {
         when (protoUp) {
             "ANYCONNECT", "OPENCONNECT" -> "ssl-vpn • tls"
-            "IKEV2" -> "ipsec • esp"
-            "L2TP" -> "ipsec • l2tp"
+            "IKEV2" -> "ipsec • udp"
+            "L2TP" -> "l2tp • udp"
             else -> {
                 val net = when {
                     uriLow.contains("type=ws") || uriLow.contains("\"net\":\"ws\"") -> "ws"
@@ -878,8 +795,7 @@ private fun V2ServerRowCard(
             .replace("VMESS · ", "")
             .replace("TROJAN · ", "")
             .trim()
-        val asciiMatch = Regex("""[A-Za-z0-9._-]{4,}.*$""").find(noBrackets)?.value?.trim()
-        (asciiMatch ?: noBrackets).trimStart('•', '-', '|', '·', ' ').ifBlank { "${item.protocol} (${item.host})" }
+        noBrackets.ifBlank { "${item.protocol} (${item.host})" }
     }
 
     Row(
@@ -910,12 +826,11 @@ private fun V2ServerRowCard(
         )
 
         Column(
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
                 .weight(1f)
-                .padding(horizontal = 13.dp, vertical = 11.dp)
+                .padding(horizontal = 13.dp, vertical = 10.dp)
         ) {
-            // Row 1: Remark Title + Numeric Ping Badge
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -975,7 +890,6 @@ private fun V2ServerRowCard(
                 }
             }
 
-            // Row 2: Host:Port & SNI + Subscription Group Badge
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1013,7 +927,6 @@ private fun V2ServerRowCard(
                 }
             }
 
-            // Row 3: v2rayNG Entity Badges + Quick Actions
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1177,6 +1090,7 @@ fun SubscriptionManagerSheet(
     onDismiss: () -> Unit,
     onAdd: (url: String, title: String) -> Unit,
     onRefreshAll: () -> Unit,
+    onRefreshSingle: (String) -> Unit = { _ -> onRefreshAll() },
     onDelete: (Int) -> Unit
 ) {
     val p = LocalAlanPalette.current
@@ -1244,7 +1158,7 @@ fun SubscriptionManagerSheet(
                         .background(p.accentGold)
                         .clickable {
                             if (subUrl.isNotBlank()) {
-                                onAdd(subUrl.trim(), subTitle.trim().ifBlank { "Subscription-${subscriptions.size + 1}" })
+                                onAdd(subUrl.trim(), subTitle.trim())
                                 subUrl = ""
                                 subTitle = ""
                             }
@@ -1280,7 +1194,10 @@ fun SubscriptionManagerSheet(
                             }
                         }
                         Spacer(Modifier.width(8.dp))
-                        SmallTactileActionBtn(Icons.Outlined.DeleteOutline, p.danger) { onDelete(idx) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            SmallTactileActionBtn(Icons.Outlined.Refresh, p.emerald) { onRefreshSingle(sub.title) }
+                            SmallTactileActionBtn(Icons.Outlined.DeleteOutline, p.danger) { onDelete(idx) }
+                        }
                     }
                 }
                 Spacer(Modifier.height(10.dp))

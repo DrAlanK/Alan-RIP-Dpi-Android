@@ -307,6 +307,7 @@ interface AlanEngineController {
 
     fun addSubscription(url: String, title: String)
     fun refreshSubscriptions()
+    fun refreshSingleSubscription(groupTitle: String) { refreshSubscriptions() }
     fun deleteSubscription(index: Int)
 
     fun updateSettings(newSettings: EngineSettings)

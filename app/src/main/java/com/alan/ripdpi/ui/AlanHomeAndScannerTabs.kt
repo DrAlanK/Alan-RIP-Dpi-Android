@@ -149,8 +149,10 @@ fun HomeTabScreen(
     }
     val activeProfile = if (isPureAutoMode) null else profiles.getOrNull(activeIdx)
     val isErrorPhase = telemetry.uiPhase.equals("ERROR", ignoreCase = true)
+    val isDisconnectingPhase = telemetry.uiPhase.equals("DISCONNECTING", ignoreCase = true)
 
     val cleanStatusHeadline = when {
+        isDisconnectingPhase -> "در حال قطع اتصال..."
         telemetry.isConnected && isPureAutoMode -> "متصل از طریق شبکه ابری هوشمند"
         telemetry.isConnected -> "تونل امن روی پروفایل شخصی برقرار است"
         telemetry.isConnecting -> sanitizePersianStatusLine(telemetry.statusDetail, telemetry.progressPercent)
