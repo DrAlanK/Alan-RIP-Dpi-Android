@@ -788,7 +788,8 @@ private fun V2ServerRowCard(
         item.pingMs > 0 -> "${item.pingMs} ms"
         else -> "—"
     }
-    val vectorTag = item.cachedVectorId.ifBlank { item.preferredVectorId.ifBlank { "AUTO" } }
+    val isEntProto = protoUp in setOf("ANYCONNECT", "OPENCONNECT", "IKEV2", "L2TP")
+    val vectorTag = if (isEntProto) "NATIVE" else item.cachedVectorId.ifBlank { item.preferredVectorId.ifBlank { "AUTO" } }
     val cleanTitle = remember(item.name, item.protocol, item.host) {
         val noBrackets = Regex("""\[[^\]]*\]""").replace(item.name, "").trim()
             .replace("VLESS · ", "")

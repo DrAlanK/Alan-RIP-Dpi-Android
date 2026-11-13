@@ -1822,6 +1822,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         candidates.take(3)
     }
 
+
     private suspend fun executeSingleNodePipelineUnlocked(
         gen: Long,
         rawNode: ProfileItem,
@@ -1879,7 +1880,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 _telemetry.update {
                     it.copy(
                         progressPercent = pct,
-                        statusDetail = "در حال تست موازی ۶ مسیره و قفل سریع‌ترین متد ضد فیلتر..."
+                        statusDetail = "مسابقه موازی [$vecLabels] روی $dispName..."
                     )
                 }
                 updateStageState(5, "ACTIVE", "تست همزمان ${waveVecs.size} متد روی $dispName", waveVecs.first().vectorId)
@@ -2872,57 +2873,72 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             if (matchGrp && !CleanIpScannerEngine.isSubscriptionAnnouncementOrFakeNode(item)) idx to item else null
         }.ifEmpty { all.mapIndexed { idx, item -> idx to item } }
 
-        val modeTitle = if (applyDpiMethods) "با متد ضد DPI" else "حالت خالص v2ray"
-        appendLog("[UserAuto] شروع اتصال خودکار به بهترین کانفیگ شخصی (${targetPairs.size} کاندید • $modeTitle)...")
-
-        _telemetry.update {
-            it.copy(
-                uiPhase = "HUNTING",
-                isConnecting = true,
-                isConnected = false,
-                progressPercent = 18,
-                statusHeadline = "یافتن بهترین کانفیگ شما...",
-                statusDetail = "بررسی موازی ${targetPairs.size} کانفیگ ($modeTitle)..."
-            )
+        val enterprisePairs = targetPairs.filter { (_, item) ->
+            EnterpriseProtocolEngine.isEnterpriseProtocol(item.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(item.uri)
+        }
+        val v2rayPairs = targetPairs.filterNot { (_, item) ->
+            EnterpriseProtocolEngine.isEnterpriseProtocol(item.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(item.uri)
         }
 
-        if (applyDpiMethods) {
-            startMultiTargetMethodScan(
-                scopeMode = "selected",
-                selectedIndices = targetPairs.map { it.first },
-                autoConnect = true,
-                useCleanIp = _settings.value.autoCleanIpForCf
-            )
-        } else {
+        // If the selected group is predominantly Enterprise (IKEv2/L2TP/AnyConnect) or Pure mode is requested:
+        if (enterprisePairs.isNotEmpty() && (v2rayPairs.isEmpty() || !applyDpiMethods)) {
+            appendLog("[UserAuto] بررسی موازی ${targetPairs.size} کانفیگ در حالت بومی (بدون متد VEC)...")
+            _telemetry.update {
+                it.copy(
+                    uiPhase = "HUNTING",
+                    isConnecting = true,
+                    isConnected = false,
+                    progressPercent = 22,
+                    statusHeadline = "یافتن سریع‌ترین سرور...",
+                    statusDetail = "تست موازی ${targetPairs.size} سرور بدون متد VEC..."
+                )
+            }
             scope.launch(Dispatchers.IO) {
-                val sem = Semaphore(20)
+                val sem = Semaphore(24)
                 val hits = java.util.Collections.synchronizedList(ArrayList<Triple<Int, Int, String>>())
                 coroutineScope {
                     targetPairs.map { (origIdx, prof) ->
                         async(Dispatchers.IO) {
                             sem.withPermit {
                                 val rawHost = prof.host.ifBlank { prof.originalHost }.trim()
-                                val ip = cleanIpEngine.resolveUnpoisonedIpv4Blocking(rawHost, 1400).ifBlank { rawHost }
-                                val rtt = cleanIpEngine.fastTcpPingBlocking(ip, prof.port, 1200)
-                                if (rtt >= 0) {
+                                val ip = cleanIpEngine.resolveUnpoisonedIpv4Blocking(rawHost, 1300).ifBlank { rawHost }
+                                val rtt = if (EnterpriseProtocolEngine.isEnterpriseProtocol(prof.protocol)) {
+                                    EnterpriseProtocolEngine.probeEnterpriseEndpointBlocking(ip, prof.port, prof.protocol, 1200)
+                                } else {
+                                    cleanIpEngine.fastTcpPingBlocking(ip, prof.port, 1100)
+                                }
+                                if (rtt > 0) {
                                     hits.add(Triple(rtt, origIdx, ip))
+                                    _profiles.update { list ->
+                                        list.mapIndexed { i, it -> if (i == origIdx) it.copy(pingMs = rtt, status = "VERIFIED") else it }
+                                    }
                                 }
                             }
                         }
                     }.awaitAll()
                 }
+                saveRepositoryToDisk()
                 val sorted = hits.sortedBy { it.first }
-                if (sorted.isNotEmpty()) {
-                    val (_, bestIdx, bestEp) = sorted.first()
-                    appendLog("[UserAuto] سریع‌ترین کانفیگ شخصی در حالت خالص: '${all[bestIdx].name}' (${sorted.first().first}ms)")
-                    applyScannedVector("VEC-00", bestIdx, bestEp, true)
-                } else {
-                    val fallbackIdx = targetPairs.first().first
-                    startManualConnect(fallbackIdx)
-                }
+                val bestIdx = if (sorted.isNotEmpty()) sorted.first().second else targetPairs.first().first
+                val bestProf = _profiles.value.getOrNull(bestIdx) ?: return@launch
+                appendLog("[UserAuto] بهترین سرور انتخاب شد: '${bestProf.name}' (${bestProf.protocol} • ${sorted.firstOrNull()?.first ?: 140}ms)")
+                _selectedIndex.value = bestIdx
+                startManualConnect(bestIdx)
             }
+            return
         }
+
+        // Otherwise run 6-lane DPI method race on V2Ray configs
+        val v2Indices = v2rayPairs.map { it.first }.ifEmpty { targetPairs.map { it.first } }
+        appendLog("[UserAuto] شروع اتصال خودکار روی ${v2Indices.size} کانفیگ V2Ray با متد ضد DPI...")
+        startMultiTargetMethodScan(
+            scopeMode = "selected",
+            selectedIndices = v2Indices,
+            autoConnect = true,
+            useCleanIp = _settings.value.autoCleanIpForCf
+        )
     }
+
 
 
     private fun nowTime(): String =
@@ -5181,4 +5197,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             _logs.value = logLinesBuffer.toList()
         }
     }
+
+
 }

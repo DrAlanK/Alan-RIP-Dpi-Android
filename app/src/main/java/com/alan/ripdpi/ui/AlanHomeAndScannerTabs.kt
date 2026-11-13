@@ -172,7 +172,10 @@ fun HomeTabScreen(
         else -> "${selectedAutoLocation.serverCount} سرور مخزن"
     }
 
-    val activeVecLabel = if (telemetry.isConnected) {
+    val isEnterpriseActive = activeProfile != null && activeProfile.protocol.lowercase(Locale.US) in setOf("anyconnect", "openconnect", "ikev2", "l2tp")
+    val activeVecLabel = if (isEnterpriseActive) {
+        "NATIVE"
+    } else if (telemetry.isConnected) {
         telemetry.activeVectorId
     } else if (!settings.applyDpiOnUserAuto && !isPureAutoMode) {
         "VEC-00"
@@ -498,7 +501,7 @@ fun HomeTabScreen(
                                     .padding(horizontal = 6.dp)
                             ) {
                                 Text(
-                                    text = if (settings.applyDpiOnUserAuto) "ضد DPI فعال" else "خالص v2ray",
+                                    text = if (isEnterpriseActive) "پروتکل بومی" else if (settings.applyDpiOnUserAuto) "ضد DPI فعال" else "خالص v2ray",
                                     color = if (settings.applyDpiOnUserAuto) p.accentGold else p.textSecondary,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 8.5.sp

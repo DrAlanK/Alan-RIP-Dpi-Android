@@ -390,4 +390,128 @@ object EnterpriseProtocolEngine {
             .put("settings", freedomSettings)
             .put("streamSettings", JSONObject().put("sockopt", sockopt))
     }
+
+    /**
+     * Compiles a standalone, zero-bridge Xray session for IKEv2 / L2TP / AnyConnect profiles.
+     * Never uses VEC-01..VEC-23 or FullDuplexMutatorBridge (which would fail on UDP 500/1701).
+     */
+    fun compileEnterpriseNativeSession(
+        rawUri: String,
+        gatewayIp: String,
+        settings: EngineSettings
+    ): String {
+        val root = JSONObject()
+        root.put("log", JSONObject().put("loglevel", "warning"))
+
+        val dnsObj = JSONObject()
+        val serversArr = JSONArray()
+        val dohUrl = settings.activeDohUrl.trim().ifBlank { "https://1.1.1.1/dns-query" }
+        val localDoh = if (dohUrl.startsWith("https://", true)) {
+            "https+local://" + dohUrl.substringAfter("://")
+        } else {
+            "https+local://1.1.1.1/dns-query"
+        }
+        serversArr.put(localDoh)
+        serversArr.put("tcp://1.1.1.1:53")
+        serversArr.put("tcp://8.8.8.8:53")
+        serversArr.put("1.1.1.1")
+        dnsObj.put("servers", serversArr)
+        dnsObj.put("queryStrategy", "UseIPv4")
+        root.put("dns", dnsObj)
+
+        val inbounds = JSONArray()
+        inbounds.put(
+            JSONObject()
+                .put("tag", "socks-in")
+                .put("port", settings.socksPort)
+                .put("listen", "127.0.0.1")
+                .put("protocol", "socks")
+                .put("settings", JSONObject().put("auth", "noauth").put("udp", true))
+                .put(
+                    "sniffing",
+                    JSONObject()
+                        .put("enabled", true)
+                        .put("destOverride", JSONArray().put("http").put("tls").put("quic"))
+                        .put("routeOnly", true)
+                )
+        )
+        inbounds.put(
+            JSONObject()
+                .put("tag", "http-in")
+                .put("port", settings.httpPort)
+                .put("listen", "127.0.0.1")
+                .put("protocol", "http")
+                .put("settings", JSONObject().put("allowTransparent", false))
+        )
+        root.put("inbounds", inbounds)
+
+        val fragObj = JSONObject()
+            .put("packets", "tlshello")
+            .put("length", settings.fragmentLength.ifBlank { "10-20" })
+            .put("interval", settings.fragmentInterval.ifBlank { "2-4" })
+
+        val proxyOut = JSONObject()
+            .put("tag", "proxy-out")
+            .put("protocol", "freedom")
+            .put(
+                "settings",
+                JSONObject()
+                    .put("domainStrategy", "UseIPv4")
+                    .put("fragment", fragObj)
+            )
+            .put(
+                "streamSettings",
+                JSONObject().put(
+                    "sockopt",
+                    JSONObject()
+                        .put("tcpNoDelay", true)
+                        .put("tcpKeepAliveIdle", 30)
+                )
+            )
+
+        val directOut = JSONObject()
+            .put("tag", "direct")
+            .put("protocol", "freedom")
+            .put("settings", JSONObject().put("domainStrategy", "UseIPv4"))
+
+        val dnsOut = JSONObject()
+            .put("tag", "dns-out")
+            .put("protocol", "dns")
+            .put("settings", JSONObject().put("network", "tcp").put("address", "1.1.1.1").put("port", 53))
+
+        val outbounds = JSONArray()
+            .put(proxyOut)
+            .put(directOut)
+            .put(dnsOut)
+        root.put("outbounds", outbounds)
+
+        val rules = JSONArray()
+        rules.put(
+            JSONObject()
+                .put("type", "field")
+                .put("inboundTag", JSONArray().put("socks-in").put("http-in"))
+                .put("port", 53)
+                .put("outboundTag", "dns-out")
+        )
+        rules.put(
+            JSONObject()
+                .put("type", "field")
+                .put("ip", JSONArray().put("127.0.0.0/8").put("10.0.0.0/8").put("192.168.0.0/16"))
+                .put("outboundTag", "direct")
+        )
+        rules.put(
+            JSONObject()
+                .put("type", "field")
+                .put("network", "tcp,udp")
+                .put("outboundTag", "proxy-out")
+        )
+
+        root.put(
+            "routing",
+            JSONObject()
+                .put("domainStrategy", "IPIfNonMatch")
+                .put("rules", rules)
+        )
+        return root.toString()
+    }
 }
