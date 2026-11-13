@@ -33,6 +33,7 @@ class FullDuplexMutatorBridge(
     initialCustomStride: Int = 400,
     initialJitterBytes: Int = 20,
     initialRawPassthrough: Boolean = false,
+    val socks5DynamicMode: Boolean = false,
     private val protectSocket: ((Socket) -> Boolean)? = null,
     private val onLog: ((String) -> Unit)? = null
 ) {
@@ -322,6 +323,82 @@ class FullDuplexMutatorBridge(
         return if (bodyRead == recLen) full else full.copyOf(5 + bodyRead)
     }
 
+    private fun negotiateSocks5Target(clientSock: Socket): Pair<String, Int>? {
+        return try {
+            clientSock.soTimeout = HANDSHAKE_READ_TIMEOUT_MS
+            val ins = clientSock.getInputStream()
+            val out = clientSock.getOutputStream()
+
+            val ver = ins.read()
+            if (ver != 0x05) return null
+            val nMethods = ins.read()
+            if (nMethods <= 0) return null
+            val methods = ByteArray(nMethods)
+            var rm = 0
+            while (rm < nMethods) {
+                val n = ins.read(methods, rm, nMethods - rm)
+                if (n <= 0) return null
+                rm += n
+            }
+            out.write(byteArrayOf(0x05, 0x00))
+            out.flush()
+
+            val hdr = ByteArray(4)
+            var rh = 0
+            while (rh < 4) {
+                val n = ins.read(hdr, rh, 4 - rh)
+                if (n <= 0) return null
+                rh += n
+            }
+            if ((hdr[0].toInt() and 0xFF) != 0x05) return null
+
+            val atyp = hdr[3].toInt() and 0xFF
+            val targetHost = when (atyp) {
+                0x01 -> {
+                    val ip4 = ByteArray(4)
+                    var i = 0
+                    while (i < 4) {
+                        val n = ins.read(ip4, i, 4 - i)
+                        if (n <= 0) return null
+                        i += n
+                    }
+                    InetAddress.getByAddress(ip4).hostAddress ?: return null
+                }
+                0x03 -> {
+                    val len = ins.read()
+                    if (len <= 0) return null
+                    val dom = ByteArray(len)
+                    var i = 0
+                    while (i < len) {
+                        val n = ins.read(dom, i, len - i)
+                        if (n <= 0) return null
+                        i += n
+                    }
+                    String(dom, Charsets.UTF_8).trim()
+                }
+                0x04 -> {
+                    val ip6 = ByteArray(16)
+                    var i = 0
+                    while (i < 16) {
+                        val n = ins.read(ip6, i, 16 - i)
+                        if (n <= 0) return null
+                        i += n
+                    }
+                    InetAddress.getByAddress(ip6).hostAddress ?: return null
+                }
+                else -> return null
+            }
+
+            val pHi = ins.read()
+            val pLo = ins.read()
+            if (pHi < 0 || pLo < 0) return null
+            val targetPort = ((pHi and 0xFF) shl 8) or (pLo and 0xFF)
+            targetHost to targetPort
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     private fun handleSession(clientSock: Socket, sid: Int) {
         val cfg = routeRef.get()
         if (cfg.remoteHost.isBlank()) {
@@ -340,7 +417,13 @@ class FullDuplexMutatorBridge(
             clientSock.tcpNoDelay = true
             clientSock.keepAlive = true
 
-            val targetAddr = resolveTargetAddress(cfg.remoteHost)
+            val (effectiveHost, effectivePort) = if (socks5DynamicMode) {
+                negotiateSocks5Target(clientSock) ?: return
+            } else {
+                cfg.remoteHost to cfg.remotePort
+            }
+
+            val targetAddr = resolveTargetAddress(effectiveHost)
             if (targetAddr is Inet4Address) {
                 try { remoteSock.bind(InetSocketAddress(0)) } catch (_: Throwable) {}
             }
@@ -350,8 +433,14 @@ class FullDuplexMutatorBridge(
             remoteSock.keepAlive = true
 
             val t0 = System.nanoTime()
-            remoteSock.connect(InetSocketAddress(targetAddr, cfg.remotePort), CONNECT_TIMEOUT_MS)
+            remoteSock.connect(InetSocketAddress(targetAddr, effectivePort), CONNECT_TIMEOUT_MS)
             val tcpMs = ((System.nanoTime() - t0) / 1_000_000L).toInt().coerceAtLeast(1)
+
+            if (socks5DynamicMode) {
+                val cOut = clientSock.getOutputStream()
+                cOut.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                cOut.flush()
+            }
 
             // Re-affirm fwmark protection after connect in case IPv6/dual-stack created FD during connect
             AlanVpnService.protectRawSocket(remoteSock)

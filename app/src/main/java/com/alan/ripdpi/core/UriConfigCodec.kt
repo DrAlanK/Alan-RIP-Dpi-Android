@@ -555,7 +555,8 @@ object UriConfigCodec {
             val rawJson = EnterpriseProtocolEngine.compileEnterpriseNativeSession(
                 rawUri = profile.uri,
                 gatewayIp = remoteHost,
-                settings = settings.copy(socksPort = socksPort, httpPort = httpPort)
+                settings = settings.copy(socksPort = socksPort, httpPort = httpPort),
+                bridgePort = bridgePort
             )
             return CompiledXraySession(
                 configJson = rawJson,

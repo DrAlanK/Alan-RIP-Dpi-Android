@@ -3796,10 +3796,11 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             NativeOobBridge.startEnterpriseRawInCCore(gw, safeProfile.port, safeProfile.protocol)
         }
 
+        // Always allocate a valid bridgePort so Xray routes through the VpnService-protected FullDuplexMutatorBridge and updates RX/TX counters!
         val session = UriConfigCodec.compileXraySession(
             profile = safeProfile,
             settings = if (isPureRaw) cfgSettings.copy(fragmentEnabled = false) else cfgSettings,
-            preferredBridgePort = if (isPureRaw) -1 else configuredBridgePort
+            preferredBridgePort = configuredBridgePort
         )
 
         val bridge = FullDuplexMutatorBridge(
@@ -3809,14 +3810,14 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             initialVector = vector,
             initialCustomStride = cfgSettings.forwardStrideBytes,
             initialJitterBytes = cfgSettings.strideJitterBytes,
+            initialRawPassthrough = isPureRaw,
+            socks5DynamicMode = isEnt,
             protectSocket = { sock -> AlanVpnService.protectRawSocket(sock) }
         )
-        if (!isPureRaw) {
-            bridge.start()
-        }
+        bridge.start()
 
         if (!xrayCoreManager.startCore(session.configJson)) {
-            if (!isPureRaw) bridge.stop()
+            bridge.stop()
             updateStageState(7, "FAILED", "خطا در اجرای مجدد هسته Xray", "ERR")
             _engineState.value = EngineState.ERROR
             _telemetry.update {
@@ -3841,6 +3842,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             verifiedLatencyMs = verifiedLatencyMs
         )
     }
+
 
 
     private suspend fun activateVerifiedSessionUnlocked(
