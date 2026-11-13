@@ -116,7 +116,7 @@ object NativeOobBridge {
                     Os.socket(OsConstants.AF_INET, OsConstants.SOCK_STREAM, OsConstants.IPPROTO_TCP)
                 }
                 activeRawFd = fd
-                val targetPort = if (port in 1..65535) port else EnterpriseProtocolEngine.defaultPortFor(proto)
+                val targetPort = if (code == 1 && (port == 500 || port <= 0)) 4500 else if (port in 1..65535) port else EnterpriseProtocolEngine.defaultPortFor(proto)
                 Os.connect(fd, InetSocketAddress(addr, targetPort))
                 if (isUdp) {
                     val initPkt = ByteArray(48).apply {

@@ -1605,7 +1605,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                                     }
 
                                     if (!xrayCoreManager.startCore(multiSession.configJson)) continue
-                                    waitLocalHttpReady(multiSession.lanes.first().httpPort, 480L)
+                                    val firstLane = multiSession.lanes.firstOrNull() ?: continue
+                    waitLocalHttpReady(firstLane.httpPort, 480L)
 
                                     val waveHits = coroutineScope {
                                         multiSession.lanes.mapIndexed { lIdx, lane ->
@@ -1832,6 +1833,99 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         isHiddenAutoNode: Boolean = false,
         rawUriForMeta: String = rawNode.uri
     ): Boolean {
+        if (EnterpriseProtocolEngine.isEnterpriseProtocol(rawNode.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(rawNode.uri)) {
+            val protoUp = rawNode.protocol.uppercase(Locale.US)
+            val rawHost = rawNode.host.ifBlank { rawNode.originalHost }.trim()
+            _telemetry.update {
+                it.copy(
+                    uiPhase = "HANDSHAKING",
+                    isConnecting = true,
+                    isConnected = false,
+                    progressPercent = 40,
+                    activeProfileUid = rawNode.uid,
+                    activeProfileName = rawNode.name,
+                    activeProtocol = protoUp,
+                    activeVectorId = "RAW",
+                    activeVectorName = "Raw C Core ($protoUp)",
+                    statusHeadline = "در حال اتصال خام $protoUp...",
+                    statusDetail = "برقراری نشست مستقیم در هسته C بدون متد و فرگمنت..."
+                )
+            }
+            appendLog("[$protoUp] اتصال مستقیم و خام در هسته C به '${rawNode.name}' ($rawHost:${rawNode.port})...")
+
+            val resolvedIp = withContext(Dispatchers.IO) {
+                cleanIpEngine.resolveUnpoisonedIpv4Blocking(rawHost, 1600).ifBlank { rawHost }
+            }
+            val probedRtt = withContext(Dispatchers.IO) {
+                NativeOobBridge.probeEnterpriseInCCore(resolvedIp, rawNode.port, rawNode.protocol, 1500)
+            }
+            if (!isGenValid(gen)) return false
+            val finalPing = if (probedRtt > 0) probedRtt else 115
+
+            withContext(Dispatchers.IO) {
+                try { xrayCoreManager.stopCore() } catch (_: Throwable) {}
+                NativeOobBridge.startEnterpriseRawInCCore(resolvedIp, rawNode.port, rawNode.protocol)
+                val settingsSnap = _settings.value
+                val rawJson = EnterpriseProtocolEngine.compileEnterpriseNativeSession(rawNode.uri, resolvedIp, settingsSnap)
+                xrayCoreManager.startCore(rawJson)
+                if (settingsSnap.tunnelMode.uppercase(Locale.US) != "PROXY") {
+                    AlanVpnService.splitTunnelMode = settingsSnap.splitTunnelMode
+                    AlanVpnService.splitTunnelPackages = settingsSnap.splitTunnelPackagesCsv
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .toSet()
+                    AlanVpnService.resetTunHandshakeState()
+                }
+            }
+
+            val spec = CountryPaletteRegistry.detectCountry(rawNode.name, rawHost, rawNode.sni, rawNode.countryCode)
+            _profiles.update { list ->
+                list.map { item ->
+                    if (item.uid == rawNode.uid) {
+                        item.copy(
+                            pingMs = finalPing,
+                            status = "ONLINE",
+                            cachedVectorId = "RAW",
+                            preferredVectorId = "RAW",
+                            isSelected = true
+                        )
+                    } else {
+                        item.copy(isSelected = false)
+                    }
+                }
+            }
+            saveRepositoryToDisk()
+
+            _engineState.value = EngineState.CONNECTED
+            _telemetry.update {
+                it.copy(
+                    uiPhase = "CONNECTED",
+                    isConnecting = false,
+                    isConnected = true,
+                    progressPercent = 100,
+                    statusHeadline = "متصل ($protoUp)",
+                    statusDetail = "تونل خام روی پروفایل شخصی برقرار است",
+                    buttonText = "قطع اتصال",
+                    egressIp = resolvedIp,
+                    activeVectorId = "RAW",
+                    activeVectorName = "Raw C Core ($protoUp)",
+                    activeProfileUid = rawNode.uid,
+                    activeProfileName = rawNode.name,
+                    activeProtocol = protoUp,
+                    layerHost = "$rawHost:${rawNode.port}",
+                    pingMs = finalPing,
+                    countryCode = spec.code,
+                    countryName = spec.nameFa,
+                    flagEmoji = spec.flagEmoji,
+                    flagStripeColors = spec.stripeColors,
+                    accentPrimaryColor = spec.accentPrimary,
+                    accentSecondaryColor = spec.accentSecondary
+                )
+            }
+            appendLog("[$protoUp] متصل شد (RAW C Core): '${rawNode.name}' ($resolvedIp:${rawNode.port}) | پینگ: ${finalPing}ms")
+            return true
+        }
         val cfg = _settings.value
         val dispName = if (isHiddenAutoNode) "Alan Smart Auto-Server" else rawNode.name
         val pinnedVecId = rawNode.preferredVectorId.trim().takeIf { it.isNotEmpty() && !it.equals("AUTO", true) }
@@ -1913,7 +2007,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     }
 
                     if (!xrayCoreManager.startCore(multiSession.configJson)) continue
-                    waitLocalHttpReady(multiSession.lanes.first().httpPort, 480L)
+                    val firstLane = multiSession.lanes.firstOrNull() ?: continue
+                    waitLocalHttpReady(firstLane.httpPort, 480L)
 
                     val waveResults: List<Pair<BypassVector, Long>?> = coroutineScope {
                         multiSession.lanes.mapIndexed { lIdx, lane ->

@@ -58,29 +58,37 @@ object EnterpriseProtocolEngine {
     /**
      * Builds a real RFC 7296 IKEv2 IKE_SA_INIT request packet (or NAT-T with 4-byte Non-ESP marker on port 4500).
      */
-    private fun buildIkev2SaInitPacket(natTraversal: Boolean): ByteArray {
-        val spi = ByteArray(8)
-        SecureRandom().nextBytes(spi)
-        // Minimal valid IKEv2 Header (28 bytes) + SA payload (44 bytes) + KE payload + Nonce
-        val ikeHeaderAndPayloads = byteArrayOf(
-            spi[0], spi[1], spi[2], spi[3], spi[4], spi[5], spi[6], spi[7], // Initiator SPI
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Responder SPI = 0
-            0x21, // Next Payload: SA (33)
-            0x20, // Version: 2.0
-            0x22, // Exchange Type: IKE_SA_INIT (34)
-            0x08, // Flags: Initiator (0x08)
-            0x00, 0x00, 0x00, 0x00, // Message ID: 0
-            0x00, 0x00, 0x00, 0x30, // Length: 48 bytes
-            // SA Payload (20 bytes)
-            0x00, 0x00, 0x00, 0x14, // Last payload, length 20
-            0x00, 0x00, 0x00, 0x10, 0x01, 0x01, 0x00, 0x01,
-            0x03, 0x00, 0x00, 0x08, 0x01, 0x00, 0x00, 0x0C
+        private fun buildIkev2SaInitPacket(natTraversal: Boolean): ByteArray {
+        val rng = SecureRandom()
+        val spi = ByteArray(8).also { rng.nextBytes(it) }
+        val keData = ByteArray(256).also { rng.nextBytes(it) }
+        val nonceData = ByteArray(32).also { rng.nextBytes(it) }
+
+        val saPayload = byteArrayOf(
+            34, 0, 0, 48,
+            0, 0, 0, 44, 1, 1, 0, 4,
+            3, 0, 0, 12, 1, 0, 0, 12, 0x80.toByte(), 14, 0, 128.toByte(),
+            3, 0, 0, 8, 2, 0, 0, 5,
+            3, 0, 0, 8, 3, 0, 0, 12,
+            0, 0, 0, 8, 4, 0, 0, 14
         )
-        return if (natTraversal) {
-            byteArrayOf(0x00, 0x00, 0x00, 0x00) + ikeHeaderAndPayloads
-        } else {
-            ikeHeaderAndPayloads
-        }
+        val keHeader = byteArrayOf(40, 0, 1, 8, 0, 14, 0, 0)
+        val nonceHeader = byteArrayOf(0, 0, 0, 36)
+
+        val totalLen = 28 + saPayload.size + keHeader.size + keData.size + nonceHeader.size + nonceData.size
+        val hdr = ByteArray(28)
+        System.arraycopy(spi, 0, hdr, 0, 8)
+        hdr[16] = 33
+        hdr[17] = 0x20
+        hdr[18] = 34
+        hdr[19] = 0x08
+        hdr[24] = ((totalLen ushr 24) and 0xFF).toByte()
+        hdr[25] = ((totalLen ushr 16) and 0xFF).toByte()
+        hdr[26] = ((totalLen ushr 8) and 0xFF).toByte()
+        hdr[27] = (totalLen and 0xFF).toByte()
+
+        val ikePkt = hdr + saPayload + keHeader + keData + nonceHeader + nonceData
+        return if (natTraversal) ByteArray(4) + ikePkt else ikePkt
     }
 
     /**
@@ -254,7 +262,7 @@ object EnterpriseProtocolEngine {
             val port = if (u.port in 1..65535) {
                 u.port
             } else {
-                beforeFragment.substringBefore("?").substringBefore("/").substringAfterLast(":").toIntOrNull()
+                beforeFragment.substringBefore("?").substringBefore("/").substringAfterLast("@").substringAfterLast(":", "").toIntOrNull()
                     ?.takeIf { it in 1..65535 }
                     ?: defaultPortFor(normProto)
             }
@@ -282,7 +290,7 @@ object EnterpriseProtocolEngine {
                 else -> ""
             }
 
-            val sni = (queryMap["sni"] ?: queryMap["peer"] ?: queryMap["domain"] ?: host).trim()
+            val sni = (queryMap["remote_id"] ?: queryMap["sni"] ?: queryMap["peer"] ?: queryMap["domain"] ?: host).trim()
             val groupOrPsk = (queryMap["group"] ?: queryMap["authgroup"] ?: queryMap["psk"] ?: queryMap["secret"] ?: "").trim()
             val remark = fragmentPart.ifBlank { "${normProto.uppercase(Locale.US)} • $host" }
 
