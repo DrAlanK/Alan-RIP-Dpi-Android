@@ -553,6 +553,16 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
     override fun getConfigEditable(index: Int): EditableConfigFields {
         val item = _profiles.value.getOrNull(index) ?: return EditableConfigFields()
+        if (EnterpriseProtocolEngine.isEnterpriseProtocol(item.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(item.uri)) {
+            return EnterpriseProtocolEngine.parseEnterpriseFullConfig(item.uri) ?: EditableConfigFields(
+                name = item.name,
+                protocol = item.protocol.lowercase(Locale.US),
+                address = item.host,
+                port = item.port,
+                sni = item.sni,
+                rawUri = item.uri
+            )
+        }
         return UriConfigCodec.toEditableFields(item)
     }
 
@@ -1845,7 +1855,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         isHiddenAutoNode: Boolean = false,
         rawUriForMeta: String = rawNode.uri
     ): Boolean {
-        val isEnterpriseNode = EnterpriseProtocolEngine.isEnterpriseProtocol(rawNode.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(rawNode.uri)
+        val safeNode = ensureValidProfileUri(rawNode)
+        val isEnterpriseNode = EnterpriseProtocolEngine.isEnterpriseProtocol(safeNode.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(safeNode.uri)
         val isPureUserV2ray = !isEnterpriseNode && !isHiddenAutoNode && !_settings.value.applyDpiOnUserAuto
         if (isEnterpriseNode || isPureUserV2ray) {
             val protoUp = rawNode.protocol.uppercase(Locale.US)
@@ -1895,12 +1906,12 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             val rawVec = VectorCatalog.findVector("VEC-00")
             finalizeAndLockWinnerUnlocked(
                 gen = gen,
-                baseNode = rawNode,
+                baseNode = safeNode,
                 endpointIp = resolvedIp,
                 vec = rawVec,
                 pingMs = probedRtt.toLong(),
                 isHiddenAutoNode = isHiddenAutoNode,
-                rawUriForMeta = rawNode.uri
+                rawUriForMeta = safeNode.uri
             )
             return _engineState.value == EngineState.CONNECTED
         }
@@ -3033,6 +3044,18 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         connectScannedProfile(index, if (vec == "AUTO") "" else vec, item.host)
     }
 
+
+    private fun ensureValidProfileUri(node: ProfileItem): ProfileItem {
+        val u = node.uri.trim()
+        if (u.contains("://")) return node
+        val proto = node.protocol.trim().lowercase(Locale.US).ifBlank { "ikev2" }
+        val host = node.host.ifBlank { node.originalHost }.trim()
+        val port = if (node.port in 1..65535) node.port else EnterpriseProtocolEngine.defaultPortFor(proto)
+        val sni = node.sni.ifBlank { host }
+        val rebuilt = "$proto://$host:$port/?sni=$sni#${java.net.URLEncoder.encode(node.name, "UTF-8")}"
+        return node.copy(uri = rebuilt)
+    }
+
     override fun clearLogs() {
         synchronized(logLinesBuffer) {
             logLinesBuffer.clear()
@@ -3763,14 +3786,24 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     ) {
         if (!isGenValid(gen)) return
         teardownActiveRuntime()
+        val safeProfile = ensureValidProfileUri(profile)
         val cfgSettings = _settings.value
+        val isEnt = EnterpriseProtocolEngine.isEnterpriseProtocol(safeProfile.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(safeProfile.uri)
+        val isPureRaw = isEnt || (!cfgSettings.autoPilot && !cfgSettings.applyDpiOnUserAuto) || vector.vectorId == "VEC-00"
+
+        if (isEnt) {
+            val gw = safeProfile.host.ifBlank { safeProfile.originalHost }.trim()
+            NativeOobBridge.startEnterpriseRawInCCore(gw, safeProfile.port, safeProfile.protocol)
+        }
+
         val session = UriConfigCodec.compileXraySession(
-            profile = profile,
-            settings = cfgSettings,
-            preferredBridgePort = configuredBridgePort
+            profile = safeProfile,
+            settings = if (isPureRaw) cfgSettings.copy(fragmentEnabled = false) else cfgSettings,
+            preferredBridgePort = if (isPureRaw) -1 else configuredBridgePort
         )
+
         val bridge = FullDuplexMutatorBridge(
-            listenPort = session.bridgePort,
+            listenPort = session.bridgePort.coerceAtLeast(20809),
             initialRemoteHost = session.remoteHost,
             initialRemotePort = session.remotePort,
             initialVector = vector,
@@ -3778,9 +3811,12 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             initialJitterBytes = cfgSettings.strideJitterBytes,
             protectSocket = { sock -> AlanVpnService.protectRawSocket(sock) }
         )
-        bridge.start()
+        if (!isPureRaw) {
+            bridge.start()
+        }
+
         if (!xrayCoreManager.startCore(session.configJson)) {
-            bridge.stop()
+            if (!isPureRaw) bridge.stop()
             updateStageState(7, "FAILED", "خطا در اجرای مجدد هسته Xray", "ERR")
             _engineState.value = EngineState.ERROR
             _telemetry.update {
@@ -3798,13 +3834,14 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
         activateVerifiedSessionUnlocked(
             gen = gen,
-            profile = profile,
+            profile = safeProfile,
             session = session,
             bridge = bridge,
             vector = vector,
             verifiedLatencyMs = verifiedLatencyMs
         )
     }
+
 
     private suspend fun activateVerifiedSessionUnlocked(
         gen: Long,
@@ -3874,6 +3911,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val finalPing = verifiedLatencyMs.toInt().coerceAtLeast(1)
         pushPingSample(finalPing.toFloat())
         updateProfileStatus(profile.uid, cachedVectorId = vector.vectorId, pingMs = finalPing, status = "VERIFIED")
+        for (s in 1..6) { updateStageState(s, "DONE", "تایید شد", "OK") }
         updateStageState(7, "DONE", "تونل AlanTUN فعال شد", "${country.flagEmoji} ${vector.vectorId}")
 
         val layerHostLabel = profile.sni.ifBlank { profile.host }

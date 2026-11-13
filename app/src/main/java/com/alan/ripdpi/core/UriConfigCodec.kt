@@ -545,13 +545,34 @@ object UriConfigCodec {
         preferredBridgePort: Int = 20809,
         forceLogSilent: Boolean = false
     ): CompiledXraySession {
+        if (EnterpriseProtocolEngine.isEnterpriseProtocol(profile.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(profile.uri)) {
+            val used = mutableSetOf<Int>()
+            val socksPort = allocateSafePort(preferredSocksPort, used).also { used.add(it) }
+            val httpPort = allocateSafePort(preferredHttpPort, used).also { used.add(it) }
+            val bridgePort = allocateSafePort(preferredBridgePort.coerceAtLeast(1025), used).also { used.add(it) }
+            val remoteHost = profile.host.ifBlank { profile.originalHost }.trim().ifBlank { "1.1.1.1" }
+            val remotePort = (if (profile.port > 0) profile.port else EnterpriseProtocolEngine.defaultPortFor(profile.protocol)).coerceIn(1, 65535)
+            val rawJson = EnterpriseProtocolEngine.compileEnterpriseNativeSession(
+                rawUri = profile.uri,
+                gatewayIp = remoteHost,
+                settings = settings.copy(socksPort = socksPort, httpPort = httpPort)
+            )
+            return CompiledXraySession(
+                configJson = rawJson,
+                socksPort = socksPort,
+                httpPort = httpPort,
+                bridgePort = bridgePort,
+                remoteHost = remoteHost,
+                remotePort = remotePort
+            )
+        }
         val spec = parseFullConfig(profile.uri)
             ?: throw IllegalArgumentException("Unsupported config URI: ${profile.name}")
 
         val used = mutableSetOf<Int>()
         val socksPort = allocateSafePort(preferredSocksPort, used).also { used.add(it) }
         val httpPort = allocateSafePort(preferredHttpPort, used).also { used.add(it) }
-        val bridgePort = allocateSafePort(preferredBridgePort, used).also { used.add(it) }
+        val bridgePort = if (preferredBridgePort < 0) -1 else allocateSafePort(preferredBridgePort, used).also { used.add(it) }
 
         val remoteHost = profile.host.ifBlank { spec.address }.trim()
         val remotePort = (if (profile.port > 0) profile.port else spec.port).coerceIn(1, 65535)
@@ -1223,7 +1244,7 @@ object UriConfigCodec {
 
         val results = LinkedHashSet<String>()
         val schemeRegex = Regex(
-            """(?i)\b(?:vless|vmess|trojan|ss|socks|anyconnect|openconnect|oc|cisco|ikev2|ipsec|l2tp|hy2|hysteria2|tuic)://[^\s"'<>]+"""
+            """(?i)\b(?:vless|vmess|trojan|ss|socks|anyconnect|openconnect|oc|cisco|ikev2|ipsec|l2tp|hy2|hysteria2|tuic)://[^\r\n"'<>]+"""
         )
 
         fun scanChunk(chunk: String) {
@@ -1231,30 +1252,6 @@ object UriConfigCodec {
                 val uri = m.value.trim().trimEnd(',', ';', ')', ']', '}')
                 if (uri.length > 10) {
                     results.add(uri)
-                }
-            }
-            if (chunk.contains("server:") || chunk.contains("\"server\"")) {
-                val proxyLineRegex = Regex("""\{[^{}]*?(?:"type"|type)\s*:\s*"?(anyconnect|openconnect|ikev2|l2tp|vless|vmess|trojan|ss)"?[^{}]*?\}""", RegexOption.IGNORE_CASE)
-                proxyLineRegex.findAll(chunk).forEach { pm ->
-                    val block = pm.value
-                    fun field(key: String): String {
-                        val r = Regex("""(?:"$key"|$key)\s*:\s*(?:"([^"]*)"|([^\s,}]+))""", RegexOption.IGNORE_CASE)
-                        val fm = r.find(block) ?: return ""
-                        return (fm.groupValues[1].ifEmpty { fm.groupValues[2] }).trim()
-                    }
-                    val pType = field("type").lowercase(Locale.US)
-                    val srv = field("server")
-                    val prt = field("port").toIntOrNull() ?: EnterpriseProtocolEngine.defaultPortFor(pType)
-                    val name = field("name").ifBlank { "${pType.uppercase(Locale.US)} • $srv" }
-                    val usr = field("username").ifBlank { field("uuid").ifBlank { field("user") } }
-                    val pwd = field("password").ifBlank { field("psk").ifBlank { field("secret") } }
-                    val sni = field("sni").ifBlank { field("servername") }
-                    val grp = field("group")
-                    if (srv.isNotEmpty() && EnterpriseProtocolEngine.isEnterpriseProtocol(pType)) {
-                        val cred = if (usr.isNotEmpty() && pwd.isNotEmpty()) "$usr:$pwd@" else if (usr.isNotEmpty()) "$usr@" else ""
-                        val encRem = java.net.URLEncoder.encode(name, "UTF-8")
-                        results.add("${EnterpriseProtocolEngine.normalizeProtocolName(pType)}://$cred$srv:$prt/?sni=$sni&group=$grp#$encRem")
-                    }
                 }
             }
         }
