@@ -18,8 +18,8 @@ android {
         applicationId = "com.alan.ripdpi"
         minSdk = 24
         targetSdk = 35
-        versionCode = 116
-        versionName = "1.5.1"
+        versionCode = 120
+        versionName = "1.6.0"
     }
 
     splits {

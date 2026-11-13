@@ -10,21 +10,30 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Icon
+import androidx.compose.ui.window.Dialog
+import androidx.compose.material3.Surface
+import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -54,45 +63,49 @@ fun GeneralSettingsScreen(
     onPatchSettings: (Map<String, Any>) -> Unit
 ) {
     val p = LocalAlanPalette.current
+    val isFa = LocalAlanLang.current == AlanLang.FA
 
     var tunMtuText by remember(settings.tunMtu) { mutableStateOf(settings.tunMtu.toString()) }
     var tunDnsText by remember(settings.tunDns) { mutableStateOf(settings.tunDns) }
     var socksPortText by remember(settings.socksPort) { mutableStateOf(settings.socksPort.toString()) }
     var httpPortText by remember(settings.httpPort) { mutableStateOf(settings.httpPort.toString()) }
     var subnetsUrlText by remember(settings.subnetsRepoUrl) { mutableStateOf(settings.subnetsRepoUrl) }
-    var autoRenameEnabled by remember(settings.autoRenameOnScan) { mutableStateOf(settings.autoRenameOnScan) }
     var savedMsg by remember { mutableStateOf("") }
 
     val methodOptions = remember(vectors) {
-        vectors.map { spec -> SelectOptionItem(spec.id, spec.id, spec.name.substringAfter("—").trim()) }
+        vectors.map { spec ->
+            SelectOptionItem(
+                value = spec.id,
+                label = spec.id,
+                subtitle = spec.name.substringAfter("—").trim()
+            )
+        }
     }
 
-    val modeOptions = remember {
-        listOf(
-            SelectOptionItem(
-                "auto_hybrid",
-                "ترکیبی هوشمند (پیشنهادی)",
-                "استفاده هم‌زمان از تمام متدها"
-            ),
-            SelectOptionItem(
-                "proprietary_only",
-                "فقط متدهای تزریق پکت",
-                "مخصوص عبور از فیلترینگ شدید SNI"
-            ),
-            SelectOptionItem(
-                "fragment_only",
-                "فقط متدهای فرگمنت",
-                "مناسب سرورهای کلادفلر و CDN"
-            )
+    val modeOptions = listOf(
+        SelectOptionItem(
+            "auto_hybrid",
+            tr("ترکیبی هوشمند (پیشنهادی)", "Smart Hybrid (Recommended)"),
+            tr("استفاده ترکیبی از تمام متدها", "All proprietary & fragment vectors")
+        ),
+        SelectOptionItem(
+            "proprietary_only",
+            tr("فقط متدهای ساختاری پکت", "Proprietary Desync Only"),
+            tr("مخصوص عبور از فیلترینگ شدید SNI", "Deep SNI stream desynchronization")
+        ),
+        SelectOptionItem(
+            "fragment_only",
+            tr("فقط متدهای فرگمنت", "TLS Fragment Only"),
+            tr("مناسب سرورهای کلادفلر و CDN", "Optimized for Cloudflare & CDN edges")
         )
-    }
+    )
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -100,7 +113,7 @@ fun GeneralSettingsScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = "تنظیمات عمومی",
+                text = tr("تنظیمات عمومی", "General Settings"),
                 color = p.textPrimary,
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 16.sp
@@ -108,16 +121,16 @@ fun GeneralSettingsScreen(
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .height(36.dp)
-                    .alanGlassCard(cornerRadius = 11.dp)
+                    .height(34.dp)
+                    .alanGlassCard(cornerRadius = 10.dp)
                     .clickable {
                         onReplaceSettings(EngineSettings(darkTheme = settings.darkTheme))
-                        savedMsg = "تنظیمات به حالت پیش‌فرض برگشت."
+                        savedMsg = if (isFa) "تنظیمات به حالت پیش‌فرض برگشت." else "Settings restored to defaults."
                     }
-                    .padding(horizontal = 13.dp)
+                    .padding(horizontal = 12.dp)
             ) {
                 Text(
-                    text = "بازنشانی پیش‌فرض",
+                    text = tr("پیش‌فرض", "Reset Defaults"),
                     color = p.accentGold,
                     fontWeight = FontWeight.Bold,
                     fontSize = 11.5.sp
@@ -129,9 +142,9 @@ fun GeneralSettingsScreen(
             Text(savedMsg, color = p.emerald, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
         }
 
-        SimpleSectionCard("متد عبور از فیلتر") {
+        SimpleSectionCard(tr("متد عبور از فیلتر", "Anti-DPI Bypass Method")) {
             AlanCustomSelectBox(
-                label = "انتخاب متد دستی",
+                label = tr("متد دستی پیش‌فرض", "Manual Vector"),
                 selectedValue = settings.manualVectorId,
                 options = methodOptions,
                 onSelect = { onPatchSettings(mapOf("manualVectorId" to it)) }
@@ -153,17 +166,12 @@ fun GeneralSettingsScreen(
                         tint = if (isFindingBestMethod) Color.White else p.onAccent,
                         modifier = Modifier.size(18.dp)
                     )
-                    .clickable { onAutoDetectBestMethod() }
-                    .padding(vertical = 14.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Icon(Icons.Outlined.AutoFixHigh, null, tint = if (isFindingBestMethod) p.danger else p.accentGold, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(7.dp))
                     Text(
                         text = if (isFindingBestMethod) {
-                            "توقف جستجوی متد"
+                            tr("توقف جستجوی متد", "Stop Method Detection")
                         } else {
-                            "پیدا کردن خودکار بهترین متد"
+                            tr("پیدا کردن خودکار بهترین متد", "Auto-Detect Best Method")
                         },
                         color = if (isFindingBestMethod) Color.White else p.onAccent,
                         fontWeight = FontWeight.ExtraBold,
@@ -185,65 +193,60 @@ fun GeneralSettingsScreen(
                 )
             }
 
-            AlanCustomSelectBox("حالت کاری موتور", settings.engineMode, modeOptions, { onPatchSettings(mapOf("engineMode" to it)) })
+            AlanCustomSelectBox(
+                label = tr("حالت کاری موتور", "Engine Mode"),
+                selectedValue = settings.engineMode,
+                options = modeOptions,
+                onSelect = { onPatchSettings(mapOf("engineMode" to it)) }
+            )
         }
 
-        SimpleSectionCard("ظاهر برنامه") {
+        SimpleSectionCard(tr("ظاهر برنامه", "Appearance")) {
             CleanSwitchItem(
-                title = "تم تیره نئومورفیک (حالت شب)",
-                subtitle = "با خاموش کردن این گزینه، تم روشن نئومورفیک فعال می‌شود",
+                title = tr("تم تیره نئومورفیک", "Dark Neumorphic Theme"),
+                subtitle = tr("با خاموش کردن این گزینه تم روشن فعال می‌شود", "Disable to switch to clean Light Neumorphic surface"),
                 checked = settings.darkTheme,
                 onChecked = { onPatchSettings(mapOf("darkTheme" to it)) }
             )
         }
 
-        SimpleSectionCard("اتصال هوشمند و مخزن") {
+        SimpleSectionCard(tr("اتصال هوشمند", "Smart Automation")) {
             CleanSwitchItem(
-                title = "تزریق خودکار IP تمیز روی کلادفلر",
-                subtitle = "جایگزینی خودکار IP تمیز روی کانفیگ‌های کلادفلر و CDN",
+                title = tr("تزریق خودکار IP تمیز روی کلادفلر", "Auto Clean-IP for Cloudflare"),
+                subtitle = tr("جایگزینی خودکار IP تمیز روی سرورهای کلادفلر", "Automatically inject clean edge IPs on CF configs"),
                 checked = settings.autoCleanIpForCf,
                 onChecked = { onPatchSettings(mapOf("autoCleanIpForCf" to it)) }
             )
             CleanSwitchItem(
-                title = "انتخاب خودکار متد هنگام اتصال",
-                subtitle = "اسکن و قفل بهترین متد در زمان زدن دکمه اتصال",
+                title = tr("انتخاب خودکار متد هنگام اتصال", "Smart Auto-Pilot"),
+                subtitle = tr("اسکن و قفل بهترین متد هنگام زدن دکمه اتصال", "Probe and lock fastest working vector on connect"),
                 checked = settings.autoPilot,
                 onChecked = { onPatchSettings(mapOf("autoPilot" to it)) }
             )
             CleanSwitchItem(
-                title = "نام‌گذاری خودکار با پرچم و کشور هنگام اسکن",
-                subtitle = "ثبت خودکار پرچم و نام کشور روی کانفیگ‌ها پس از تست پینگ واقعی",
-                checked = autoRenameEnabled,
-                onChecked = {
-                    autoRenameEnabled = it
-                    setAutoRenameOnScanPreference(it)
-                    onPatchSettings(mapOf("autoRenameOnScan" to it))
-                }
-            )
-            CleanSwitchItem(
-                title = "تست پایداری یوتیوب",
-                subtitle = "اطمینان از قطع نشدن استریم بعد از چند ثانیه",
+                title = tr("تست پایداری یوتیوب", "YouTube 6s Stability Check"),
+                subtitle = tr("اطمینان از قطع نشدن استریم پس از چند ثانیه", "Verify sustained stream throughput during probe"),
                 checked = settings.requireYoutube6s,
                 onChecked = { onPatchSettings(mapOf("requireYoutube6s" to it)) }
             )
             CleanSwitchItem(
-                title = "تست سلامت آپلود",
-                subtitle = "بررسی باز بودن مسیر ارسال داده (Uplink)",
+                title = tr("تست سلامت آپلود", "Verify Upload Stream"),
+                subtitle = tr("بررسی باز بودن مسیر ارسال داده (Uplink)", "Ensure outbound uplink frames are not throttled"),
                 checked = settings.verifyUploadStream,
                 onChecked = { onPatchSettings(mapOf("verifyUploadStream" to it)) }
             )
             CleanSwitchItem(
-                title = "تعمیر خودکار اتصال (Watchdog)",
-                subtitle = "جایگزینی خودکار متد در صورت افت اینترنت",
+                title = tr("تعمیر خودکار اتصال (Watchdog)", "Self-Healing Watchdog"),
+                subtitle = tr("سوییچ خودکار متد در صورت افت یا قطعی تونل", "Automatically recover tunnel if network drops"),
                 checked = settings.selfHealingWatchdog,
                 onChecked = { onPatchSettings(mapOf("selfHealingWatchdog" to it)) }
             )
         }
 
-        SimpleSectionCard("شبکه و پورت‌ها") {
+        SimpleSectionCard(tr("شبکه و پورت‌ها", "Network & Local Ports")) {
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
                 AlanSheetTextField(
-                    label = "MTU تونل",
+                    label = tr("MTU تونل", "TUN MTU"),
                     value = tunMtuText,
                     onValueChange = { tunMtuText = it.filter(Char::isDigit) },
                     ltr = true,
@@ -251,7 +254,7 @@ fun GeneralSettingsScreen(
                     modifier = Modifier.weight(1f)
                 )
                 AlanSheetTextField(
-                    label = "آدرس DNS",
+                    label = tr("آدرس DNS", "TUN DNS"),
                     value = tunDnsText,
                     onValueChange = { tunDnsText = it },
                     ltr = true,
@@ -260,7 +263,7 @@ fun GeneralSettingsScreen(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
                 AlanSheetTextField(
-                    label = "پورت SOCKS5",
+                    label = "SOCKS5 Port",
                     value = socksPortText,
                     onValueChange = { socksPortText = it.filter(Char::isDigit) },
                     ltr = true,
@@ -268,7 +271,7 @@ fun GeneralSettingsScreen(
                     modifier = Modifier.weight(1f)
                 )
                 AlanSheetTextField(
-                    label = "پورت HTTP",
+                    label = "HTTP Port",
                     value = httpPortText,
                     onValueChange = { httpPortText = it.filter(Char::isDigit) },
                     ltr = true,
@@ -277,7 +280,7 @@ fun GeneralSettingsScreen(
                 )
             }
             AlanSheetTextField(
-                label = "لینک فایل ساب‌نت گیت‌هاب",
+                label = tr("لینک فایل ساب‌نت گیت‌هاب", "GitHub Subnets URL"),
                 value = subnetsUrlText,
                 onValueChange = { subnetsUrlText = it },
                 ltr = true
@@ -300,11 +303,11 @@ fun GeneralSettingsScreen(
                                 "subnetsRepoUrl" to subnetsUrlText.trim()
                             )
                         )
-                        savedMsg = "تنظیمات شبکه ذخیره شد."
+                        savedMsg = if (isFa) "تنظیمات شبکه ذخیره شد." else "Network settings saved."
                     }
             ) {
                 Text(
-                    text = "ذخیره تنظیمات شبکه",
+                    text = tr("ذخیره تنظیمات شبکه", "Save Network Settings"),
                     color = p.onAccent,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 13.sp
@@ -320,6 +323,8 @@ fun XraySettingsScreen(
     onPatchSettings: (Map<String, Any>) -> Unit
 ) {
     val p = LocalAlanPalette.current
+    val isFa = LocalAlanLang.current == AlanLang.FA
+
     var strideText by remember(settings.forwardStrideBytes) { mutableStateOf(settings.forwardStrideBytes.toString()) }
     var jitterText by remember(settings.strideJitterBytes) { mutableStateOf(settings.strideJitterBytes.toString()) }
     var fragLenText by remember(settings.fragmentLength) { mutableStateOf(settings.fragmentLength) }
@@ -329,14 +334,14 @@ fun XraySettingsScreen(
     var savedMsg by remember { mutableStateOf("") }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Text(
-            text = "تنظیمات هسته Xray",
+            text = tr("تنظیمات Xray و فرگمنت", "Xray & Fragment Settings"),
             color = p.textPrimary,
             fontWeight = FontWeight.ExtraBold,
             fontSize = 16.sp
@@ -346,23 +351,23 @@ fun XraySettingsScreen(
             Text(savedMsg, color = p.emerald, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
         }
 
-        SimpleSectionCard("تنظیمات TLS و مرورگر") {
+        SimpleSectionCard(tr("تنظیمات TLS و مرورگر", "TLS & uTLS Fingerprint")) {
             AlanCustomSelectBox(
-                label = "شبیه‌سازی مرورگر (Fingerprint)",
+                label = tr("شبیه‌سازی مرورگر (Fingerprint)", "uTLS Fingerprint"),
                 selectedValue = settings.fingerprint,
                 options = listOf("custom_poly", "chrome", "firefox", "safari", "ios", "edge", "randomized")
                     .map { SelectOptionItem(it, it) },
                 onSelect = { onPatchSettings(mapOf("fingerprint" to it)) }
             )
             AlanCustomSelectBox(
-                label = "تنظیم ALPN",
+                label = tr("تنظیم ALPN", "ALPN Override"),
                 selectedValue = settings.alpnOverride,
                 options = listOf("auto", "h2,http/1.1", "http/1.1", "h2")
                     .map { SelectOptionItem(it, it) },
                 onSelect = { onPatchSettings(mapOf("alpnOverride" to it)) }
             )
             AlanSheetTextField(
-                label = "مقدار Early Data وب‌سوکت",
+                label = tr("مقدار Early Data وب‌سوکت", "WebSocket Early Data (Bytes)"),
                 value = earlyDataText,
                 onValueChange = { earlyDataText = it.filter(Char::isDigit) },
                 ltr = true,
@@ -370,10 +375,10 @@ fun XraySettingsScreen(
             )
         }
 
-        SimpleSectionCard("فرگمنت و برش پکت") {
+        SimpleSectionCard(tr("فرگمنت و برش پکت", "Packet Slicing & Fragment")) {
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
                 AlanSheetTextField(
-                    label = "طول گام برش (Bytes)",
+                    label = tr("طول گام برش (Bytes)", "Stride Bytes"),
                     value = strideText,
                     onValueChange = { strideText = it.filter(Char::isDigit) },
                     ltr = true,
@@ -381,7 +386,7 @@ fun XraySettingsScreen(
                     modifier = Modifier.weight(1f)
                 )
                 AlanSheetTextField(
-                    label = "نوسان تصادفی (Jitter)",
+                    label = tr("نوسان تصادفی (Jitter)", "Stride Jitter"),
                     value = jitterText,
                     onValueChange = { jitterText = it.filter(Char::isDigit) },
                     ltr = true,
@@ -391,8 +396,8 @@ fun XraySettingsScreen(
             }
 
             CleanSwitchItem(
-                title = "فرگمنت داخلی Xray (در حالت دستی)",
-                subtitle = "خرد کردن پکت‌های هندشیک TLS توسط هسته Xray",
+                title = tr("فرگمنت داخلی هسته Xray", "Xray Core TLS Fragment"),
+                subtitle = tr("خرد کردن پکت‌های هندشیک TLS در حالت دستی", "Slice outbound TLS ClientHello packets"),
                 checked = settings.fragmentEnabled,
                 onChecked = { onPatchSettings(mapOf("fragmentEnabled" to it)) }
             )
@@ -400,14 +405,14 @@ fun XraySettingsScreen(
             if (settings.fragmentEnabled) {
                 Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
                     AlanSheetTextField(
-                        label = "طول تکه (Length)",
+                        label = tr("طول تکه (Length)", "Fragment Length"),
                         value = fragLenText,
                         onValueChange = { fragLenText = it },
                         ltr = true,
                         modifier = Modifier.weight(1f)
                     )
                     AlanSheetTextField(
-                        label = "وقفه (ms)",
+                        label = tr("وقفه (ms)", "Interval (ms)"),
                         value = fragIntText,
                         onValueChange = { fragIntText = it },
                         ltr = true,
@@ -417,15 +422,15 @@ fun XraySettingsScreen(
             }
 
             CleanSwitchItem(
-                title = "ترکیب کانکشن‌ها (Mux)",
-                subtitle = "ارسال هم‌زمان چند درخواست در یک تونل",
+                title = tr("ترکیب کانکشن‌ها (Mux)", "Multiplexing (Mux)"),
+                subtitle = tr("ارسال هم‌زمان چند نشست روی یک کانکشن", "Bundle multiple TCP streams over one tunnel"),
                 checked = settings.muxEnabled,
                 onChecked = { onPatchSettings(mapOf("muxEnabled" to it)) }
             )
 
             if (settings.muxEnabled) {
                 AlanSheetTextField(
-                    label = "تعداد هم‌زمانی Mux",
+                    label = tr("تعداد هم‌زمانی Mux", "Mux Concurrency"),
                     value = muxText,
                     onValueChange = { muxText = it.filter(Char::isDigit) },
                     ltr = true,
@@ -451,11 +456,11 @@ fun XraySettingsScreen(
                                 "muxConcurrency" to (muxText.toIntOrNull()?.coerceIn(1, 64) ?: settings.muxConcurrency)
                             )
                         )
-                        savedMsg = "تنظیمات Xray ذخیره شد."
+                        savedMsg = if (isFa) "تنظیمات Xray ذخیره شد." else "Xray settings saved."
                     }
             ) {
                 Text(
-                    text = "ذخیره تنظیمات Xray",
+                    text = tr("ذخیره تنظیمات Xray", "Save Xray Settings"),
                     color = p.onAccent,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 13.sp
@@ -475,7 +480,7 @@ private fun SimpleSectionCard(
         verticalArrangement = Arrangement.spacedBy(11.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .alanGlassCard(cornerRadius = 18.dp)
+            .alanGlassCard(cornerRadius = 16.dp)
             .padding(14.dp)
     ) {
         Text(title, color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 13.5.sp)
@@ -496,7 +501,7 @@ private fun CleanSwitchItem(
         horizontalArrangement = Arrangement.SpaceBetween,
         modifier = Modifier
             .fillMaxWidth()
-            .alanNeuInset(cornerRadius = 13.dp)
+            .alanNeuInset(cornerRadius = 12.dp)
             .clickable { onChecked(!checked) }
             .padding(horizontal = 13.dp, vertical = 10.dp)
     ) {
@@ -519,22 +524,10 @@ fun LogsTabScreen(
     val listState = rememberLazyListState()
     var copied by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
-    var activeFilter by remember { mutableStateOf("ALL") }
 
-    val filteredLogs = remember(logs, searchQuery, activeFilter) {
+    val filteredLogs = remember(logs, searchQuery) {
         val q = searchQuery.trim().lowercase(Locale.ROOT)
-        logs.filter { line ->
-            val low = line.lowercase(Locale.ROOT)
-            val catOk = when (activeFilter) {
-                "DPI" -> low.contains("mutator") || low.contains("vec-") || low.contains("tls-hello") || low.contains("dpi") || low.contains("lab")
-                "DNS" -> low.contains("dns") || low.contains("doh")
-                "CLEAN" -> low.contains("clean-ip") || low.contains("edge") || low.contains("tcp-dial")
-                "XRAY" -> low.contains("xray") || low.contains("alantun") || low.contains("egress")
-                "ERR" -> low.contains("err") || low.contains("fail") || low.contains("timeout")
-                else -> true
-            }
-            catOk && (q.isEmpty() || low.contains(q))
-        }
+        if (q.isEmpty()) logs else logs.filter { it.lowercase(Locale.ROOT).contains(q) }
     }
 
     LaunchedEffect(filteredLogs.size) {
@@ -544,10 +537,10 @@ fun LogsTabScreen(
     }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(9.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -556,15 +549,19 @@ fun LogsTabScreen(
         ) {
             Column {
                 Text(
-                    text = "کنسول لاگ عمیق مهندسی",
+                    text = tr("لاگ‌های زنده", "Live Engine Logs"),
                     color = p.textPrimary,
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 15.5.sp
+                    fontSize = 16.sp
                 )
                 Text(
-                    text = if (copied) "تمام خطوط در کلیپ‌بورد کپی شد." else "${filteredLogs.size} رویداد ثبت‌شده",
+                    text = if (copied) {
+                        tr("در کلیپ‌بورد کپی شد.", "Copied to clipboard.")
+                    } else {
+                        tr("${filteredLogs.size} خط نمایش داده‌شده", "${filteredLogs.size} lines")
+                    },
                     color = if (copied) p.emerald else p.textSecondary,
-                    fontSize = 10.5.sp
+                    fontSize = 11.sp
                 )
             }
 
@@ -573,10 +570,10 @@ fun LogsTabScreen(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .height(36.dp)
-                        .alanGlassCard(cornerRadius = 11.dp)
+                        .alanGlassCard(cornerRadius = 10.dp)
                         .clickable {
                             if (filteredLogs.isNotEmpty()) {
-                                copyPlainTextToClipboard(context, "AlanDeepLogs", filteredLogs.joinToString("\n"))
+                                copyPlainTextToClipboard(context, "Logs", filteredLogs.joinToString("\n"))
                                 copied = true
                             }
                         }
@@ -585,7 +582,7 @@ fun LogsTabScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.ContentCopy, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
                         Spacer(Modifier.width(5.dp))
-                        Text("کپی لاگ", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Text(tr("کپی", "Copy"), color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
                     }
                 }
 
@@ -593,7 +590,7 @@ fun LogsTabScreen(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .height(36.dp)
-                        .alanGlassCard(cornerRadius = 11.dp)
+                        .alanGlassCard(cornerRadius = 10.dp)
                         .clickable {
                             copied = false
                             onClearLogs()
@@ -601,56 +598,16 @@ fun LogsTabScreen(
                         .padding(horizontal = 12.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.DeleteOutline, null, tint = p.danger, modifier = Modifier.size(15.dp))
+                        Icon(Icons.Outlined.DeleteOutline, null, tint = p.danger, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("پاک‌سازی", color = p.danger, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Text(tr("پاک کردن", "Clear"), color = p.danger, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
                     }
                 }
             }
         }
 
-        // Category Filter Chips
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-        ) {
-            listOf(
-                "ALL" to "همه (${logs.size})",
-                "DPI" to "DPI / Mutator",
-                "DNS" to "DNS / DoH",
-                "CLEAN" to "Clean-IP / TCP",
-                "XRAY" to "Xray / TUN",
-                "ERR" to "خطاها"
-            ).forEach { (key, title) ->
-                val sel = activeFilter == key
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .height(32.dp)
-                        .then(
-                            if (sel) {
-                                Modifier.alanNeuInset(cornerRadius = 10.dp, accented = true)
-                            } else {
-                                Modifier.alanGlassCard(cornerRadius = 10.dp)
-                            }
-                        )
-                        .clickable { activeFilter = key }
-                        .padding(horizontal = 11.dp)
-                ) {
-                    Text(
-                        text = title,
-                        color = if (sel) p.accentGold else p.textSecondary,
-                        fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold,
-                        fontSize = 10.5.sp
-                    )
-                }
-            }
-        }
-
         AlanSheetTextField(
-            label = "جستجو در جزئیات پکت، SNI، آی‌پی یا متد...",
+            label = tr("فیلتر و جستجو در لاگ‌ها...", "Filter logs..."),
             value = searchQuery,
             onValueChange = { searchQuery = it },
             ltr = true
@@ -660,44 +617,117 @@ fun LogsTabScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .alanNeuInset(cornerRadius = 18.dp)
+                .alanNeuInset(cornerRadius = 16.dp)
         ) {
             if (filteredLogs.isEmpty()) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Text("لاگی در این دسته وجود ندارد.", color = p.textMuted, fontSize = 12.sp)
+                    Text(
+                        text = tr("لاگی برای نمایش وجود ندارد.", "No logs to display."),
+                        color = p.textMuted,
+                        fontSize = 12.sp
+                    )
                 }
             } else {
                 LtrContent {
                     LazyColumn(
                         state = listState,
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(13.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        itemsIndexed(filteredLogs, key = { idx, _ -> idx }) { idx, line ->
+                        itemsIndexed(filteredLogs, key = { idx, _ -> idx }) { _, line ->
                             val low = line.lowercase(Locale.ROOT)
+                            // High-contrast theme-aware log colors for both Dark & Light modes
                             val col: Color = when {
                                 low.contains("error") || low.contains("fail") || low.contains("blocked") || low.contains("timeout") -> p.danger
-                                low.contains("up:") || low.contains("verified") || low.contains("doh-ok") || low.contains("winner") || low.contains("ready") -> p.emerald
-                                low.contains("vec-") || low.contains("dpi-bridge") || low.contains("tls-hello") || low.contains("clean-ip") -> p.accentGold
+                                low.contains("up:") || low.contains("verified") || low.contains("qualified") || low.contains("winner") || low.contains("ready") -> p.emerald
+                                low.contains("vec-") || low.contains("stage") -> p.accentGold
                                 else -> p.textPrimary
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                Text(
-                                    text = "%03d".format(idx + 1),
-                                    color = p.textMuted.copy(alpha = 0.6f),
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    lineHeight = 16.sp
+                                Box(
+                                    modifier = Modifier
+                                        .padding(top = 6.dp)
+                                        .size(5.dp)
+                                        .clip(CircleShape)
+                                        .background(col)
                                 )
                                 Text(
                                     text = line,
                                     color = col,
                                     fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    lineHeight = 16.sp
+                                    fontSize = 11.5.sp,
+                                    lineHeight = 17.sp
                                 )
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+@Composable
+fun PerAppProxySplitTunnelDialog(
+    currentMode: String,
+    selectedPackagesCsv: String,
+    installedApps: List<InstalledAppUiItem>,
+    onRequestLoadApps: (includeSystem: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    onSave: (mode: String, packages: Set<String>) -> Unit
+) {
+    val p = LocalAlanPalette.current
+    var mode by remember(currentMode) { mutableStateOf(currentMode.uppercase(Locale.US).let { if (it in setOf("ALL", "INCLUDE", "EXCLUDE")) it else "ALL" }) }
+    var showSys by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var selectedSet by remember(selectedPackagesCsv) { mutableStateOf(selectedPackagesCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()) }
+
+    LaunchedEffect(showSys) { onRequestLoadApps(showSys) }
+    val filtered = remember(installedApps, query) {
+        val q = query.trim().lowercase(Locale.ROOT)
+        installedApps.filter { q.isEmpty() || it.appName.lowercase(Locale.ROOT).contains(q) || it.packageName.lowercase(Locale.ROOT).contains(q) }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            Surface(shape = RoundedCornerShape(22.dp), color = p.surfaceBg, modifier = Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                        Text("تفکیک برنامه‌ها (Per-App Proxy)", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                        AlanNeuIconButton(Icons.Outlined.Close, p.textSecondary, 32.dp, onClick = onDismiss)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().alanNeuInset(cornerRadius = 12.dp).padding(4.dp)) {
+                        listOf("ALL" to "همه برنامه‌ها", "INCLUDE" to "فقط انتخابی‌ها", "EXCLUDE" to "عبور مستقیم").forEach { (k, t) ->
+                            val sel = mode == k
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.weight(1f).height(34.dp).then(if (sel) Modifier.alanGlassCard(highlighted = true, cornerRadius = 9.dp) else Modifier.clip(RoundedCornerShape(9.dp))).clickable { mode = k }) {
+                                Text(t, color = if (sel) p.emerald else p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 10.sp, maxLines = 1)
+                            }
+                        }
+                    }
+                    AlanSheetTextField("جستجوی برنامه...", query, { query = it }, ltr = false)
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().height(240.dp)) {
+                        itemsIndexed(filtered, key = { _, item -> item.packageName }) { _, app ->
+                            val chk = app.packageName in selectedSet
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().then(if (chk) Modifier.alanNeuInset(cornerRadius = 11.dp, accented = true) else Modifier.alanGlassCard(cornerRadius = 11.dp)).clickable {
+                                selectedSet = if (chk) selectedSet - app.packageName else selectedSet + app.packageName
+                            }.padding(horizontal = 11.dp, vertical = 8.dp)) {
+                                Box(contentAlignment = Alignment.Center, modifier = Modifier.size(20.dp).then(if (chk) Modifier.clip(RoundedCornerShape(5.dp)).background(p.emerald) else Modifier.alanNeuInset(cornerRadius = 5.dp))) {
+                                    if (chk) Icon(Icons.Outlined.Check, null, tint = Color(0xFF07130E), modifier = Modifier.size(13.dp))
+                                }
+                                Spacer(Modifier.width(9.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(app.appName, color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
+                                    LtrContent { Text(app.packageName, color = p.textMuted, fontFamily = FontFamily.Monospace, fontSize = 9.5.sp, maxLines = 1) }
+                                }
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.weight(1f).height(40.dp).alanNeuInset(cornerRadius = 11.dp).clickable { onDismiss() }) {
+                            Text("انصراف", color = p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.weight(1.3f).height(40.dp).clip(RoundedCornerShape(11.dp)).background(p.emerald).clickable { onSave(mode, selectedSet) }) {
+                            Text("ذخیره (${selectedSet.size})", color = Color(0xFF07130E), fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
                         }
                     }
                 }

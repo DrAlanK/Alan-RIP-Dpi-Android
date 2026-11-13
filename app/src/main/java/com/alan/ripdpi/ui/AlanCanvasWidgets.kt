@@ -1,6 +1,11 @@
 package com.alan.ripdpi.ui
 
 import android.graphics.BlurMaskFilter
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -39,15 +44,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -68,6 +69,7 @@ fun FlagStripeBadge(
     width: Dp = 26.dp,
     height: Dp = 17.dp
 ) {
+    val p = LocalAlanPalette.current
     val iso = countryCode.trim().uppercase(Locale.US)
     val resolved = remember(stripeColors, iso) {
         val base = if (stripeColors.size >= 3) {
@@ -89,13 +91,6 @@ fun FlagStripeBadge(
     ) {
         val w = size.width
         val h = size.height
-        val clipPath = Path().apply {
-            addRoundRect(androidx.compose.ui.geometry.RoundRect(0f, 0f, w, h, androidx.compose.ui.geometry.CornerRadius(4.dp.toPx())))
-        }
-
-        drawIntoCanvas {
-            it.clipPath(clipPath)
-        }
 
         when (iso) {
             "FR", "IT", "BE", "IE", "RO" -> {
@@ -167,11 +162,11 @@ fun StatusPillBadge(status: String) {
     val p = LocalAlanPalette.current
     val up = status.uppercase(Locale.US)
     val (label, col) = when (up) {
-        "ONLINE", "CONNECTED" -> "متصل" to p.emerald
-        "VERIFIED", "HEALTHY" -> "تایید شده" to p.emerald
-        "PROBING", "TESTING" -> "در حال تست" to p.accentGold
-        "DEAD", "ERROR", "FAILED" -> "بدون پینگ" to p.danger
-        else -> "تست‌نشده" to p.textMuted
+        "ONLINE", "CONNECTED" -> tr("متصل", "Online") to p.emerald
+        "VERIFIED", "HEALTHY" -> tr("تایید شده", "Verified") to p.emerald
+        "PROBING", "TESTING" -> tr("بررسی...", "Testing") to p.accentGold
+        "DEAD", "ERROR", "FAILED" -> tr("خطا", "Dead") to p.danger
+        else -> tr("آماده", "Ready") to p.textMuted
     }
 
     Box(
@@ -202,38 +197,28 @@ fun CenterPowerOrbButton(
     val isDark = p.isDark
     val isError = uiPhase.equals("ERROR", ignoreCase = true)
 
-    val inf = rememberInfiniteTransition(label = "wideCosmicNeuOrb")
-    val phaseRad by inf.animateFloat(
+    val inf = rememberInfiniteTransition(label = "seamlessBubbleOrb")
+    val masterClock by inf.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(if (isConnecting) 4200 else if (isConnected) 7200 else 9500, easing = LinearEasing)
+        ),
+        label = "masterClock"
+    )
+    val morphPhase by inf.animateFloat(
         initialValue = 0f,
         targetValue = (2.0 * PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = when {
-                    isConnecting -> 2100
-                    isConnected -> 4000
-                    else -> 5400
-                },
-                easing = LinearEasing
-            )
+            animation = tween(if (isConnecting) 2200 else if (isConnected) 4100 else 5600, easing = LinearEasing)
         ),
-        label = "phaseRad"
-    )
-    val orbitDeg by inf.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = if (isConnecting) 5800 else 13500,
-                easing = LinearEasing
-            )
-        ),
-        label = "orbitDeg"
+        label = "morphPhase"
     )
     val breathScale by inf.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.05f,
+        initialValue = 0.97f,
+        targetValue = 1.04f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = FastOutSlowInEasing),
+            animation = tween(2000, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "breathScale"
@@ -246,13 +231,7 @@ fun CenterPowerOrbButton(
         else -> "اتصال"
     }
 
-    val appliedModifier = if (modifier === Modifier) {
-        Modifier
-            .fillMaxWidth()
-            .height(220.dp)
-    } else {
-        modifier
-    }
+    val appliedModifier = if (modifier === Modifier) Modifier.fillMaxWidth().height(220.dp) else modifier
 
     Box(
         contentAlignment = Alignment.Center,
@@ -267,263 +246,113 @@ fun CenterPowerOrbButton(
             val cx = size.width / 2f
             val cy = size.height / 2f
             val minDim = size.minDimension
-            val halfW = size.width / 2f
+            val maxReachX = (size.width * 0.46f).coerceAtLeast(minDim * 0.55f)
+            val maxReachY = size.height * 0.46f
 
             val lightShadowCol = if (isDark) Color(0xFF2F384B).copy(alpha = 0.85f) else Color.White.copy(alpha = 0.98f)
             val darkShadowCol = if (isDark) Color(0xFF0C0F14).copy(alpha = 0.94f) else Color(0xFFB2C0D4).copy(alpha = 0.88f)
 
-            // 1. Wide Elliptical & Tilted Planetary Tracks (filling horizontal space around the orb, NO circular cage!)
-            val rxWide = (halfW * 0.88f).coerceAtLeast(minDim * 0.62f)
-            val ryFlat = minDim * 0.24f
-            val rxDiag = (halfW * 0.76f).coerceAtLeast(minDim * 0.56f)
-            val ryDiag = minDim * 0.34f
+            for (idx in 0 until 28) {
+                val baseAngleDeg = (idx * 137.508f) % 360f
+                val minR = 0.43f + (idx % 5) * 0.045f
+                val maxR = 0.78f + (idx % 7) * 0.055f
+                val sizeDp = 3.2f + (idx % 6) * 1.45f
+                val speed = 0.65f + (idx % 5) * 0.18f
+                val phaseOff = (idx * 0.19f) % 1f
+                val wobble = 8f + (idx % 4) * 5.5f
 
-            val trackStrokeColor = p.cardBorder.copy(alpha = if (isDark) 0.28f else 0.42f)
+                val rawLife = (masterClock * speed + phaseOff) % 1f
+                val angleRad = (baseAngleDeg + sin(morphPhase + idx) * wobble) * (PI / 180.0)
+                val radialProg = minR + (maxR - minR) * rawLife
+                val bx = cx + (cos(angleRad) * maxReachX * radialProg).toFloat()
+                val by = cy + (sin(angleRad) * maxReachY * radialProg).toFloat()
 
-            // Horizontal wide ellipse
-            drawOval(
-                color = trackStrokeColor,
-                topLeft = Offset(cx - rxWide, cy - ryFlat),
-                size = Size(rxWide * 2f, ryFlat * 2f),
-                style = Stroke(width = 1.dp.toPx())
-            )
-            // Tilted ellipse +19 deg
-            rotate(degrees = 19f, pivot = Offset(cx, cy)) {
-                drawOval(
-                    color = trackStrokeColor.copy(alpha = if (isDark) 0.20f else 0.30f),
-                    topLeft = Offset(cx - rxDiag, cy - ryDiag),
-                    size = Size(rxDiag * 2f, ryDiag * 2f),
-                    style = Stroke(width = 0.9.dp.toPx())
-                )
-            }
-            // Tilted ellipse -19 deg
-            rotate(degrees = -19f, pivot = Offset(cx, cy)) {
-                drawOval(
-                    color = trackStrokeColor.copy(alpha = if (isDark) 0.20f else 0.30f),
-                    topLeft = Offset(cx - rxDiag, cy - ryDiag),
-                    size = Size(rxDiag * 2f, ryDiag * 2f),
-                    style = Stroke(width = 0.9.dp.toPx())
-                )
-            }
-
-            // 2. 22 Tactile 3D Neumorphic Micro-Orbs gliding along the wide horizontal & tilted orbits
-            val totalMicroOrbs = 22
-            for (i in 0 until totalMicroOrbs) {
-                val band = i % 3
-                val speedMul = when (band) {
-                    0 -> 1.0f
-                    1 -> -0.75f
-                    else -> 0.55f
-                }
-                val deg = (i * (360f / totalMicroOrbs)) + (orbitDeg * speedMul)
-                val rad = deg * (PI / 180.0)
-
-                val aRx = when (band) {
-                    0 -> rxWide + sin(phaseRad + i) * 6.dp.toPx()
-                    1 -> rxDiag + cos(phaseRad + i * 0.7f) * 8.dp.toPx()
-                    else -> (halfW * 0.64f).coerceAtLeast(minDim * 0.48f) + sin(phaseRad * 1.3f + i) * 7.dp.toPx()
-                }
-                val bRy = when (band) {
-                    0 -> ryFlat + cos(phaseRad + i) * 4.dp.toPx()
-                    1 -> ryDiag
-                    else -> minDim * 0.43f
-                }
-                val tiltDeg = when (band) {
-                    0 -> 0.0
-                    1 -> 19.0 * (PI / 180.0)
-                    else -> -19.0 * (PI / 180.0)
+                val tint = when {
+                    isConnected -> if (idx % 3 == 0) p.emerald else if (idx % 2 == 0) Color(0xFF34D399) else p.cardBg
+                    isConnecting -> if (idx % 2 == 0) p.accentGold else p.emerald
+                    isError -> if (idx % 2 == 0) p.danger else p.cardBg
+                    else -> if (idx % 4 == 0) p.accentGold.copy(alpha = 0.78f) else p.cardBg
                 }
 
-                val ex = (aRx * cos(rad)).toFloat()
-                val ey = (bRy * sin(rad)).toFloat()
-                val px = cx + (ex * cos(tiltDeg) - ey * sin(tiltDeg)).toFloat()
-                val py = cy + (ex * sin(tiltDeg) + ey * cos(tiltDeg)).toFloat()
+                if (rawLife < 0.84f) {
+                    val norm = (rawLife / 0.84f).coerceIn(0f, 1f)
+                    val rPx = (sizeDp.dp.toPx() * (0.45f + 0.70f * sin(norm * (PI / 2.0)).toFloat())).coerceAtLeast(2f)
+                    val alpha = (0.25f + 0.75f * sin(norm * PI).toFloat()).coerceIn(0f, 1f)
 
-                val baseDotDp = when {
-                    i % 5 == 0 -> 6.8.dp
-                    i % 3 == 0 -> 5.0.dp
-                    i % 2 == 0 -> 3.8.dp
-                    else -> 2.8.dp
-                }
-                val pulseFactor = 0.84f + 0.28f * sin(phaseRad * 1.6f + i * 0.8f)
-                val dotR = baseDotDp.toPx() * pulseFactor
+                    drawCircle(darkShadowCol.copy(alpha = 0.55f * alpha), rPx, Offset(bx + 2.dp.toPx(), by + 2.dp.toPx()))
+                    drawCircle(lightShadowCol.copy(alpha = 0.65f * alpha), rPx, Offset(bx - 1.4.dp.toPx(), by - 1.4.dp.toPx()))
 
-                // 3D Neumorphic shadow & highlight for every micro-orb
-                drawCircle(
-                    color = darkShadowCol.copy(alpha = 0.65f),
-                    radius = dotR,
-                    center = Offset(px + 2.2.dp.toPx(), py + 2.2.dp.toPx())
-                )
-                drawCircle(
-                    color = lightShadowCol.copy(alpha = 0.75f),
-                    radius = dotR,
-                    center = Offset(px - 1.5.dp.toPx(), py - 1.5.dp.toPx())
-                )
-
-                val orbCoreColor = when {
-                    isConnected -> if (i % 3 == 0) p.emerald else if (i % 2 == 0) Color(0xFF34D399) else p.cardBg
-                    isConnecting -> if (i % 2 == 0) p.accentGold else p.emerald
-                    isError -> if (i % 2 == 0) p.danger else p.cardBg
-                    else -> if (i % 3 == 0) p.accentGold.copy(alpha = 0.82f) else p.cardBg
-                }
-                val rimHighlight = if (isDark) Color(0xFF384259) else Color.White
-
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            rimHighlight,
-                            orbCoreColor,
-                            if (isDark) Color(0xFF151922) else Color(0xFFCFD9E8)
+                    val spec = if (isDark) Color(0xFF43506B) else Color.White
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(spec.copy(alpha = alpha), tint.copy(alpha = alpha), (if (isDark) Color(0xFF141821) else Color(0xFFCFD9E8)).copy(alpha = alpha)),
+                            center = Offset(bx - rPx * 0.35f, by - rPx * 0.35f),
+                            radius = rPx * 1.55f
                         ),
-                        center = Offset(px - dotR * 0.32f, py - dotR * 0.32f),
-                        radius = dotR * 1.55f
-                    ),
-                    radius = dotR,
-                    center = Offset(px, py)
-                )
-            }
-
-            // 3. Large Free-Floating Organic Morphing Neumorphic Center Orb (Un-caged!)
-            val baseBlobR = minDim * 0.385f * breathScale
-            val morphAmp = when {
-                isConnecting -> baseBlobR * 0.115f
-                isConnected -> baseBlobR * 0.085f
-                else -> baseBlobR * 0.068f
-            }
-
-            fun buildMorphPath(offsetX: Float, offsetY: Float, scale: Float = 1f): Path {
-                val path = Path()
-                val steps = 84
-                for (s in 0..steps) {
-                    val theta = (s.toFloat() / steps.toFloat()) * (2.0 * PI).toFloat()
-                    val harmonic =
-                        0.48f * sin(3f * theta + phaseRad) +
-                        0.34f * cos(2f * theta - phaseRad * 1.35f) +
-                        0.18f * sin(4f * theta + phaseRad * 0.85f)
-                    val r = (baseBlobR * scale) + morphAmp * harmonic
-                    val x = cx + offsetX + r * cos(theta)
-                    val y = cy + offsetY + r * sin(theta)
-                    if (s == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                }
-                path.close()
-                return path
-            }
-
-            val shadowOff = 7.dp.toPx()
-            val outerMorphShadowDark = buildMorphPath(shadowOff, shadowOff, 1.01f)
-            val outerMorphShadowLight = buildMorphPath(-shadowOff, -shadowOff, 1.01f)
-
-            drawIntoCanvas { canvas ->
-                val darkPaint = Paint().asFrameworkPaint().apply {
-                    isAntiAlias = true
-                    color = darkShadowCol.toArgb()
-                    maskFilter = BlurMaskFilter(26f, BlurMaskFilter.Blur.NORMAL)
-                }
-                canvas.nativeCanvas.drawCircle(cx + shadowOff, cy + shadowOff, baseBlobR * 0.98f, darkPaint)
-
-                val lightPaint = Paint().asFrameworkPaint().apply {
-                    isAntiAlias = true
-                    color = (if (isConnected) p.emerald.copy(alpha = 0.38f) else lightShadowCol).toArgb()
-                    maskFilter = BlurMaskFilter(24f, BlurMaskFilter.Blur.NORMAL)
-                }
-                canvas.nativeCanvas.drawCircle(cx - shadowOff, cy - shadowOff, baseBlobR * 0.98f, lightPaint)
-            }
-
-            drawPath(
-                path = outerMorphShadowDark,
-                color = darkShadowCol.copy(alpha = 0.36f)
-            )
-            drawPath(
-                path = outerMorphShadowLight,
-                color = lightShadowCol.copy(alpha = 0.42f)
-            )
-
-            val mainBlobPath = buildMorphPath(0f, 0f, 1.0f)
-            val blobBrush = when {
-                isConnected -> Brush.linearGradient(
-                    colors = listOf(Color(0xFF4ADE80), Color(0xFF10B981), Color(0xFF047857)),
-                    start = Offset(cx - baseBlobR, cy - baseBlobR),
-                    end = Offset(cx + baseBlobR, cy + baseBlobR)
-                )
-                isConnecting -> Brush.linearGradient(
-                    colors = listOf(Color(0xFFFDE047), p.accentGold, Color(0xFFD97706)),
-                    start = Offset(cx - baseBlobR, cy - baseBlobR),
-                    end = Offset(cx + baseBlobR, cy + baseBlobR)
-                )
-                isError -> Brush.linearGradient(
-                    colors = listOf(Color(0xFFF87171), p.danger, Color(0xFFB91C1C)),
-                    start = Offset(cx - baseBlobR, cy - baseBlobR),
-                    end = Offset(cx + baseBlobR, cy + baseBlobR)
-                )
-                isDark -> Brush.linearGradient(
-                    colors = listOf(Color(0xFF2A3244), Color(0xFF1E232E), Color(0xFF151922)),
-                    start = Offset(cx - baseBlobR, cy - baseBlobR),
-                    end = Offset(cx + baseBlobR, cy + baseBlobR)
-                )
-                else -> Brush.linearGradient(
-                    colors = listOf(Color(0xFFFFFFFF), Color(0xFFE8EEF7), Color(0xFFD0DCEC)),
-                    start = Offset(cx - baseBlobR, cy - baseBlobR),
-                    end = Offset(cx + baseBlobR, cy + baseBlobR)
-                )
-            }
-            drawPath(path = mainBlobPath, brush = blobBrush)
-
-            // Inner Sculpted Morphing Cushion (adds deep tactile 3D softness without any hard border)
-            val innerCushionPath = buildMorphPath(0f, 0f, 0.82f)
-            val cushionBrush = when {
-                isConnected -> Brush.linearGradient(
-                    colors = listOf(Color(0xFF059669).copy(alpha = 0.35f), Color(0xFF6EE7B7).copy(alpha = 0.25f)),
-                    start = Offset(cx - baseBlobR, cy - baseBlobR),
-                    end = Offset(cx + baseBlobR, cy + baseBlobR)
-                )
-                isDark -> Brush.linearGradient(
-                    colors = listOf(Color(0xFF171B24).copy(alpha = 0.55f), Color(0xFF283042).copy(alpha = 0.45f)),
-                    start = Offset(cx - baseBlobR, cy - baseBlobR),
-                    end = Offset(cx + baseBlobR, cy + baseBlobR)
-                )
-                else -> Brush.linearGradient(
-                    colors = listOf(Color(0xFFD5E0F0).copy(alpha = 0.50f), Color.White.copy(alpha = 0.70f)),
-                    start = Offset(cx - baseBlobR, cy - baseBlobR),
-                    end = Offset(cx + baseBlobR, cy + baseBlobR)
-                )
-            }
-            drawPath(path = innerCushionPath, brush = cushionBrush)
-        }
-
-        val contentColor = when {
-            isConnected || isConnecting -> Color(0xFF091410)
-            isError -> Color.White
-            else -> p.textPrimary
-        }
-
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.PowerSettingsNew,
-                contentDescription = centerLabel,
-                tint = if (!isConnected && !isConnecting && !isError) p.accentGold else contentColor,
-                modifier = Modifier.size(38.dp)
-            )
-            Spacer(Modifier.height(5.dp))
-            Text(
-                text = centerLabel,
-                color = contentColor,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 15.sp,
-                maxLines = 1
-            )
-            if (isConnecting && progressPercent > 0) {
-                LtrContent {
-                    Text(
-                        text = "${progressPercent.coerceIn(1, 99)}%",
-                        color = contentColor.copy(alpha = 0.85f),
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 10.5.sp
+                        radius = rPx,
+                        center = Offset(bx, by)
                     )
+                } else {
+                    val popFrac = ((rawLife - 0.84f) / 0.16f).coerceIn(0f, 1f)
+                    val fade = (1f - popFrac).coerceIn(0f, 1f)
+                    val baseR = sizeDp.dp.toPx() * 1.15f
+                    val popCol = if (isConnected) p.emerald else if (isError) p.danger else p.accentGold
+                    drawCircle(
+                        color = popCol.copy(alpha = 0.65f * fade),
+                        radius = baseR * (1f + 0.95f * popFrac),
+                        center = Offset(bx, by),
+                        style = Stroke(width = (1.5f * fade).dp.toPx().coerceAtLeast(0.5f))
+                    )
+                    for (d in 0 until 5) {
+                        val da = (d * 72f + baseAngleDeg) * (PI / 180.0)
+                        val dd = baseR * (0.7f + 1.45f * popFrac)
+                        drawCircle(
+                            color = popCol.copy(alpha = 0.8f * fade),
+                            radius = (1.7f * fade).dp.toPx().coerceAtLeast(0.5f),
+                            center = Offset(bx + (cos(da) * dd).toFloat(), by + (sin(da) * dd).toFloat())
+                        )
+                    }
                 }
+            }
+
+            val baseBlobR = minDim * 0.39f * breathScale
+            val morphAmp = if (isConnecting) baseBlobR * 0.11f else if (isConnected) baseBlobR * 0.082f else baseBlobR * 0.064f
+            val path = Path()
+            for (s in 0..84) {
+                val theta = (s.toFloat() / 84f) * (2.0 * PI).toFloat()
+                val h = 0.48f * sin(3f * theta + morphPhase) + 0.34f * cos(2f * theta - morphPhase * 1.35f) + 0.18f * sin(4f * theta + morphPhase * 0.85f)
+                val r = baseBlobR + morphAmp * h
+                val x = cx + r * cos(theta)
+                val y = cy + r * sin(theta)
+                if (s == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            path.close()
+
+            val off = 7.5.dp.toPx()
+            drawIntoCanvas { canvas ->
+                val dp = Paint().asFrameworkPaint().apply { isAntiAlias = true; color = darkShadowCol.toArgb(); maskFilter = BlurMaskFilter(28f, BlurMaskFilter.Blur.NORMAL) }
+                canvas.nativeCanvas.drawCircle(cx + off, cy + off, baseBlobR * 0.96f, dp)
+                val lp = Paint().asFrameworkPaint().apply { isAntiAlias = true; color = (if (isConnected) p.emerald.copy(alpha = 0.36f) else lightShadowCol).toArgb(); maskFilter = BlurMaskFilter(26f, BlurMaskFilter.Blur.NORMAL) }
+                canvas.nativeCanvas.drawCircle(cx - off, cy - off, baseBlobR * 0.96f, lp)
+            }
+
+            val unifiedBrush = when {
+                isConnected -> Brush.linearGradient(listOf(Color(0xFF4ADE80), Color(0xFF10B981), Color(0xFF059669)), Offset(cx - baseBlobR, cy - baseBlobR), Offset(cx + baseBlobR, cy + baseBlobR))
+                isConnecting -> Brush.linearGradient(listOf(Color(0xFFFDE047), p.accentGold, Color(0xFFD97706)), Offset(cx - baseBlobR, cy - baseBlobR), Offset(cx + baseBlobR, cy + baseBlobR))
+                isError -> Brush.linearGradient(listOf(Color(0xFFF87171), p.danger, Color(0xFFB91C1C)), Offset(cx - baseBlobR, cy - baseBlobR), Offset(cx + baseBlobR, cy + baseBlobR))
+                isDark -> Brush.linearGradient(listOf(Color(0xFF283042), Color(0xFF1E232E), Color(0xFF161A23)), Offset(cx - baseBlobR, cy - baseBlobR), Offset(cx + baseBlobR, cy + baseBlobR))
+                else -> Brush.linearGradient(listOf(Color(0xFFFFFFFF), Color(0xFFE6ECF5), Color(0xFFD3DFEE)), Offset(cx - baseBlobR, cy - baseBlobR), Offset(cx + baseBlobR, cy + baseBlobR))
+            }
+            drawPath(path = path, brush = unifiedBrush)
+        }
+
+        val contentColor = if (isConnected || isConnecting) Color(0xFF08130E) else if (isError) Color.White else p.textPrimary
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Icon(Icons.Outlined.PowerSettingsNew, centerLabel, tint = if (!isConnected && !isConnecting && !isError) p.accentGold else contentColor, modifier = Modifier.size(38.dp))
+            Spacer(Modifier.height(5.dp))
+            Text(centerLabel, color = contentColor, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, maxLines = 1)
+            if (isConnecting && progressPercent > 0) {
+                LtrContent { Text("${progressPercent.coerceIn(1, 99)}%", color = contentColor.copy(alpha = 0.85f), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 10.5.sp) }
             }
         }
     }
@@ -543,7 +372,22 @@ fun JustifiedCountryFlagsBar(
     isConnecting: Boolean
 ) {
     val p = LocalAlanPalette.current
+    val isFa = LocalAlanLang.current == AlanLang.FA
     val destAccent = destAccentLong.toThemeAwareAccent(p.accentGold)
+    val destSpec = remember(destCountryCode) { CountryPaletteRegistry.resolveByCode(destCountryCode) }
+
+    val originDisplay = if (isFa) {
+        "مبدا: ${originCountryName.ifBlank { "ایران" }}"
+    } else {
+        "Origin: Iran"
+    }
+
+    val destResolvedName = if (isFa) {
+        destCountryName.ifBlank { "خودکار" }
+    } else {
+        if (destCountryCode.equals("UN", true) || destCountryName == "خودکار") "Auto" else destSpec.nameEn
+    }
+    val destDisplay = if (isFa) "مقصد: $destResolvedName" else "Target: $destResolvedName"
 
     val inf = rememberInfiniteTransition(label = "pktBridge")
     val photonFrac by inf.animateFloat(
@@ -571,11 +415,7 @@ fun JustifiedCountryFlagsBar(
         verticalArrangement = Arrangement.spacedBy(7.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .alanGlassCard(
-                highlighted = isConnected,
-                cornerRadius = 18.dp,
-                accentBorderColor = p.emerald.copy(alpha = 0.6f)
-            )
+            .alanGlassCard(highlighted = isConnected, cornerRadius = 16.dp, accentBorderColor = p.emerald.copy(alpha = 0.55f))
             .padding(horizontal = 11.dp, vertical = 9.dp)
     ) {
         Row(
@@ -583,18 +423,18 @@ fun JustifiedCountryFlagsBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
-            // Origin Pod (Iran)
+            // Origin Pod
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .alanNeuInset(cornerRadius = 12.dp)
-                    .padding(horizontal = 9.dp, vertical = 6.dp)
+                    .alanNeuInset(cornerRadius = 11.dp)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
                 FlagStripeBadge(CountryPaletteRegistry.IRAN_SPEC.stripeColors, "IR", 26.dp, 17.dp)
                 Spacer(Modifier.width(7.dp))
                 Column {
                     Text(
-                        text = "مبدا: ${originCountryName.ifBlank { "ایران" }}",
+                        text = originDisplay,
                         color = p.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 10.5.sp,
@@ -632,7 +472,7 @@ fun JustifiedCountryFlagsBar(
                     )
                     for (k in 0..1) {
                         val f = (photonFrac + k * 0.5f) % 1f
-                        val xPos = w * (1f - f)
+                        val xPos = if (isFa) w * (1f - f) else w * f
                         drawCircle(
                             color = capsuleColor,
                             radius = 2.6.dp.toPx(),
@@ -646,12 +486,12 @@ fun JustifiedCountryFlagsBar(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .alanNeuInset(cornerRadius = 12.dp)
-                    .padding(horizontal = 9.dp, vertical = 6.dp)
+                    .alanNeuInset(cornerRadius = 11.dp)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "مقصد: ${destCountryName.ifBlank { "خودکار" }}",
+                        text = destDisplay,
                         color = p.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 10.5.sp,
@@ -680,14 +520,18 @@ fun JustifiedCountryFlagsBar(
             }
         }
 
-        // Bottom Status Strip
+        // Compact Status Strip
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = if (isConnected) "مسیر رمزنگاری‌شده دوطرفه فعال" else "آماده برقراری تونل ضد DPI",
+                text = if (isConnected) {
+                    tr("تونل رمزنگاری‌شده دوطرفه فعال", "Encrypted bidirectional tunnel active")
+                } else {
+                    tr("آماده عبور از فیلترینگ DPI", "Ready for anti-DPI tunnel")
+                },
                 color = p.textSecondary,
                 fontSize = 9.5.sp,
                 fontWeight = FontWeight.SemiBold,

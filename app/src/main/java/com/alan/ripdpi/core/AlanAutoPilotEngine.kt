@@ -18,6 +18,11 @@ import com.alan.ripdpi.ui.ConnectionStageStep
 import com.alan.ripdpi.ui.EditableConfigFields
 import com.alan.ripdpi.ui.EngineSettings
 import com.alan.ripdpi.ui.LiveVectorProbeItem
+import com.alan.ripdpi.ui.DohServerUiItem
+import com.alan.ripdpi.ui.DohScanUiState
+import com.alan.ripdpi.ui.InstalledAppUiItem
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import com.alan.ripdpi.ui.ProfileItem
 import com.alan.ripdpi.ui.ScanResultRow
 import com.alan.ripdpi.ui.ScanUiState
@@ -65,8 +70,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import android.util.Base64
 import java.security.MessageDigest
-import com.alan.ripdpi.ui.DohServerUiItem
-import com.alan.ripdpi.ui.DohScanUiState
 import com.alan.ripdpi.ui.RepoLocationOption
 import com.alan.ripdpi.ui.RepoScanReportSummary
 
@@ -129,15 +132,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
     private val _repoScanReport = MutableStateFlow(RepoScanReportSummary())
     override val repoScanReport: StateFlow<RepoScanReportSummary> = _repoScanReport.asStateFlow()
-
-    private val _dohServers = MutableStateFlow<List<DohServerUiItem>>(emptyList())
-    override val dohServers: StateFlow<List<DohServerUiItem>> = _dohServers.asStateFlow()
-
-    private val _dohScanState = MutableStateFlow(DohScanUiState())
-    override val dohScanState: StateFlow<DohScanUiState> = _dohScanState.asStateFlow()
-
-    private var dohScanJob: Job? = null
-    private val dohStopSignal = java.util.concurrent.atomic.AtomicBoolean(false)
 
     @Volatile
     private var cachedAutoRepoNodes: List<ProfileItem> = emptyList()
@@ -212,7 +206,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
 
     init {
-        BridgeDeepDiagnostics.globalDeepLogger = { msg -> appendLog(msg) }
         loadPersistentData()
         if (_settings.value.autoPilot) selectConfig(-1)
         loadScanCacheFromDisk()
@@ -220,7 +213,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         startTelemetryTicker()
         startSelfHealingWatchdog()
         triggerInstantGeoLocationProbes(_profiles.value.filter { it.countryCode == "UN" }, allowMicroTunnelForCdn = false)
-        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.4.2] Core Ready (${xrayCoreManager.getXrayVersion()})") }
+        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.0.0] Core Ready (${xrayCoreManager.getXrayVersion()})") }
     }
 
     fun bindVpnPermissionRequester(requester: ((() -> Unit) -> Unit)?) {
@@ -417,7 +410,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 return@launch
             }
 
-            val parsedItems = extracted.mapNotNull { UriConfigCodec.parseUriToProfileItem(it)?.takeIf { !CleanIpScannerEngine.isSubscriptionAnnouncementOrFakeNode(it) } }
+            val parsedItems = extracted.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
             if (parsedItems.isEmpty()) return@launch
 
             val list = _profiles.value.toMutableList()
@@ -599,7 +592,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             appendLog("Save config failed: invalid URI or host.")
             return
         }
-        val parsed = UriConfigCodec.parseUriToProfileItem(builtUri)?.takeIf { !CleanIpScannerEngine.isSubscriptionAnnouncementOrFakeNode(it) }
+        val parsed = UriConfigCodec.parseUriToProfileItem(builtUri)
         if (parsed == null) {
             appendLog("Save config failed: could not parse generated URI.")
             return
@@ -747,7 +740,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             }
 
             val uris = UriConfigCodec.extractConfigLinesFromSubscriptionBody(body)
-            val parsed = uris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it)?.takeIf { !CleanIpScannerEngine.isSubscriptionAnnouncementOrFakeNode(it) } }
+            val parsed = uris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
             val existingByUri = _profiles.value.associateBy { it.uri }
 
             val mergedSubItems = parsed.map { fresh ->
@@ -1432,13 +1425,23 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                             val (origIdx, prof) = pair
 
                             // Never inject Cloudflare IP unless user explicitly checked `useCleanIp = true`!
-                            val reachableEps: List<String> = resolveCandidateEndpointsForNode(
-                                node = prof,
-                                gen = myGen,
-                                portEdgeCache = portEdgeCache,
-                                sampleCount = 36,
-                                forceCleanIp = useCleanIp
-                            )
+                            val reachableEps: List<String> = if (useCleanIp && cleanIpEngine.isCloudflareEdgeProfile(prof)) {
+                                resolveCandidateEndpointsForNode(
+                                    node = prof,
+                                    gen = myGen,
+                                    portEdgeCache = portEdgeCache,
+                                    sampleCount = 30
+                                ).filter { cleanIpEngine.fastTcpPingBlocking(it, prof.port, 1400) >= 0 }
+                            } else {
+                                val realHost = prof.host.ifBlank { prof.originalHost }.trim()
+                                val unpoisonedIp = withContext(Dispatchers.IO) {
+                                    cleanIpEngine.resolveUnpoisonedIpv4Blocking(realHost, 1500).ifBlank { realHost }
+                                }
+                                val rtt = withContext(Dispatchers.IO) {
+                                    cleanIpEngine.fastTcpPingBlocking(unpoisonedIp, prof.port, 1500)
+                                }
+                                if (rtt >= 0) listOf(unpoisonedIp) else emptyList()
+                            }
 
                             if (reachableEps.isEmpty()) {
                                 appendLog("[Lab] Server unreachable on TCP: '${prof.name}' (${prof.host}:${prof.port})")
@@ -1662,25 +1665,36 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         node: ProfileItem,
         gen: Long,
         portEdgeCache: MutableMap<Int, List<String>>? = null,
-        sampleCount: Int = 36,
-        forceCleanIp: Boolean = false
+        sampleCount: Int = 34
     ): List<String> = withContext(Dispatchers.IO) {
-        val candidates = ArrayList<String>(5)
+        val candidates = ArrayList<String>(4)
         val origHost = node.originalHost.ifBlank { node.host }.trim()
         val curHost = node.host.trim()
-        val isCdn = forceCleanIp || cleanIpEngine.isCloudflareEdgeProfile(node)
 
-        appendLog("[DNS/EDGE] Resolving endpoints for '${node.name}' (host=$curHost, orig=$origHost, port=${node.port}, isCdn=$isCdn)")
+        if (curHost.isNotEmpty() && curHost != origHost && !CleanIpScannerEngine.isPoisonedIranIp(curHost)) {
+            if (cleanIpEngine.fastTcpPingBlocking(curHost, node.port, 950) >= 0) {
+                candidates.add(curHost)
+            }
+        }
 
-        // 1. If it's a Cloudflare/CDN config (e.g. .pages.dev, .workers.dev) or forceCleanIp is requested,
-        // ALWAYS fetch verified Clean Cloudflare Edge IPs FIRST because default .pages.dev DNS IPs are blocked!
-        if (isCdn) {
-            val cleanEdges: List<String> = if (portEdgeCache != null && !portEdgeCache[node.port].isNullOrEmpty()) {
+        val resolvedOrig = cleanIpEngine.resolveUnpoisonedIpv4Blocking(origHost, 1300)
+        val origAlive = if (resolvedOrig.isNotEmpty()) {
+            cleanIpEngine.fastTcpPingBlocking(resolvedOrig, node.port, 1000) >= 0
+        } else {
+            false
+        }
+        if (origAlive && resolvedOrig !in candidates) {
+            candidates.add(resolvedOrig)
+        }
+
+        val isCdn = cleanIpEngine.isCloudflareEdgeProfile(node)
+        if (_settings.value.autoCleanIpForCf && isCdn && isGenValid(gen)) {
+            val discoveredIps: List<String> = if (portEdgeCache != null && portEdgeCache.containsKey(node.port)) {
                 portEdgeCache[node.port].orEmpty()
-            } else {
+            } else if (!origAlive || candidates.isEmpty()) {
                 val hits = cleanIpEngine.quickFindBestCleanIps(
                     port = node.port,
-                    neededCount = 4,
+                    neededCount = 2,
                     sampleCount = sampleCount
                 )
                 val ips = hits.map { it.ip }
@@ -1688,53 +1702,24 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     portEdgeCache[node.port] = ips
                 }
                 ips
+            } else {
+                cleanIpEngine.getCachedHits().take(2).map { it.ip }
             }
-            for (ipVal in cleanEdges) {
+            for (ipVal in discoveredIps) {
                 if (ipVal.isNotEmpty() && ipVal !in candidates) {
                     candidates.add(ipVal)
                 }
             }
-            if (cleanEdges.isNotEmpty()) {
-                appendLog("[CLEAN-IP] Selected ${cleanEdges.size} live Cloudflare Edge IPs for '${node.name}': ${cleanEdges.joinToString(", ")}")
-            }
         }
 
-        // 2. If user already pinned a custom IP in node.host, check if it responds on TCP
-        if (curHost.isNotEmpty() && curHost != origHost && !CleanIpScannerEngine.isPoisonedIranIp(curHost)) {
-            val rtt = cleanIpEngine.fastTcpPingBlocking(curHost, node.port, 1100)
-            appendLog("[TCP-DIAL] Custom host $curHost:${node.port} -> ${if (rtt >= 0) "${rtt}ms" else "TIMEOUT"}")
-            if (rtt >= 0 && curHost !in candidates) {
-                candidates.add(0, curHost)
-            }
+        if (resolvedOrig.isNotEmpty() && resolvedOrig !in candidates) {
+            candidates.add(resolvedOrig)
         }
-
-        // 3. Also test direct DNS resolution of origHost
-        val resolvedOrig = cleanIpEngine.resolveUnpoisonedIpv4Blocking(origHost, 1400)
-        if (resolvedOrig.isNotEmpty()) {
-            val rtt = cleanIpEngine.fastTcpPingBlocking(resolvedOrig, node.port, 1150)
-            appendLog("[TCP-DIAL] Direct DNS $origHost -> $resolvedOrig:${node.port} -> ${if (rtt >= 0) "${rtt}ms" else "TIMEOUT"}")
-            if (rtt >= 0 && resolvedOrig !in candidates) {
-                // For non-CDN servers, direct IP goes first; for CDN (.pages.dev), Clean IPs stay first!
-                if (!isCdn) candidates.add(0, resolvedOrig) else candidates.add(resolvedOrig)
-            }
-        } else {
-            appendLog("[DNS] Could not resolve unpoisoned IPv4 for '$origHost'")
+        if (candidates.isEmpty() && origHost.isNotEmpty()) {
+            candidates.add(origHost)
         }
-
-        // 4. Emergency fallback: if still empty and host looks like TLS/WS on 443, try instant seed Clean IPs
-        if (candidates.isEmpty() && node.port in CleanIpScannerEngine.CF_COMPATIBLE_PORTS) {
-            val fallbackHits = cleanIpEngine.quickFindBestCleanIps(port = node.port, neededCount = 3, sampleCount = 28)
-            for (h in fallbackHits) {
-                if (h.ip !in candidates) candidates.add(h.ip)
-            }
-            if (candidates.isNotEmpty()) {
-                appendLog("[CLEAN-IP] Emergency seed fallback provided: ${candidates.joinToString(", ")}")
-            }
-        }
-
-        candidates.take(4)
+        candidates.take(3)
     }
-
 
     private suspend fun executeSingleNodePipelineUnlocked(
         gen: Long,
@@ -1946,6 +1931,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     private suspend fun executeSmartHuntUnlocked(gen: Long) {
+        var lockedWinner = false
         _selectedIndex.value = -1
         if (_profiles.value.any { it.isSelected }) {
             _profiles.value = _profiles.value.map { it.copy(isSelected = false) }
@@ -1994,6 +1980,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             return
         }
 
+        // Filter by user's desired country from the Auto-Repo Location Menu!
         val filteredByCountry = if (targetCountry != "AUTO") {
             repoNodes.filter { it.countryCode.equals(targetCountry, ignoreCase = true) }
         } else {
@@ -2002,13 +1989,13 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val activePool = if (filteredByCountry.isNotEmpty()) {
             filteredByCountry
         } else {
-            appendLog("[AutoPool] No servers for $targetCountry in repo; using all locations.")
+            appendLog("[AutoPool] No servers found for $targetCountry in current repo; falling back to all locations.")
             repoNodes
         }
 
         updateStageState(1, "DONE", "${detectNetworkOperatorLabel()} • ${activePool.size} سرور ($targetBanner)", "${activePool.size}")
 
-        // Step 1: Try prior verified winner for this location first
+        // Step 1: Fast-Resume on top prior verified winner matching target country
         val priorWinners = activePool
             .filter { it.status == "VERIFIED" && it.cachedVectorId.isNotBlank() }
             .sortedBy { if (it.pingMs > 0) it.pingMs else 99999 }
@@ -2049,31 +2036,20 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     if (!isGenValid(gen)) return@async
                     tcpSem.withPermit {
                         if (!isGenValid(gen)) return@withPermit
-                        val orig = nd.originalHost.ifBlank { nd.host }
-                        val directIp = if (nd.host != orig && !CleanIpScannerEngine.isPoisonedIranIp(nd.host)) {
-                            nd.host
+                        val ep = if (cleanIpEngine.isCloudflareEdgeProfile(nd) && portEdgeCache.containsKey(nd.port)) {
+                            portEdgeCache[nd.port]!!.first()
                         } else {
-                            cleanIpEngine.resolveUnpoisonedIpv4Blocking(orig, 1300)
-                        }
-                        var bestEp = ""
-                        var bestMs = -1
-                        if (directIp.isNotEmpty()) {
-                            val ms = cleanIpEngine.fastTcpPingBlocking(directIp, nd.port, 1200)
-                            if (ms >= 0) {
-                                bestEp = directIp
-                                bestMs = ms
+                            val orig = nd.originalHost.ifBlank { nd.host }
+                            if (nd.host != orig && !CleanIpScannerEngine.isPoisonedIranIp(nd.host)) {
+                                nd.host
+                            } else {
+                                cleanIpEngine.resolveUnpoisonedIpv4Blocking(orig, 1200)
                             }
                         }
-                        if (bestMs < 0 && cleanIpEngine.isCloudflareEdgeProfile(nd) && portEdgeCache.containsKey(nd.port)) {
-                            val cfEp = portEdgeCache[nd.port]!!.first()
-                            val ms = cleanIpEngine.fastTcpPingBlocking(cfEp, nd.port, 1200)
-                            if (ms >= 0) {
-                                bestEp = cfEp
-                                bestMs = ms
-                            }
-                        }
-                        if (bestMs >= 0 && bestEp.isNotEmpty()) {
-                            reachablePool.add(Triple(bestMs, nd, bestEp))
+                        if (ep.isEmpty()) return@withPermit
+                        val ms = cleanIpEngine.fastTcpPingBlocking(ep, nd.port, 1100)
+                        if (ms >= 0) {
+                            reachablePool.add(Triple(ms, nd, ep))
                         }
                     }
                 }
@@ -2104,10 +2080,9 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
         val cfg = _settings.value
         val candidateBatches = shortlist.chunked(6)
-        val roundVecIds = listOf("VEC-11", "VEC-17", "VEC-21", "VEC-23", "VEC-01")
-        var huntWinner: Triple<Long, Triple<Int, ProfileItem, String>, BypassVector>? = null
+        val roundVecIds = listOf("VEC-21", "VEC-17", "VEC-11")
 
-        outerBatchLoop@ for ((bIdx, batch) in candidateBatches.withIndex()) {
+        for ((bIdx, batch) in candidateBatches.withIndex()) {
             if (!isGenValid(gen)) return
             val laneSpecs = batch.map { it.second to it.third }
             val multiSession = try {
@@ -2139,11 +2114,11 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 }
 
                 if (!xrayCoreManager.startCore(multiSession.configJson)) continue
-                waitLocalHttpReady(multiSession.lanes.first().httpPort, 500L)
+                waitLocalHttpReady(multiSession.lanes.first().httpPort, 450L)
 
                 for ((rIdx, roundVid) in roundVecIds.withIndex()) {
                     if (!isGenValid(gen)) return
-                    val pct = (42 + (((bIdx * roundVecIds.size + rIdx + 1) * 48) / (candidateBatches.size * roundVecIds.size).coerceAtLeast(1))).coerceIn(42, 92)
+                    val pct = (42 + (((bIdx * roundVecIds.size + rIdx + 1) * 50) / (candidateBatches.size * roundVecIds.size).coerceAtLeast(1))).coerceIn(42, 94)
                     val msg = "مسابقه همزمان ${batch.size} سرور ($targetBanner) • موج ${rIdx + 1}..."
                     _telemetry.update { it.copy(progressPercent = pct, statusDetail = msg) }
                     _taskProgress.value = TaskProgressState(active = true, percent = pct, message = msg)
@@ -2176,7 +2151,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                         multiSession.lanes.mapIndexed { lIdx, lane ->
                             async(Dispatchers.IO) {
                                 if (!isGenValid(gen)) return@async null
-                                val fp = TunnelStreamVerifier.fastProbe(lane.httpPort, 3400L)
+                                val fp = TunnelStreamVerifier.fastProbe(lane.httpPort, 2200L)
                                 if (!fp.ok) return@async null
                                 val rtt = fp.latencyMs.coerceAtLeast(1L)
                                 Triple(rtt, batch[lIdx], activeVecs[lIdx])
@@ -2185,39 +2160,26 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     }.filterNotNull().sortedBy { it.first }
 
                     if (roundWinners.isNotEmpty()) {
-                        huntWinner = roundWinners.first()
-                        break@outerBatchLoop
+                        val (winMs, winTriple, winVec) = roundWinners.first()
+                        xrayCoreManager.stopCore()
+                        bridges.forEach { it.stop() }
+                        xrayCoreManager.probeSilentMode = false
+                        lockedWinner = true
+                        finalizeAndLockWinnerUnlocked(
+                            gen = gen,
+                            baseNode = winTriple.second,
+                            endpointIp = winTriple.third,
+                            vec = winVec,
+                            pingMs = winMs,
+                            isHiddenAutoNode = true,
+                            rawUriForMeta = winTriple.second.uri
+                        )
+                        return
                     }
                 }
             } finally {
-                // CRITICAL: Always stop temporary probe core & bridges BEFORE exiting try/finally!
-                xrayCoreManager.stopCore()
-                bridges.forEach { it.stop() }
+                if (!lockedWinner) { xrayCoreManager.stopCore(); bridges.forEach { it.stop() } }
                 xrayCoreManager.probeSilentMode = false
-            }
-        }
-
-        // CRITICAL: Call finalizeAndLockWinnerUnlocked STRICTLY OUTSIDE the try/finally block so production Xray is NEVER stopped!
-        if (huntWinner != null && isGenValid(gen)) {
-            val (winMs, winTriple, winVec) = huntWinner!!
-            finalizeAndLockWinnerUnlocked(
-                gen = gen,
-                baseNode = winTriple.second,
-                endpointIp = winTriple.third,
-                vec = winVec,
-                pingMs = winMs,
-                isHiddenAutoNode = true,
-                rawUriForMeta = winTriple.second.uri
-            )
-            return
-        }
-
-        // Fallback: Deep 12-vector single-node pipeline on top 2 servers of the chosen location
-        for (topCand in shortlist.take(2)) {
-            if (!isGenValid(gen)) return
-            val candNode = topCand.second.copy(host = topCand.third)
-            if (executeSingleNodePipelineUnlocked(gen, candNode, maxVectors = 12, isHiddenAutoNode = true, rawUriForMeta = topCand.second.uri)) {
-                return
             }
         }
 
@@ -2234,7 +2196,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             )
         }
     }
-
 
 
 
@@ -2373,11 +2334,32 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         countryCode: String,
         seqNum: Int,
         pingMs: Int = item.pingMs,
-        renameRemark: Boolean = false
+        renameRemark: Boolean = true
     ): ProfileItem {
         val cleanCc = countryCode.trim().uppercase(Locale.US).let { if (it == "UK") "GB" else it }
         val spec = CountryPaletteRegistry.resolveByCode(if (cleanCc.length == 2) cleanCc else item.countryCode)
+        val afterBracket = if (item.name.contains("]")) item.name.substringAfter("]") else item.name
+        val strippedBase = afterBracket
+            .substringBefore("[⚡")
+            .substringBefore("[Edge-")
+            .dropWhile { !it.isLetterOrDigit() }
+            .trim()
+            .ifBlank { item.protocol }
+
+        val formattedTitle = if (renameRemark && spec.code != "UN") {
+            "${spec.flagEmoji} ${spec.nameFa} [${spec.code}-${"%02d".format(seqNum.coerceAtLeast(1))}] • ${strippedBase.take(26)}"
+        } else {
+            item.name
+        }
+        val updatedUri = if (renameRemark && formattedTitle != item.name) {
+            UriConfigCodec.updateUriRemarkName(item.uri, formattedTitle)
+        } else {
+            item.uri
+        }
+
         return item.copy(
+            name = formattedTitle,
+            uri = updatedUri,
             pingMs = pingMs,
             countryCode = spec.code,
             countryName = spec.nameFa,
@@ -2387,7 +2369,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             accentSecondaryColor = spec.accentSecondary
         )
     }
-
 
     override fun autoRenameConfigsWithLocation(onlySelectedIndices: List<Int>) {
         val current = _profiles.value
@@ -2504,19 +2485,13 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     if (!isActive) break
                     val laneSpecs = ArrayList<Pair<ProfileItem, String>>()
                     for ((_, prof) in chunk) {
-                        val isCfNode = cleanIpEngine.isCloudflareEdgeProfile(prof)
                         val origHost = prof.host.ifBlank { prof.originalHost }
-                        var ep = if (isCfNode && sharedCfIp.isNotEmpty()) {
-                            sharedCfIp
-                        } else {
-                            withContext(Dispatchers.IO) {
-                                cleanIpEngine.resolveUnpoisonedIpv4Blocking(origHost, 1300)
-                            }
+                        var ep = withContext(Dispatchers.IO) {
+                            cleanIpEngine.resolveUnpoisonedIpv4Blocking(origHost, 1200)
                         }
-                        if (ep.isEmpty() && sharedCfIp.isNotEmpty()) {
+                        if (ep.isEmpty() && sharedCfIp.isNotEmpty() && cleanIpEngine.isCloudflareEdgeProfile(prof)) {
                             ep = sharedCfIp
                         }
-                        appendLog("[REAL-PING] Target '${prof.name}' -> Endpoint=$ep:${prof.port} (CDN=$isCfNode)")
                         if (ep.isNotEmpty()) {
                             laneSpecs.add(prof to ep)
                         } else {
@@ -2643,126 +2618,67 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         }
     }
 
+
+    private val _dohServers = MutableStateFlow<List<DohServerUiItem>>(emptyList())
+    override val dohServers: StateFlow<List<DohServerUiItem>> = _dohServers.asStateFlow()
+    private val _dohScanState = MutableStateFlow(DohScanUiState())
+    override val dohScanState: StateFlow<DohScanUiState> = _dohScanState.asStateFlow()
+    private val _installedApps = MutableStateFlow<List<InstalledAppUiItem>>(emptyList())
+    override val installedApps: StateFlow<List<InstalledAppUiItem>> = _installedApps.asStateFlow()
+    private var dohScanJob: Job? = null
+    private val dohStopSignal = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private fun refreshDohUiList() {
         val activeUrl = _settings.value.activeDohUrl.ifBlank { AlanDohEngine.activeDohUrl }
-        val verifiedMap = AlanDohEngine.getVerifiedResults().associateBy { it.url }
-        val list = AlanDohEngine.getAllConfiguredEndpoints().map { ep ->
-            val hit = verifiedMap[ep.url]
-            DohServerUiItem(
-                id = ep.id,
-                name = ep.name,
-                url = ep.url,
-                category = ep.category,
-                latencyMs = hit?.latencyMs ?: -1,
-                resolvedIp = hit?.resolvedSampleIp.orEmpty(),
-                isHealthy = hit?.isHealthy == true,
-                isSelected = ep.url.equals(activeUrl, ignoreCase = true),
-                statusDetail = hit?.statusDetail ?: "آماده تست"
-            )
-        }.sortedWith(
-            compareByDescending<DohServerUiItem> { it.isSelected }
-                .thenByDescending { it.isHealthy }
-                .thenBy { if (it.latencyMs > 0) it.latencyMs else Int.MAX_VALUE }
-        )
-        _dohServers.value = list
+        val vMap = AlanDohEngine.getVerifiedResults().associateBy { it.url }
+        _dohServers.value = AlanDohEngine.getAllConfiguredEndpoints().map { ep ->
+            val h = vMap[ep.url]
+            DohServerUiItem(ep.id, ep.name, ep.url, ep.category, h?.latencyMs ?: -1, h?.resolvedSampleIp.orEmpty(), h?.isHealthy == true, ep.url.equals(activeUrl, true), h?.statusDetail ?: "آماده")
+        }
     }
-
     override fun startDohScan(testDomain: String) {
-        dohScanJob?.cancel()
-        dohStopSignal.set(false)
+        dohScanJob?.cancel(); dohStopSignal.set(false)
         dohScanJob = scope.launch {
-            _dohScanState.update {
-                it.copy(isRunning = true, percent = 2, summary = "در حال اسکن سرورهای DoH روی دامنه $testDomain...")
+            _dohScanState.update { it.copy(isRunning = true, percent = 5, summary = "در حال اسکن DoH...") }
+            val w = AlanDohEngine.runFullDohScan(testDomain.ifBlank { "github.com" }, dohStopSignal, { appendLog(it) }) { pct, t, tot, _, s ->
+                _dohScanState.update { it.copy(isRunning = true, percent = pct, testedCount = t, totalCount = tot, summary = s) }; refreshDohUiList()
             }
-            val cleanEdges = cleanIpEngine.quickFindBestCleanIps(port = 443, neededCount = 1, sampleCount = 24)
-            if (cleanEdges.isNotEmpty()) {
-                AlanDohEngine.activeBootstrapIp = cleanEdges.first().ip
-                appendLog("[DOH-BOOTSTRAP] Using verified Clean CF IP ${cleanEdges.first().ip} for DoH TLS bootstrap.")
-            }
-            val winners = AlanDohEngine.runFullDohScan(
-                testDomain = testDomain.ifBlank { "github.com" },
-                stopSignal = dohStopSignal,
-                logger = { msg -> appendLog(msg) },
-                onProgress = { pct, tested, total, _, summary ->
-                    _dohScanState.update {
-                        it.copy(isRunning = true, percent = pct, testedCount = tested, totalCount = total, summary = summary)
-                    }
-                    refreshDohUiList()
-                }
-            )
-            if (winners.isNotEmpty()) {
-                val best = winners.first()
-                _settings.update { it.copy(activeDohUrl = best.url) }
-                saveSettingsToDisk()
-                _dohScanState.update {
-                    it.copy(
-                        isRunning = false,
-                        percent = 100,
-                        activeDohUrl = best.url,
-                        activeDohName = best.name,
-                        summary = "بهترین DoH فعال شد: ${best.name} (${best.latencyMs}ms) • ${winners.size} سرور سالم"
-                    )
-                }
-            } else {
-                _dohScanState.update {
-                    it.copy(isRunning = false, percent = 100, summary = "پاسخی از سرورهای DoH دریافت نشد.")
-                }
-            }
+            if (w.isNotEmpty()) {
+                val b = w.first(); _settings.update { it.copy(activeDohUrl = b.url) }; saveSettingsToDisk()
+                _dohScanState.update { it.copy(isRunning = false, percent = 100, activeDohUrl = b.url, activeDohName = b.name, summary = "فعال: ${b.name} (${b.latencyMs}ms)") }
+            } else _dohScanState.update { it.copy(isRunning = false, percent = 100, summary = "پاسخی دریافت نشد.") }
             refreshDohUiList()
         }
     }
-
-    override fun stopDohScan() {
-        dohStopSignal.set(true)
-        dohScanJob?.cancel()
-        _dohScanState.update { it.copy(isRunning = false, summary = "اسکن DoH متوقف شد.") }
-    }
-
+    override fun stopDohScan() { dohStopSignal.set(true); dohScanJob?.cancel(); _dohScanState.update { it.copy(isRunning = false) } }
     override fun selectActiveDoh(url: String, connectDohVeilNow: Boolean) {
-        val cleanUrl = url.trim()
-        if (cleanUrl.isEmpty()) return
-        AlanDohEngine.activeDohUrl = cleanUrl
-        val epName = AlanDohEngine.getAllConfiguredEndpoints().firstOrNull { it.url.equals(cleanUrl, true) }?.name ?: "Custom DoH"
-        _settings.update { it.copy(activeDohUrl = cleanUrl) }
-        saveSettingsToDisk()
-        _dohScanState.update {
-            it.copy(activeDohUrl = cleanUrl, activeDohName = epName, summary = "سرور DoH روی $epName تنظیم شد.")
+        AlanDohEngine.activeDohUrl = url.trim(); _settings.update { it.copy(activeDohUrl = url.trim()) }; saveSettingsToDisk(); refreshDohUiList()
+    }
+    override fun addCustomDohList(rawUrls: String) { AlanDohEngine.addCustomDohUrls(rawUrls); refreshDohUiList() }
+    override fun setTunnelOperationMode(mode: String) { _settings.update { it.copy(tunnelMode = mode.trim().uppercase(Locale.US)) }; saveSettingsToDisk() }
+    override fun sendAllConfigsToDpiLab(autoConnectBest: Boolean, useCleanIp: Boolean) { startMultiTargetMethodScan("all", _profiles.value.indices.toList(), autoConnectBest, useCleanIp) }
+    override fun loadInstalledAppsList(includeSystem: Boolean) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val pm = appContext.packageManager
+                val sel = _settings.value.splitTunnelPackagesCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+                _installedApps.value = pm.getInstalledApplications(PackageManager.GET_META_DATA).asSequence()
+                    .filter { it.packageName != appContext.packageName && pm.getLaunchIntentForPackage(it.packageName) != null && (includeSystem || (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || it.packageName in sel) }
+                    .map { InstalledAppUiItem(it.packageName, try { pm.getApplicationLabel(it).toString() } catch (_: Throwable) { it.packageName }, (it.flags and ApplicationInfo.FLAG_SYSTEM) != 0, it.packageName in sel) }
+                    .sortedWith(compareByDescending<InstalledAppUiItem> { it.isSelected }.thenBy { it.appName.lowercase(Locale.ROOT) }).toList()
+            } catch (_: Throwable) {}
         }
-        refreshDohUiList()
-        appendLog("[DOH] Active DoH resolver set to: $epName ($cleanUrl)")
-        if (connectDohVeilNow) {
-            setTunnelOperationMode("DOH_VEIL")
-            if (_engineState.value == EngineState.CONNECTED) disconnectTunnel()
-            startSmartConnect()
-        }
     }
-
-    override fun addCustomDohList(rawUrls: String) {
-        val count = AlanDohEngine.addCustomDohUrls(rawUrls)
-        refreshDohUiList()
-        appendLog("[DOH] Added $count custom DoH endpoint(s).")
+    override fun updateSplitTunnelConfig(mode: String, packages: Set<String>) {
+        val m = mode.trim().uppercase(Locale.US); AlanVpnService.splitTunnelMode = m; AlanVpnService.splitTunnelPackages = packages
+        _settings.update { it.copy(splitTunnelMode = m, splitTunnelPackagesCsv = packages.joinToString(",")) }; saveSettingsToDisk()
+        _installedApps.update { l -> l.map { it.copy(isSelected = it.packageName in packages) } }
     }
-
-    override fun setTunnelOperationMode(mode: String) {
-        val cleanMode = mode.trim().uppercase(Locale.US).let {
-            if (it in setOf("VPN", "PROXY", "DOH_VEIL")) it else "VPN"
-        }
-        _settings.update { it.copy(tunnelMode = cleanMode) }
-        saveSettingsToDisk()
-        appendLog("[ENGINE-MODE] Operation mode switched to: $cleanMode")
+    override fun connectBestUserConfig(applyDpiMethods: Boolean, groupFilter: String) {
+        _settings.update { it.copy(autoPilot = false, autoConnectSource = "USER_CONFIGS", applyDpiOnUserAuto = applyDpiMethods) }; saveSettingsToDisk()
+        val idxs = _profiles.value.indices.toList()
+        if (idxs.isNotEmpty()) startMultiTargetMethodScan("selected", idxs, autoConnect = true, useCleanIp = applyDpiMethods)
     }
-
-    override fun sendAllConfigsToDpiLab(autoConnectBest: Boolean, useCleanIp: Boolean) {
-        val allIndices = _profiles.value.indices.toList()
-        appendLog("[DPI-LAB] Sending entire repository (${allIndices.size} configs) to 6-Lane DPI Lab (useCleanIp=$useCleanIp)...")
-        startMultiTargetMethodScan(
-            scopeMode = "all",
-            selectedIndices = allIndices,
-            autoConnect = autoConnectBest,
-            useCleanIp = useCleanIp
-        )
-    }
-
     override fun clearLogs() {
         synchronized(logLinesBuffer) {
             logLinesBuffer.clear()
@@ -4551,54 +4467,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         } catch (_: Throwable) {
             uri.hashCode().toUInt().toString(16)
         }
-
-        val httpClient = clientBuilder.build()
-        val collectedUris = LinkedHashSet<String>()
-
-        for (url in autoRepoUrls) {
-            try {
-                val req = okhttp3.Request.Builder()
-                    .url(url)
-                    .header("User-Agent", "v2rayNG/1.9.5")
-                    .get()
-                    .build()
-                httpClient.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val body = resp.body?.string().orEmpty()
-                        UriConfigCodec.extractConfigLinesFromSubscriptionBody(body).forEach { u ->
-                            if (u.isNotBlank()) collectedUris.add(u.trim())
-                        }
-                    }
-                }
-            } catch (_: Throwable) {
-            }
-        }
-
-        if (collectedUris.isNotEmpty()) {
-            try {
-                val rawBytes = collectedUris.joinToString("\n").toByteArray(Charsets.UTF_8)
-                val b64 = android.util.Base64.encodeToString(rawBytes, android.util.Base64.NO_WRAP)
-                cacheFile.writeText(b64, Charsets.UTF_8)
-            } catch (_: Throwable) {
-            }
-            val parsed = collectedUris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
-            return@withContext hydrateAutoPoolNodesWithMeta(parsed)
-        }
-
-        if (cacheFile.exists()) {
-            try {
-                val rawB64 = cacheFile.readText(Charsets.UTF_8).trim()
-                val decoded = String(android.util.Base64.decode(rawB64, android.util.Base64.DEFAULT), Charsets.UTF_8)
-                val cachedUris = UriConfigCodec.extractConfigLinesFromSubscriptionBody(decoded)
-                val parsed = cachedUris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
-                if (parsed.isNotEmpty()) {
-                    return@withContext hydrateAutoPoolNodesWithMeta(parsed)
-                }
-            } catch (_: Throwable) {
-            }
-        }
-
-        emptyList()
     }
 
     private fun loadPoolWinnerMetaMap(): org.json.JSONObject {
@@ -4733,12 +4601,12 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 cacheFile.writeText(b64, Charsets.UTF_8)
             } catch (_: Throwable) {
             }
-            collectedUris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it)?.takeIf { !CleanIpScannerEngine.isSubscriptionAnnouncementOrFakeNode(it) } }
+            collectedUris.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
         } else if (cacheFile.exists()) {
             try {
                 val rawB64 = cacheFile.readText(Charsets.UTF_8).trim()
                 val decoded = String(android.util.Base64.decode(rawB64, android.util.Base64.DEFAULT), Charsets.UTF_8)
-                UriConfigCodec.extractConfigLinesFromSubscriptionBody(decoded).mapNotNull { UriConfigCodec.parseUriToProfileItem(it)?.takeIf { !CleanIpScannerEngine.isSubscriptionAnnouncementOrFakeNode(it) } }
+                UriConfigCodec.extractConfigLinesFromSubscriptionBody(decoded).mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
             } catch (_: Throwable) {
                 emptyList()
             }
@@ -4875,8 +4743,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                                 cachedVectorId = o.optString("cachedVectorId", ""),
                                 preferredVectorId = o.optString("preferredVectorId", "AUTO"),
                                 isSelected = false,
-                                uri = uri,
-                            groupName = o.optString("groupName", "دستی").ifBlank { "دستی" },
+                                uri = uri, groupName = o.optString("groupName", "دستی").ifBlank { "دستی" },
                                 countryCode = country.code,
                                 countryName = country.nameFa,
                                 flagEmoji = country.flagEmoji,
@@ -5043,7 +4910,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     private fun appendLog(msg: String) {
-        // Deep logging enabled: all Xray lifecycle events are recorded
         val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
         val line = "[$stamp] $msg"
         synchronized(logLinesBuffer) {

@@ -1,5 +1,7 @@
 package com.alan.ripdpi.core
 
+import java.util.Locale
+
 import android.net.Uri
 import android.util.Base64
 import com.alan.ripdpi.model.BypassVector
@@ -1175,6 +1177,7 @@ object UriConfigCodec {
             val singleJson = org.json.JSONObject(single.configJson)
             val singleOut = singleJson.getJSONArray("outbounds").getJSONObject(0)
             singleOut.put("tag", outTag)
+            singleOut.optJSONObject("streamSettings")?.optJSONObject("sockopt")?.remove("dialerProxy")
             singleOut.optJSONObject("streamSettings")?.optJSONObject("sockopt")?.remove("dialerProxy")
             outboundsArr.put(singleOut)
 

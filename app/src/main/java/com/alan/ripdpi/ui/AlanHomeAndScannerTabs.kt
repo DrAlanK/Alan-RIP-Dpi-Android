@@ -39,6 +39,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.AutoFixHigh
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
@@ -98,12 +99,14 @@ fun HomeTabScreen(
     dohScanState: DohScanUiState = DohScanUiState(),
     onToggleConnection: () -> Unit,
     onActivateAutoMode: (connectNow: Boolean) -> Unit,
+    onConnectBestUserConfig: (applyDpiMethods: Boolean) -> Unit = {},
+    onToggleApplyDpiOnUserAuto: (Boolean) -> Unit = {},
     onSelectAutoRepoCountry: (countryCode: String, reconnectIfActive: Boolean) -> Unit = { _, _ -> },
     onRefreshAutoRepoCatalog: () -> Unit = {},
     onImportFromClipboard: () -> Unit,
     onSelectProfile: (Int) -> Unit,
     onSetTunnelMode: (String) -> Unit = {},
-    onOpenSubscriptions: () -> Unit = {},
+    onOpenSplitTunnelDialog: () -> Unit = {},
     onOpenDohScanner: () -> Unit = {}
 ) {
     val p = LocalAlanPalette.current
@@ -113,98 +116,63 @@ fun HomeTabScreen(
 
     val isPureAutoMode = settings.autoPilot || telemetry.activeProfileUid == "__SMART_AUTO__"
     val preferredAutoCode = settings.preferredAutoCountry.uppercase(Locale.US)
-
     val selectedAutoLocation = remember(availableRepoLocations, preferredAutoCode) {
-        availableRepoLocations.firstOrNull {
-            it.countryCode.equals(preferredAutoCode, ignoreCase = true)
-        } ?: availableRepoLocations.firstOrNull() ?: RepoLocationOption(
-            countryCode = "AUTO",
-            countryNameFa = "خودکار",
-            flagEmoji = "",
-            serverCount = profiles.size.coerceAtLeast(12),
-            avgPingMs = 140
-        )
+        availableRepoLocations.firstOrNull { it.countryCode.equals(preferredAutoCode, true) }
+            ?: availableRepoLocations.firstOrNull()
+            ?: RepoLocationOption("AUTO", "خودکار", "", "", emptyList(), profiles.size.coerceAtLeast(12), 140)
     }
 
     val activeIdx = remember(profiles, telemetry.selectedIndex, isPureAutoMode) {
-        if (isPureAutoMode) {
-            -1
-        } else {
-            val byFlag = profiles.indexOfFirst { it.isSelected }
-            when {
-                byFlag >= 0 -> byFlag
-                telemetry.selectedIndex in profiles.indices -> telemetry.selectedIndex
-                else -> -1
-            }
-        }
+        if (isPureAutoMode) -1 else profiles.indexOfFirst { it.isSelected }.let { if (it >= 0) it else if (telemetry.selectedIndex in profiles.indices) telemetry.selectedIndex else -1 }
     }
     val activeProfile = if (isPureAutoMode) null else profiles.getOrNull(activeIdx)
-    val isErrorPhase = telemetry.uiPhase.equals("ERROR", ignoreCase = true)
+    val isErrorPhase = telemetry.uiPhase.equals("ERROR", true)
 
-    val statusBannerText = when {
-        telemetry.isConnected && isPureAutoMode -> "متصل از طریق شبکه هوشمند"
-        telemetry.isConnected -> "متصل به ${activeProfile?.name ?: telemetry.activeProfileName}"
-        telemetry.isConnecting -> telemetry.statusDetail.ifBlank { "در حال مذاکره و قفل مسیر امن..." }
+    val cleanStatusHeadline = when {
+        telemetry.isConnected && isPureAutoMode -> "متصل از طریق شبکه ابری هوشمند"
+        telemetry.isConnected -> "تونل امن روی پروفایل شخصی فعال است"
+        telemetry.isConnecting -> telemetry.statusDetail.ifBlank { "در حال مذاکره و قفل سریع‌ترین مسیر..." }
         isErrorPhase -> telemetry.statusDetail.ifBlank { "ارتباط برقرار نشد؛ مجدداً تلاش کنید" }
         isPureAutoMode -> "آماده برقراری ارتباط هوشمند"
         else -> "آماده برقراری ارتباط"
     }
 
     val locationTitleText = when {
-        !isPureAutoMode && activeProfile != null -> activeProfile.countryName.ifBlank { "انتخابی" }
+        !isPureAutoMode && activeProfile != null -> activeProfile.countryName.ifBlank { "سرور انتخابی" }
         selectedAutoLocation.countryCode == "AUTO" -> "خودکار (سریع‌ترین)"
         else -> selectedAutoLocation.countryNameFa
     }
     val locationSubText = when {
-        !isPureAutoMode && activeProfile != null -> activeProfile.host.take(18)
+        telemetry.isConnected && telemetry.egressIp.isNotBlank() && telemetry.egressIp != "—" -> telemetry.egressIp
+        !isPureAutoMode && activeProfile != null -> "${activeProfile.host}:${activeProfile.port}"
         else -> "${selectedAutoLocation.serverCount} سرور مخزن"
     }
 
+    val activeVecLabel = if (telemetry.isConnected) telemetry.activeVectorId else if (!settings.applyDpiOnUserAuto && !isPureAutoMode) "VEC-00" else settings.manualVectorId
     val connectionTitleText = when {
-        isPureAutoMode -> "هوشمند خودکار"
-        activeProfile != null -> activeProfile.name
-        else -> "انتخاب کانفیگ"
-    }
-    val activeVecLabel = if (telemetry.isConnected) telemetry.activeVectorId else settings.manualVectorId
-    val connectionSubText = when {
-        isPureAutoMode -> "متد $activeVecLabel"
-        activeProfile != null -> "${activeProfile.protocol.uppercase(Locale.US)} • $activeVecLabel"
-        else -> "${profiles.size} پروفایل آماده"
+        isPureAutoMode -> "مخزن ابری هوشمند"
+        activeProfile != null -> activeProfile.name.replace("VLESS · ", "").replace("VMESS · ", "").trim().ifBlank { activeProfile.protocol }
+        else -> "کانفیگ‌های من (${profiles.size})"
     }
 
     val activeDohLabel = remember(dohScanState.activeDohName, settings.activeDohUrl) {
-        dohScanState.activeDohName.ifBlank {
-            try { java.net.URI(settings.activeDohUrl).host.orEmpty() } catch (_: Throwable) { "Cloudflare DoH" }
+        dohScanState.activeDohName.ifBlank { "Cloudflare DoH" }
+    }
+    val splitBadge = remember(settings.splitTunnelMode, settings.splitTunnelPackagesCsv) {
+        val cnt = settings.splitTunnelPackagesCsv.split(",").count { it.isNotBlank() }
+        when (settings.splitTunnelMode.uppercase(Locale.US)) {
+            "INCLUDE" -> if (cnt > 0) "فقط $cnt برنامه" else "تفکیک برنامه‌ها"
+            "EXCLUDE" -> if (cnt > 0) "استثنا: $cnt برنامه" else "تفکیک برنامه‌ها"
+            else -> "همه برنامه‌ها"
         }
     }
 
-    val activeProtoBadge = remember(telemetry, activeProfile, settings) {
-        when {
-            settings.tunnelMode == "DOH_VEIL" -> "DoH-Veil"
-            telemetry.isConnected && telemetry.activeProtocol.isNotBlank() && telemetry.activeProtocol != "—" -> telemetry.activeProtocol
-            activeProfile != null -> activeProfile.protocol.uppercase(Locale.US)
-            else -> "VLESS"
-        }
-    }
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        val compact = maxHeight < 650.dp
+        val orbH = if (compact) 176.dp else 212.dp
 
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-    ) {
-        val compact = maxHeight < 640.dp
-        val orbAreaHeight = if (compact) 186.dp else 222.dp
-
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            // 1. Wide Un-caged Morphing Orb + Orbiting 3D Micro-Orbs
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxSize()) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 CenterPowerOrbButton(
                     isConnected = telemetry.isConnected,
                     isConnecting = telemetry.isConnecting,
@@ -212,393 +180,109 @@ fun HomeTabScreen(
                     progressPercent = telemetry.progressPercent,
                     accentColorLong = telemetry.accentPrimaryColor,
                     onClick = onToggleConnection,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(orbAreaHeight)
+                    modifier = Modifier.fillMaxWidth().height(orbH)
                 )
-
                 Text(
-                    text = statusBannerText,
-                    color = when {
-                        telemetry.isConnected -> p.emerald
-                        telemetry.isConnecting -> p.accentGold
-                        isErrorPhase -> p.danger
-                        else -> p.textSecondary
-                    },
+                    text = cleanStatusHeadline,
+                    color = if (telemetry.isConnected) p.emerald else if (telemetry.isConnecting) p.accentGold else if (isErrorPhase) p.danger else p.textSecondary,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
+                    fontSize = 12.5.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.clickable {
-                        if (telemetry.isConnecting || telemetry.isConnected) {
-                            showLiveRouteModal = true
-                        }
-                    }
+                    modifier = Modifier.clickable { if (telemetry.isConnecting || telemetry.isConnected) showLiveRouteModal = true }
                 )
             }
 
-            // 2. Sculpted Neumorphic Telemetry & Traffic Pod (Sunken Wells + Raised Reconnect Pill)
-            Column(
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .alanGlassCard(cornerRadius = 22.dp)
-                    .padding(horizontal = 13.dp, vertical = if (compact) 10.dp else 12.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    // Raised Borderless Neumorphic Reconnect Pill
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .height(36.dp)
-                            .alanGlassCard(cornerRadius = 12.dp)
-                            .clickable {
-                                if (isPureAutoMode) {
-                                    onActivateAutoMode(true)
-                                } else {
-                                    onToggleConnection()
-                                }
+            // Telemetry & Quick User Auto-Connect Pod
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().alanGlassCard(cornerRadius = 22.dp).padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.height(34.dp).alanGlassCard(cornerRadius = 11.dp).clickable { if (isPureAutoMode) onActivateAutoMode(true) else onToggleConnection() }.padding(horizontal = 11.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Icon(Icons.Outlined.Refresh, null, tint = if (telemetry.isConnected) p.emerald else p.accentGold, modifier = Modifier.size(14.dp))
+                                Text("اتصال مجدد", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             }
-                            .padding(horizontal = 13.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Refresh,
-                                contentDescription = "اتصال مجدد",
-                                tint = if (telemetry.isConnected) p.emerald else p.accentGold,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Text(
-                                text = "اتصال مجدد",
-                                color = p.textPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.5.sp
-                            )
+                        }
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.height(34.dp).alanGlassCard(cornerRadius = 11.dp).clickable { onConnectBestUserConfig(settings.applyDpiOnUserAuto) }.padding(horizontal = 10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Icon(Icons.Outlined.Bolt, null, tint = p.accentGold, modifier = Modifier.size(14.dp))
+                                Text("بهترینِ کانفیگ من", color = p.accentGold, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
+                            }
                         }
                     }
-
-                    // Recessed Digital Session Timer Well
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .height(36.dp)
-                            .alanNeuInset(cornerRadius = 12.dp)
-                            .padding(horizontal = 14.dp)
-                    ) {
-                        LtrContent {
-                            Text(
-                                text = if (telemetry.isConnected) telemetry.uptimeLabel else "00:00:00",
-                                color = if (telemetry.isConnected) p.emerald else p.textPrimary,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 14.5.sp
-                            )
-                        }
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.height(34.dp).alanNeuInset(cornerRadius = 11.dp).padding(horizontal = 12.dp)) {
+                        LtrContent { Text(if (telemetry.isConnected) telemetry.uptimeLabel else "00:00:00", color = if (telemetry.isConnected) p.emerald else p.textPrimary, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.ExtraBold, fontSize = 13.5.sp) }
                     }
                 }
 
-                // Dual Sunken Traffic Wells (دریافت / ارسال)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(9.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier
-                            .weight(1f)
-                            .alanNeuInset(cornerRadius = 13.dp)
-                            .padding(horizontal = 11.dp, vertical = 8.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.ArrowDownward,
-                                contentDescription = null,
-                                tint = p.emerald,
-                                modifier = Modifier.size(14.dp)
-                            )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.weight(1f).alanNeuInset(cornerRadius = 12.dp).padding(horizontal = 11.dp, vertical = 7.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Outlined.ArrowDownward, null, tint = p.emerald, modifier = Modifier.size(13.dp))
                             Text("دریافت", color = p.textMuted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
                         }
-                        LtrContent {
-                            Text(
-                                text = if (telemetry.isConnected) telemetry.rxRateLabel else "0 B/s",
-                                color = p.textPrimary,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 11.5.sp
-                            )
-                        }
+                        LtrContent { Text(if (telemetry.isConnected) telemetry.rxRateLabel else "0 B/s", color = p.textPrimary, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp) }
                     }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier
-                            .weight(1f)
-                            .alanNeuInset(cornerRadius = 13.dp)
-                            .padding(horizontal = 11.dp, vertical = 8.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.ArrowUpward,
-                                contentDescription = null,
-                                tint = p.accentGold,
-                                modifier = Modifier.size(14.dp)
-                            )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.weight(1f).alanNeuInset(cornerRadius = 12.dp).padding(horizontal = 11.dp, vertical = 7.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Outlined.ArrowUpward, null, tint = p.accentGold, modifier = Modifier.size(13.dp))
                             Text("ارسال", color = p.textMuted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
                         }
-                        LtrContent {
-                            Text(
-                                text = if (telemetry.isConnected) telemetry.txRateLabel else "0 B/s",
-                                color = p.textPrimary,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 11.5.sp
-                            )
-                        }
+                        LtrContent { Text(if (telemetry.isConnected) telemetry.txRateLabel else "0 B/s", color = p.textPrimary, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp) }
                     }
                 }
             }
 
-            // 3. Borderless Tactile Neumorphic Mode Switcher (وی‌پی‌ان | پروکسی | دی‌ان‌اس DoH)
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .alanNeuInset(cornerRadius = 16.dp)
-                    .padding(5.dp)
-            ) {
+            // Borderless Mode Switcher
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth().alanNeuInset(cornerRadius = 16.dp).padding(5.dp)) {
                 val curMode = settings.tunnelMode.uppercase(Locale.US).ifBlank { "VPN" }
-                listOf(
-                    "VPN" to "وی‌پی‌ان",
-                    "PROXY" to "پروکسی",
-                    "DOH_VEIL" to "دی‌ان‌اس DoH"
-                ).forEach { (modeKey, modeTitle) ->
-                    val selected = curMode == modeKey
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(38.dp)
-                            .then(
-                                if (selected) {
-                                    Modifier.alanGlassCard(
-                                        highlighted = true,
-                                        cornerRadius = 12.dp
-                                    )
-                                } else {
-                                    Modifier.clip(RoundedCornerShape(12.dp))
-                                }
-                            )
-                            .clickable { onSetTunnelMode(modeKey) }
-                    ) {
-                        Text(
-                            text = modeTitle,
-                            color = when {
-                                selected && modeKey == "VPN" -> p.emerald
-                                selected -> p.accentGold
-                                else -> p.textSecondary
-                            },
-                            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                            fontSize = 12.sp
-                        )
+                listOf("VPN" to "وی‌پی‌ان", "PROXY" to "پروکسی", "DOH_VEIL" to "دی‌ان‌اس DoH").forEach { (mKey, mTitle) ->
+                    val sel = curMode == mKey
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.weight(1f).height(36.dp).then(if (sel) Modifier.alanGlassCard(highlighted = true, cornerRadius = 12.dp) else Modifier.clip(RoundedCornerShape(12.dp))).clickable { onSetTunnelMode(mKey) }) {
+                        Text(mTitle, color = if (sel && mKey == "VPN") p.emerald else if (sel) p.accentGold else p.textSecondary, fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold, fontSize = 11.5.sp)
                     }
                 }
             }
 
-            // 4. Signature Bento Neumorphic Deck (2 Sculpted Tiles + DoH & Protocol Bar — NO Subscription Row!)
-            Column(
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    // Tile 1: Location Selector Bento Card
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(7.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .alanGlassCard(cornerRadius = 20.dp)
-                            .clickable { showAutoLocationSheet = true }
-                            .padding(horizontal = 13.dp, vertical = if (compact) 10.dp else 12.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .alanNeuInset(cornerRadius = 10.dp)
-                            ) {
-                                if (selectedAutoLocation.countryCode != "AUTO") {
-                                    FlagStripeBadge(
-                                        stripeColors = selectedAutoLocation.flagStripeColors,
-                                        countryCode = selectedAutoLocation.countryCode,
-                                        width = 20.dp,
-                                        height = 13.dp
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Public,
-                                        contentDescription = null,
-                                        tint = p.emerald,
-                                        modifier = Modifier.size(17.dp)
-                                    )
-                                }
+            // Bento Deck (Location + Profile/DPI Mode + DoH & Split-Tunnel Bar)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f).alanGlassCard(cornerRadius = 20.dp).clickable { showAutoLocationSheet = true }.padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                            Text("موقعیت سرور", color = p.textMuted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(28.dp).alanNeuInset(cornerRadius = 8.dp)) {
+                                Icon(Icons.Outlined.Public, null, tint = p.emerald, modifier = Modifier.size(15.dp))
                             }
-                            Text(
-                                text = "موقعیت سرور",
-                                color = p.textMuted,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
                         }
-
-                        Text(
-                            text = locationTitleText,
-                            color = p.textPrimary,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = locationSubText,
-                            color = p.textSecondary,
-                            fontSize = 10.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Text(locationTitleText, color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        LtrContent { Text(locationSubText, color = p.textSecondary, fontFamily = FontFamily.Monospace, fontSize = 9.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                     }
 
-                    // Tile 2: Connection Profile & DPI Method Bento Card
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(7.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .alanGlassCard(cornerRadius = 20.dp)
-                            .clickable { showManualServerPicker = true }
-                            .padding(horizontal = 13.dp, vertical = if (compact) 10.dp else 12.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .alanNeuInset(cornerRadius = 10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Dns,
-                                    contentDescription = null,
-                                    tint = p.accentGold,
-                                    modifier = Modifier.size(17.dp)
-                                )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f).alanGlassCard(cornerRadius = 20.dp).clickable { showManualServerPicker = true }.padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                            Text("پروفایل و متد", color = p.textMuted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.height(24.dp).alanNeuInset(cornerRadius = 7.dp).clickable { onToggleApplyDpiOnUserAuto(!settings.applyDpiOnUserAuto) }.padding(horizontal = 6.dp)) {
+                                Text(if (settings.applyDpiOnUserAuto) "ضد DPI" else "خالص v2ray", color = if (settings.applyDpiOnUserAuto) p.accentGold else p.textSecondary, fontWeight = FontWeight.ExtraBold, fontSize = 8.5.sp)
                             }
-                            Text(
-                                text = "پروفایل و متد",
-                                color = p.textMuted,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
                         }
-
-                        Text(
-                            text = connectionTitleText,
-                            color = p.textPrimary,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        LtrContent {
-                            Text(
-                                text = connectionSubText,
-                                color = p.textSecondary,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
+                        LtrContent { Text(connectionTitleText, color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        LtrContent { Text("${activeProfile?.protocol?.uppercase(Locale.US) ?: "VLESS"} • $activeVecLabel", color = p.emerald, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 9.5.sp, maxLines = 1) }
                     }
                 }
 
-                // Bottom Sculpted DoH & Active Protocol Strip
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .alanGlassCard(cornerRadius = 18.dp)
-                        .clickable { onOpenDohScanner() }
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(p.emerald)
-                        )
-                        Text(
-                            text = "دی‌ان‌اس امن:",
-                            color = p.textMuted,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        LtrContent {
-                            Text(
-                                text = activeDohLabel,
-                                color = p.textPrimary,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.5.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.weight(1.1f).alanGlassCard(cornerRadius = 16.dp).clickable { onOpenDohScanner() }.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+                            Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(p.emerald))
+                            LtrContent { Text(activeDohLabel, color = p.textPrimary, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         }
+                        Text("DoH", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 9.5.sp)
                     }
-
-                    Box(
-                        modifier = Modifier
-                            .alanNeuInset(cornerRadius = 9.dp)
-                            .padding(horizontal = 9.dp, vertical = 4.dp)
-                    ) {
-                        LtrContent {
-                            Text(
-                                text = "$activeProtoBadge • $activeVecLabel",
-                                color = p.accentGold,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 10.sp
-                            )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.weight(1f).alanGlassCard(cornerRadius = 16.dp).clickable { onOpenSplitTunnelDialog() }.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Outlined.Apps, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
+                            Text(splitBadge, color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -607,52 +291,13 @@ fun HomeTabScreen(
     }
 
     if (showAutoLocationSheet) {
-        SmartRepoLocationPickerSheet(
-            locations = availableRepoLocations,
-            selectedCode = preferredAutoCode,
-            report = repoScanReport,
-            isConnected = telemetry.isConnected,
-            onDismiss = { showAutoLocationSheet = false },
-            onRefreshCatalog = onRefreshAutoRepoCatalog,
-            onSelectLocation = { code ->
-                showAutoLocationSheet = false
-                onSelectAutoRepoCountry(code, telemetry.isConnected)
-            },
-            onSwitchToManualList = {
-                showAutoLocationSheet = false
-                showManualServerPicker = true
-            }
-        )
+        SmartRepoLocationPickerSheet(availableRepoLocations, preferredAutoCode, repoScanReport, telemetry.isConnected, { showAutoLocationSheet = false }, onRefreshAutoRepoCatalog, { code -> showAutoLocationSheet = false; onSelectAutoRepoCountry(code, telemetry.isConnected) }, { showAutoLocationSheet = false; showManualServerPicker = true })
     }
-
     if (showManualServerPicker) {
-        ManualServerPickerDialog(
-            profiles = profiles,
-            activeIdx = activeIdx,
-            isPureAutoMode = isPureAutoMode,
-            onDismiss = { showManualServerPicker = false },
-            onImportFromClipboard = {
-                showManualServerPicker = false
-                onImportFromClipboard()
-            },
-            onSwitchToAutoRepo = {
-                showManualServerPicker = false
-                onActivateAutoMode(false)
-                showAutoLocationSheet = true
-            },
-            onSelectProfile = { idx ->
-                showManualServerPicker = false
-                onSelectProfile(idx)
-            }
-        )
+        ManualServerPickerDialog(profiles, activeIdx, isPureAutoMode, { showManualServerPicker = false }, { showManualServerPicker = false; onImportFromClipboard() }, { showManualServerPicker = false; onActivateAutoMode(false); showAutoLocationSheet = true }, { idx -> showManualServerPicker = false; onSelectProfile(idx) })
     }
-
     if (showLiveRouteModal) {
-        LiveRouteTimelineDialog(
-            stages = connectionStages,
-            probes = liveVectorProbes,
-            onDismiss = { showLiveRouteModal = false }
-        )
+        LiveRouteTimelineDialog(connectionStages, liveVectorProbes, { showLiveRouteModal = false })
     }
 }
 

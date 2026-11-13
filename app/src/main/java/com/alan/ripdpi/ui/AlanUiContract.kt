@@ -144,7 +144,11 @@ data class EngineSettings(
     val autoRenameOnScan: Boolean = true,
     val bridgePort: Int = 20809,
     val tunnelMode: String = "VPN",
-    val activeDohUrl: String = "https://cloudflare-dns.com/dns-query"
+    val activeDohUrl: String = "https://cloudflare-dns.com/dns-query",
+    val autoConnectSource: String = "CLOUD_REPO",
+    val applyDpiOnUserAuto: Boolean = true,
+    val splitTunnelMode: String = "ALL",
+    val splitTunnelPackagesCsv: String = ""
 )
 
 data class VectorSpec(
@@ -243,6 +247,8 @@ data class DohScanUiState(
     val activeDohName: String = "Cloudflare DoH",
     val summary: String = "آماده اسکن سرورهای DoH (DNSveil)"
 )
+
+data class InstalledAppUiItem(val packageName: String, val appName: String, val isSystemApp: Boolean = false, val isSelected: Boolean = false)
 
 interface AlanEngineController {
     val telemetry: StateFlow<TelemetrySnapshot>
@@ -390,6 +396,10 @@ interface AlanEngineController {
     fun setTunnelOperationMode(mode: String) {}
 
     fun sendAllConfigsToDpiLab(autoConnectBest: Boolean = true, useCleanIp: Boolean = true) {}
+    val installedApps: StateFlow<List<InstalledAppUiItem>> get() = MutableStateFlow(emptyList())
+    fun loadInstalledAppsList(includeSystem: Boolean = false) {}
+    fun updateSplitTunnelConfig(mode: String, packages: Set<String>) {}
+    fun connectBestUserConfig(applyDpiMethods: Boolean = true, groupFilter: String = "ALL") {}
 }
 
 

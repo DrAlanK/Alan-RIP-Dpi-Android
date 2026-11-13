@@ -25,6 +25,8 @@ import kotlin.concurrent.withLock
 class AlanVpnService : VpnService() {
 
     companion object {
+        @Volatile var splitTunnelMode: String = "ALL"
+        @Volatile var splitTunnelPackages: Set<String> = emptySet()
         const val ACTION_START_TUN = "com.alan.ripdpi.action.START_TUN"
         const val ACTION_STOP_TUN = "com.alan.ripdpi.action.STOP_TUN"
         const val ACTION_DISCONNECT_FROM_NOTIF = "com.alan.ripdpi.action.DISCONNECT_FROM_NOTIF"

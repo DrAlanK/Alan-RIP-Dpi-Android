@@ -120,39 +120,23 @@ object TunnelStreamVerifier {
         }
     }
 
-        fun fastProbe(httpPort: Int, timeoutMs: Long = 3500L): ProbeVerdict {
+            fun fastProbe(httpPort: Int, timeoutMs: Long = 3400L): ProbeVerdict {
         val client = okhttp3.OkHttpClient.Builder()
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .callTimeout(timeoutMs + 700L, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .retryOnConnectionFailure(false)
-            .build()
-
-        // 1-RTT HTTP probe inside the already-encrypted VLESS/VMess/Trojan tunnel (matches Windows speed!)
-        val urls = listOf(
-            "http://cp.cloudflare.com/generate_204",
-            "http://connectivitycheck.gstatic.com/generate_204",
-            "https://www.gstatic.com/generate_204"
-        )
-        for (u in urls) {
+            .callTimeout(timeoutMs + 600L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
+        for (u in listOf("http://cp.cloudflare.com/generate_204", "http://connectivitycheck.gstatic.com/generate_204", "https://www.gstatic.com/generate_204")) {
             val t0 = System.nanoTime()
             try {
-                val req = okhttp3.Request.Builder()
-                    .url(u)
-                    .header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0")
-                    .get()
-                    .build()
+                val req = okhttp3.Request.Builder().url(u).header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0").get().build()
                 client.newCall(req).execute().use { resp ->
                     if (resp.code == 204 || resp.code == 200) {
-                        val ms = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
-                        return ProbeVerdict(true, ms, resp.code)
+                        return ProbeVerdict(true, ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L), resp.code)
                     }
                 }
-            } catch (_: Throwable) {
-            }
+            } catch (_: Throwable) {}
         }
         return ProbeVerdict(false, -1L, 0)
     }
