@@ -51,7 +51,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -874,12 +873,13 @@ private fun V2ServerRowCard(
     }
     val vectorTag = item.cachedVectorId.ifBlank { item.preferredVectorId.ifBlank { "AUTO" } }
     val cleanTitle = remember(item.name, item.protocol, item.host) {
-        item.name
+        val noBrackets = Regex("""\[[^\]]*\]""").replace(item.name, "").trim()
             .replace("VLESS · ", "")
             .replace("VMESS · ", "")
             .replace("TROJAN · ", "")
             .trim()
-            .ifBlank { "${item.protocol} (${item.host})" }
+        val asciiMatch = Regex("""[A-Za-z0-9._-]{4,}.*$""").find(noBrackets)?.value?.trim()
+        (asciiMatch ?: noBrackets).trimStart('•', '-', '|', '·', ' ').ifBlank { "${item.protocol} (${item.host})" }
     }
 
     Row(

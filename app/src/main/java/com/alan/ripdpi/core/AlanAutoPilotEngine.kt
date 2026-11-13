@@ -1834,7 +1834,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 _telemetry.update {
                     it.copy(
                         progressPercent = pct,
-                        statusDetail = "مسابقه موازی [$vecLabels] روی $dispName..."
+                        statusDetail = "در حال تست موازی ۶ مسیره و قفل سریع‌ترین متد ضد فیلتر..."
                     )
                 }
                 updateStageState(5, "ACTIVE", "تست همزمان ${waveVecs.size} متد روی $dispName", waveVecs.first().vectorId)

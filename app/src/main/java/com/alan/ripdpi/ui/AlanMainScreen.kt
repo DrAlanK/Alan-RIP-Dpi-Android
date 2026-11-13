@@ -39,7 +39,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -140,7 +139,7 @@ fun AlanMainScreen(
 
         val drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)
 
-        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        CompositionLocalProvider(LocalLayoutDirection provides if (AlanI18n.lang == "en") LayoutDirection.Ltr else LayoutDirection.Rtl) {
             ModalNavigationDrawer(
                 drawerState = drawerState,
                 drawerContent = {
@@ -334,12 +333,37 @@ fun AlanMainScreen(
                                 }
                             }
 
-                            AlanNeuIconButton(
-                                icon = if (darkTheme) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
-                                tint = p.accentGold,
-                                size = 42.dp,
-                                onClick = { controller.updateSettings(mapOf("darkTheme" to !darkTheme)) }
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .height(42.dp)
+                                        .width(44.dp)
+                                        .alanGlassCard(cornerRadius = 13.dp)
+                                        .clickable {
+                                            AlanI18n.lang = if (AlanI18n.lang == "fa") "en" else "fa"
+                                        }
+                                ) {
+                                    LtrContent {
+                                        Text(
+                                            text = if (AlanI18n.lang == "fa") "EN" else "FA",
+                                            color = p.textPrimary,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 12.5.sp
+                                        )
+                                    }
+                                }
+
+                                AlanNeuIconButton(
+                                    icon = if (darkTheme) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                                    tint = p.accentGold,
+                                    size = 42.dp,
+                                    onClick = { controller.updateSettings(mapOf("darkTheme" to !darkTheme)) }
+                                )
+                            }
                         }
                     }
                 ) { innerPadding ->

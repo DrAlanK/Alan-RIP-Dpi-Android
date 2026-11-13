@@ -43,7 +43,11 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material3.Text as M3Text
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -153,6 +157,269 @@ private val LightAlanPalette = AlanPalette(
 )
 
 val LocalAlanPalette = staticCompositionLocalOf { DarkAlanPalette }
+
+object AlanI18n {
+    var lang by mutableStateOf("fa")
+
+    private val exactMap = mapOf(
+        "خانه" to "Home",
+        "کانفیگ‌ها" to "Profiles",
+        "اسکنر متد" to "DPI Method Lab",
+        "IP تمیز و DoH" to "Clean IP & DoH",
+        "اسکنر IP تمیز" to "Clean IP Scanner",
+        "تنظیمات عمومی" to "General Settings",
+        "تنظیمات Xray" to "Xray Settings",
+        "تنظیمات هسته Xray" to "Xray Core Settings",
+        "لاگ‌ها" to "Live Logs",
+        "کنسول لاگ عمیق مهندسی" to "Deep Engineering Logs",
+        "موتور هوشمند ضد فیلترینگ و DPI" to "Adaptive Anti-DPI & Tunnel Engine",
+        "حالت خودکار ابری" to "Smart Cloud Auto-Pilot",
+        "حالت خودکار هوشمند" to "Smart Auto-Pilot",
+        "اتصال" to "Connect",
+        "قطع اتصال" to "Disconnect",
+        "در حال برقراری" to "Connecting",
+        "تلاش مجدد" to "Retry",
+        "لغو اتصال" to "Cancel",
+        "آماده برقراری ارتباط" to "Ready to Connect",
+        "آماده اتصال هوشمند" to "Smart Auto-Connect Ready",
+        "متصل از طریق شبکه ابری هوشمند" to "Connected via Smart Cloud Network",
+        "تونل امن روی پروفایل شخصی برقرار است" to "Secure Tunnel Active on Personal Profile",
+        "در حال آماده‌سازی هسته و بررسی شبکه..." to "Initializing core & probing network...",
+        "در حال تست موازی ۶ مسیره و یافتن بهترین متد..." to "Running 6-lane parallel DPI method race...",
+        "در حال مذاکره TLS و تایید سلامت تونل..." to "Negotiating TLS & verifying tunnel stream...",
+        "در حال برقراری و قفل نهایی تونل امن..." to "Locking final verified anti-DPI tunnel...",
+        "ارتباط برقرار نشد؛ متد یا سرور دیگری را امتحان کنید" to "Connection failed; try another method or server",
+        "اتصال مجدد" to "Reconnect",
+        "بهترینِ کانفیگ من" to "Best Personal",
+        "دریافت" to "Download",
+        "ارسال" to "Upload",
+        "وی‌پی‌ان" to "VPN",
+        "پروکسی" to "Proxy",
+        "دی‌ان‌اس DoH" to "DoH DNS",
+        "موقعیت سرور" to "Server Location",
+        "خودکار (سریع‌ترین)" to "Auto (Fastest)",
+        "خودکار" to "Auto",
+        "سرور انتخابی" to "Selected Server",
+        "پروفایل و متد" to "Profile & Method",
+        "ضد DPI فعال" to "Anti-DPI ON",
+        "ضد DPI" to "Anti-DPI",
+        "متد DPI: فعال" to "DPI Method: ON",
+        "متد DPI: روشن" to "DPI Method: ON",
+        "خالص v2ray" to "Pure v2ray",
+        "مخزن ابری هوشمند" to "Smart Cloud Repo",
+        "همه برنامه‌ها" to "All Apps",
+        "تفکیک برنامه‌ها" to "Per-App Proxy",
+        "تفکیک برنامه‌ها (Per-App Proxy)" to "Per-App Proxy (Split Tunnel)",
+        "فقط انتخابی‌ها" to "Include Selected",
+        "عبور مستقیم" to "Bypass Selected",
+        "عبور مستقیم (بدون VPN)" to "Bypass VPN (Direct)",
+        "نمایش برنامه‌های سیستمی اندروید" to "Show Android System Apps",
+        "اتصال خودکار به بهترینِ من" to "Auto-Connect Best Personal",
+        "اتصال خودکار به بهترین کانفیگ من (با متد DPI)" to "Auto-Connect Best Personal (with Anti-DPI)",
+        "اتصال خودکار به بهترین کانفیگ من (خالص v2ray)" to "Auto-Connect Best Personal (Pure v2ray)",
+        "دستی" to "Manual",
+        "دستی (Manual)" to "Manual",
+        "انتخاب همه" to "Select All",
+        "همه" to "All",
+        "لغو" to "Clear",
+        "انصراف" to "Cancel",
+        "بستن" to "Close",
+        "ثبت" to "Save",
+        "ذخیره تغییرات" to "Save Changes",
+        "بروزرسانی" to "Refresh",
+        "بروزرسانی همه" to "Refresh All",
+        "پاک کردن" to "Clear",
+        "پاک‌سازی" to "Clear Logs",
+        "کپی لاگ" to "Copy Logs",
+        "کپی لینک" to "Copy Link",
+        "اشتراک‌گذاری" to "Share",
+        "افزودن کلیپ‌بورد" to "Paste Clipboard",
+        "مخزن ابری گیت‌هاب" to "GitHub Cloud Repo",
+        "انتخاب از کانفیگ‌های شخصی من" to "Switch to My Personal Profiles",
+        "انتخاب لوکیشن مخزن هوشمند" to "Select Smart Cloud Location",
+        "کانفیگ‌های من و اتصال هوشمند" to "My Profiles & Smart Connect",
+        "اعمال متدهای ضد DPI و IP تمیز" to "Apply Anti-DPI Vectors & Clean IP",
+        "فعال: تست خودکار متدهای ضد فیلتر" to "Enabled: Auto-probe 24 Anti-DPI vectors",
+        "غیرفعال: اتصال خالص استاندارد v2rayNG" to "Disabled: Pure standard v2rayNG connection",
+        "مدیریت استاندارد ساب‌ها، پینگ واقعی و متد ضد DPI" to "Manage Subscriptions, Real-Ping & Anti-DPI",
+        "جستجوی نام، آدرس، SNI یا پروتکل..." to "Search remark, host, SNI or protocol...",
+        "مدیریت لینک‌های اشتراک (Sub)" to "Subscription Manager",
+        "عنوان اشتراک (نام گروه)" to "Subscription Title (Group Name)",
+        "لینک اشتراک (https://...)" to "Subscription URL (https://...)",
+        "افزودن و دریافت کانفیگ‌های اشتراک" to "Add & Fetch Subscription",
+        "ساخت کانفیگ جدید" to "Create New Profile",
+        "ویرایش کامل کانفیگ" to "Edit Profile",
+        "وارد کردن مستقیم لینک خام" to "Direct Raw URI Input",
+        "نام کانفیگ (Remark)" to "Profile Remark Name",
+        "پروتکل" to "Protocol",
+        "نوع شبکه" to "Transport",
+        "متد عبور ضد DPI" to "Anti-DPI Vector",
+        "آدرس سرور (Host / IP)" to "Server Host / IP",
+        "پورت" to "Port",
+        "شناسه UUID / رمز عبور" to "UUID / Password",
+        "نام کاربری و رمز عبور (فرمت user:password)" to "Username & Password (user:password)",
+        "SNI / شناسه سرور (Peer ID)" to "SNI / Peer ID",
+        "گروه / کلید مشترک (Group / PSK)" to "Auth Group / IPsec PSK",
+        "امنیت" to "Security",
+        "مسیر (Path)" to "Path",
+        "یک کانفیگ" to "Single Profile",
+        "چند کانفیگ" to "Selected Profiles",
+        "کل مخزن" to "Entire Repo",
+        "انتخاب کانفیگ هدف" to "Select Target Profile",
+        "اتصال خودکار به سریع‌ترین متد تاییدشده" to "Auto-connect to fastest verified vector",
+        "تزریق خودکار IP تمیز کلادفلر حین تست" to "Auto-inject Cloudflare Clean IP during scan",
+        "شروع اسکن متد" to "Start Method Scan",
+        "توقف اسکن" to "Stop Scan",
+        "ثبت متد" to "Save Vector",
+        "ثبت و اتصال فوری" to "Save & Connect Now",
+        "رادار IP تمیز کلادفلر" to "Cloudflare Clean IP Radar",
+        "اسکنر و تنظیم DoH (DNSveil)" to "DoH Scanner & Setter (DNSveil)",
+        "فایل گیت‌هاب" to "GitHub Subnets",
+        "ساب‌نت پیش‌فرض" to "Default Subnets",
+        "رنج دلخواه" to "Custom CIDR",
+        "پورت (443/8443)" to "Port (443/8443)",
+        "تعداد هدف" to "Max Hits",
+        "شروع اسکن" to "Start Scan",
+        "توقف" to "Stop",
+        "اعمال و کلون روی کانفیگ‌ها" to "Apply / Clone to Profiles",
+        "افزودن مخزن DoH" to "Add Custom DoH",
+        "اسکن DoH" to "Scan DoH",
+        "ست روی نت" to "Set Active",
+        "فعال" to "Active",
+        "بازنشانی پیش‌فرض" to "Reset Defaults",
+        "ذخیره تنظیمات شبکه" to "Save Network Settings",
+        "ذخیره تنظیمات Xray" to "Save Xray Settings",
+        "مدیریت و انتخاب برنامه‌ها (Per-App Proxy)" to "Select Apps for Per-App Proxy",
+        "تم تیره نئومورفیک (حالت شب)" to "Dark Neumorphic Theme (Night Mode)",
+        "با خاموش کردن این گزینه، تم روشن نئومورفیک فعال می‌شود" to "Disable to switch to Light Neumorphic Theme",
+        "تزریق خودکار IP تمیز روی کلادفلر" to "Auto-Inject Clean IP on Cloudflare/CDN",
+        "اعمال متد ضد DPI در اتصال خودکار کانفیگ شخصی" to "Apply Anti-DPI in Personal Auto-Connect",
+        "انتخاب خودکار مخزن ابری هنگام اتصال" to "Use Smart Cloud Repo on Main Connect",
+        "نام‌گذاری خودکار با پرچم هنگام اسکن" to "Auto-Rename with Country Flag on Scan",
+        "تعمیر خودکار اتصال (Watchdog)" to "Self-Healing Connection Watchdog",
+        "آلمان" to "Germany",
+        "هلند" to "Netherlands",
+        "فنلاند" to "Finland",
+        "انگلستان" to "United Kingdom",
+        "فرانسه" to "France",
+        "آمریکا" to "United States",
+        "سوئد" to "Sweden",
+        "ترکیه" to "Turkey",
+        "ایران" to "Iran",
+        "بین‌الملل" to "International",
+        "تست پینگ واقعی تونل (Real-Ping)" to "Real Tunnel Ping (HTTP 204)",
+        "پینگ سریع TCP همه کانفیگ‌ها" to "Fast TCP Ping All Profiles",
+        "ارسال کل مخزن به آزمایشگاه متد ضد DPI" to "Send Entire Repo to 6-Lane DPI Lab",
+        "تشخیص کشور و نام‌گذاری خودکار با پرچم" to "Detect Country & Auto-Rename with Flag",
+        "اسکن QR Code با دوربین" to "Scan QR Code with Camera",
+        "خواندن QR Code از تصویر گالری" to "Import QR Code from Gallery Image",
+        "افزودن از کلیپ‌بورد" to "Import from Clipboard",
+        "وارد کردن متنی / لینک گروهی" to "Batch Text / URI Import",
+        "ساخت کانفیگ دستی (v2ray / AnyConnect / IKEv2 / L2TP)" to "Create Manual Profile (v2ray / AnyConnect / IKEv2 / L2TP)",
+        "مدیریت لینک‌های اشتراک (Subscriptions)" to "Manage Subscriptions",
+        "مرتب‌سازی بر اساس پینگ (سریع‌ترین)" to "Sort by Ping (Fastest First)",
+        "مرتب‌سازی بر اساس گروه اشتراک" to "Sort by Subscription Group",
+        "مرتب‌سازی بر اساس نام" to "Sort by Remark Name",
+        "مرتب‌سازی بر اساس پروتکل" to "Sort by Protocol",
+        "حذف کانفیگ‌های تکراری" to "Deduplicate Profiles",
+        "حذف کانفیگ‌های ازکارافتاده (DEAD)" to "Remove Dead Profiles",
+        "کپی همه کانفیگ‌های سالم" to "Copy All Verified Profiles",
+        "خروجی Base64 همه کانفیگ‌ها" to "Export All as Base64 Subscription",
+        "حذف همه کانفیگ‌ها" to "Clear All Profiles"
+    )
+
+    fun tr(input: String): String {
+        if (lang != "en" || input.isEmpty()) return input
+        exactMap[input]?.let { return it }
+        val trimmed = input.trim()
+        exactMap[trimmed]?.let { return it }
+
+        if (trimmed.startsWith("پروفایل‌ها و اشتراک‌ها (")) {
+            val n = trimmed.substringAfter("(").substringBefore(")")
+            return "Profiles & Subscriptions ($n)"
+        }
+        if (trimmed.startsWith("همه گروه‌ها (")) {
+            val n = trimmed.substringAfter("(").substringBefore(")")
+            return "All Groups ($n)"
+        }
+        if (trimmed.startsWith("+ اشتراک‌ها (")) {
+            val n = trimmed.substringAfter("(").substringBefore(")")
+            return "+ Subscriptions ($n)"
+        }
+        if (trimmed.startsWith("کانفیگ‌های من (")) {
+            val n = trimmed.substringAfter("(").substringBefore(")")
+            return "My Profiles ($n)"
+        }
+        if (trimmed.endsWith("سرور مخزن")) {
+            val n = trimmed.removeSuffix("سرور مخزن").trim()
+            return "$n Repo Servers"
+        }
+        if (trimmed.endsWith("سرور آماده")) {
+            val n = trimmed.removeSuffix("سرور آماده").trim()
+            return "$n Ready Servers"
+        }
+        if (trimmed.startsWith("همه (")) {
+            val n = trimmed.substringAfter("(").substringBefore(")")
+            return "All ($n)"
+        }
+        if (trimmed.startsWith("ذخیره و اعمال (")) {
+            val n = trimmed.substringAfter("(").substringBefore(")")
+            return "Save & Apply ($n)"
+        }
+        if (trimmed.endsWith("برنامه انتخاب شده")) {
+            val n = trimmed.removeSuffix("برنامه انتخاب شده").trim()
+            return "$n App(s) Selected"
+        }
+        if (trimmed.endsWith("رویداد ثبت‌شده")) {
+            val n = trimmed.removeSuffix("رویداد ثبت‌شده").trim()
+            return "$n Logged Events"
+        }
+        if (trimmed.startsWith("دی‌ان‌اس امن فعال:")) {
+            return "Active DoH: " + trimmed.substringAfter(":").trim()
+        }
+        return input
+    }
+}
+
+@Composable
+fun Text(
+    text: String,
+    modifier: Modifier = Modifier,
+    color: Color = Color.Unspecified,
+    fontSize: TextUnit = TextUnit.Unspecified,
+    fontStyle: FontStyle? = null,
+    fontWeight: FontWeight? = null,
+    fontFamily: FontFamily? = null,
+    letterSpacing: TextUnit = TextUnit.Unspecified,
+    textDecoration: TextDecoration? = null,
+    textAlign: TextAlign? = null,
+    lineHeight: TextUnit = TextUnit.Unspecified,
+    overflow: TextOverflow = TextOverflow.Clip,
+    softWrap: Boolean = true,
+    maxLines: Int = Int.MAX_VALUE,
+    minLines: Int = 1,
+    style: TextStyle = LocalTextStyle.current
+) {
+    M3Text(
+        text = AlanI18n.tr(text),
+        modifier = modifier,
+        color = color,
+        fontSize = fontSize,
+        fontStyle = fontStyle,
+        fontWeight = fontWeight,
+        fontFamily = fontFamily,
+        letterSpacing = letterSpacing,
+        textDecoration = textDecoration,
+        textAlign = textAlign,
+        lineHeight = lineHeight,
+        overflow = overflow,
+        softWrap = softWrap,
+        maxLines = maxLines,
+        minLines = minLines,
+        style = style
+    )
+}
+
 
 val VazirmatnFontFamily = FontFamily(
     Font(R.font.vazirmatn_regular, FontWeight.Normal),
@@ -528,8 +795,8 @@ fun AlanSheetTextField(
             modifier = Modifier.fillMaxWidth()
         ) {
             if (label.isNotBlank() && (value.isNotEmpty() || isFocused || !singleLine)) {
-                Text(
-                    text = label,
+                M3Text(
+                    text = AlanI18n.tr(label),
                     color = if (isFocused) p.accentGold else p.textMuted,
                     fontFamily = VazirmatnFontFamily,
                     fontSize = 9.5.sp,
@@ -564,8 +831,8 @@ fun AlanSheetTextField(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             if (value.isEmpty() && !isFocused && singleLine && label.isNotBlank()) {
-                                Text(
-                                    text = label,
+                                M3Text(
+                                    text = AlanI18n.tr(label),
                                     color = p.textMuted,
                                     fontFamily = VazirmatnFontFamily,
                                     fontSize = 12.sp,
@@ -608,8 +875,8 @@ fun AlanCustomSelectBox(
 
     Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = modifier) {
         if (label.isNotBlank()) {
-            Text(
-                text = label,
+            M3Text(
+                text = AlanI18n.tr(label),
                 color = p.textSecondary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -629,8 +896,8 @@ fun AlanCustomSelectBox(
                 .padding(horizontal = 13.dp, vertical = 10.dp)
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = selectedOption.label,
+                M3Text(
+                    text = AlanI18n.tr(selectedOption.label),
                     color = p.textPrimary,
                     fontWeight = FontWeight.Bold,
                     fontSize = 12.5.sp,
@@ -638,8 +905,8 @@ fun AlanCustomSelectBox(
                     overflow = TextOverflow.Ellipsis
                 )
                 if (selectedOption.subtitle.isNotBlank()) {
-                    Text(
-                        text = selectedOption.subtitle,
+                    M3Text(
+                        text = AlanI18n.tr(selectedOption.subtitle),
                         color = p.textMuted,
                         fontSize = 10.sp,
                         maxLines = 1,
@@ -675,7 +942,7 @@ fun AlanCustomSelectBox(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
+                            M3Text(
                                 text = label.ifBlank { "انتخاب گزینه" },
                                 color = p.accentGold,
                                 fontWeight = FontWeight.ExtraBold,
@@ -718,8 +985,8 @@ fun AlanCustomSelectBox(
                                         .padding(horizontal = 13.dp, vertical = 10.dp)
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = opt.label,
+                                        M3Text(
+                                            text = AlanI18n.tr(opt.label),
                                             color = if (isSel) p.accentGold else p.textPrimary,
                                             fontWeight = if (isSel) FontWeight.ExtraBold else FontWeight.SemiBold,
                                             fontSize = 12.sp,
@@ -727,7 +994,7 @@ fun AlanCustomSelectBox(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         if (opt.subtitle.isNotBlank()) {
-                                            Text(
+                                            M3Text(
                                                 text = opt.subtitle,
                                                 color = p.textMuted,
                                                 fontSize = 10.sp,
@@ -778,7 +1045,7 @@ fun DarkActionMenuDialog(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(
+                        M3Text(
                             text = title,
                             color = p.accentGold,
                             fontWeight = FontWeight.ExtraBold,
@@ -806,8 +1073,8 @@ fun DarkActionMenuDialog(
                                 }
                                 .padding(horizontal = 14.dp, vertical = 12.dp)
                         ) {
-                            Text(
-                                text = label,
+                            M3Text(
+                                text = AlanI18n.tr(label),
                                 color = if (isDanger) p.danger else p.textPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.5.sp
@@ -854,7 +1121,7 @@ fun QrCodeDisplayDialog(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
+                            M3Text(
                                 text = title,
                                 color = p.textPrimary,
                                 fontWeight = FontWeight.ExtraBold,
@@ -864,7 +1131,7 @@ fun QrCodeDisplayDialog(
                             )
                             if (subtitle.isNotBlank()) {
                                 LtrContent {
-                                    Text(
+                                    M3Text(
                                         text = subtitle,
                                         color = p.textMuted,
                                         fontSize = 10.5.sp,
@@ -901,12 +1168,12 @@ fun QrCodeDisplayDialog(
                                 modifier = Modifier.size(200.dp)
                             )
                         } else {
-                            Text("خطا در ساخت QR", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            M3Text("خطا در ساخت QR", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
                     if (copied) {
-                        Text(
+                        M3Text(
                             text = "لینک کانفیگ در کلیپ‌بورد کپی شد.",
                             color = p.emerald,
                             fontWeight = FontWeight.Bold,
@@ -932,7 +1199,7 @@ fun QrCodeDisplayDialog(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Outlined.ContentCopy, null, tint = p.accentGold, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("کپی لینک", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                M3Text("کپی لینک", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
                         }
 
@@ -950,7 +1217,7 @@ fun QrCodeDisplayDialog(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Outlined.Share, null, tint = p.onAccent, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("اشتراک‌گذاری", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                                M3Text("اشتراک‌گذاری", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
                             }
                         }
                     }

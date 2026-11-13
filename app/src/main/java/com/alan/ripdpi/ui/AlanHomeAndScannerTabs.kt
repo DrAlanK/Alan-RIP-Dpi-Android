@@ -39,7 +39,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -64,6 +63,33 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import java.util.Locale
+
+
+private fun sanitizePersianStatusLine(raw: String, progress: Int): String {
+    val clean = raw.trim()
+    if (clean.isEmpty() || clean.contains("[") || clean.contains("]") || clean.contains("VEC-", true) || clean.contains("://") || clean.contains(".pages.") || clean.contains(".workers.")) {
+        return when {
+            progress < 25 -> "در حال آماده‌سازی هسته و بررسی شبکه..."
+            progress < 55 -> "در حال تست موازی ۶ مسیره و یافتن بهترین متد..."
+            progress < 85 -> "در حال مذاکره TLS و تایید سلامت تونل..."
+            else -> "در حال برقراری و قفل نهایی تونل امن..."
+        }
+    }
+    return clean
+}
+
+private fun sanitizeCleanServerTitle(rawName: String, fallbackProto: String): String {
+    var s = rawName.trim()
+    // Remove bracketed prefixes like [NL-01] or [⚡120ms] and mixed Persian country prefixes when followed by Latin hostnames
+    s = Regex("""\[[^\]]*\]""").replace(s, "").trim()
+    s = s.replace("VLESS · ", "").replace("VMESS · ", "").replace("TROJAN · ", "")
+    // Strip leading flags and Persian words if the rest of the name is Latin/ASCII
+    val asciiPart = Regex("""[A-Za-z0-9._-]{4,}.*$""").find(s)?.value?.trim()
+    if (!asciiPart.isNullOrBlank()) {
+        return asciiPart.trimStart('•', '-', '|', '·', ' ')
+    }
+    return s.trimStart('•', '-', '|', '·', ' ').ifBlank { fallbackProto }
+}
 
 @Composable
 fun HomeTabScreen(
@@ -127,8 +153,8 @@ fun HomeTabScreen(
     val cleanStatusHeadline = when {
         telemetry.isConnected && isPureAutoMode -> "متصل از طریق شبکه ابری هوشمند"
         telemetry.isConnected -> "تونل امن روی پروفایل شخصی برقرار است"
-        telemetry.isConnecting -> telemetry.statusDetail.ifBlank { "در حال مذاکره و قفل سریع‌ترین مسیر..." }
-        isErrorPhase -> telemetry.statusDetail.ifBlank { "ارتباط برقرار نشد؛ مجدداً تلاش کنید" }
+        telemetry.isConnecting -> sanitizePersianStatusLine(telemetry.statusDetail, telemetry.progressPercent)
+        isErrorPhase -> "ارتباط برقرار نشد؛ متد یا سرور دیگری را امتحان کنید"
         isPureAutoMode -> "آماده اتصال هوشمند"
         else -> "آماده برقراری ارتباط"
     }
@@ -153,13 +179,9 @@ fun HomeTabScreen(
     }
 
     val connectionTitleText = when {
-        isPureAutoMode -> "مخزن ابری هوشمند"
-        activeProfile != null -> activeProfile.name
-            .replace("VLESS · ", "")
-            .replace("VMESS · ", "")
-            .trim()
-            .ifBlank { activeProfile.protocol }
-        else -> "کانفیگ‌های من (${profiles.size})"
+        isPureAutoMode -> "Smart Cloud Repo"
+        activeProfile != null -> sanitizeCleanServerTitle(activeProfile.name, activeProfile.protocol)
+        else -> "Personal Repo (${profiles.size})"
     }
 
     val activeDohLabel = remember(dohScanState.activeDohName, settings.activeDohUrl) {
