@@ -25,14 +25,6 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.SocketFactory
 
-object BridgeDeepDiagnostics {
-    @Volatile
-    var globalDeepLogger: ((String) -> Unit)? = null
-    fun log(msg: String) {
-        globalDeepLogger?.invoke(msg)
-    }
-}
-
 class FullDuplexMutatorBridge(
     val listenPort: Int = 20809,
     initialRemoteHost: String = "",
@@ -162,7 +154,6 @@ class FullDuplexMutatorBridge(
         rawPassthrough: Boolean = false,
         flushExistingPool: Boolean = false
     ) {
-        BridgeDeepDiagnostics.log("[DPI-BRIDGE] Route -> $remoteHost:$remotePort | Vector=${vector.vectorId} (${vector.codeName})")
         val cleanHost = remoteHost.trim().removePrefix("[").removeSuffix("]")
         val prev = routeRef.get()
         if (prev.remoteHost != cleanHost) {
@@ -552,23 +543,4 @@ class FullDuplexMutatorBridge(
         }
         return true
     }
-
-    private fun readCompleteTlsClientHello(input: java.io.InputStream, buffer: ByteArray): Int {
-        val firstRead = input.read(buffer, 0, buffer.size)
-        if (firstRead <= 0) return firstRead
-        if (firstRead >= 5 && (buffer[0].toInt() and 0xFF) == 0x16) {
-            val recordLen = ((buffer[3].toInt() and 0xFF) shl 8) or (buffer[4].toInt() and 0xFF)
-            val totalExpected = (5 + recordLen).coerceAtMost(buffer.size)
-            var totalRead = firstRead
-            while (totalRead < totalExpected) {
-                val r = input.read(buffer, totalRead, totalExpected - totalRead)
-                if (r <= 0) break
-                totalRead += r
-            }
-            BridgeDeepDiagnostics.log("[TLS-HELLO] Read complete ClientHello (${totalRead}B, recordLen=${recordLen}B)")
-            return totalRead
-        }
-        return firstRead
-    }
-
 }

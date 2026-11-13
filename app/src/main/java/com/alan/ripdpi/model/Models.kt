@@ -3,7 +3,7 @@ package com.alan.ripdpi.model
 import java.util.Locale
 
 const val APP_NAME = "Alan-RIP-Dpi"
-const val APP_VERSION = "1.5.1"
+const val APP_VERSION = "1.6.0"
 
 enum class EngineState {
     CONNECTED,

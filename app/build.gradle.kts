@@ -18,7 +18,7 @@ android {
         applicationId = "com.alan.ripdpi"
         minSdk = 24
         targetSdk = 35
-        versionCode = 120
+        versionCode = 122
         versionName = "1.6.0"
     }
 

@@ -2,7 +2,6 @@ package com.alan.ripdpi.ui
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -48,7 +47,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
@@ -65,10 +63,6 @@ fun CleanIpScannerScreen(
     cleanIpState: CleanIpScanState,
     dohServers: List<DohServerUiItem> = emptyList(),
     dohScanState: DohScanUiState = DohScanUiState(),
-    onStartDohScan: (String) -> Unit = {},
-    onStopDohScan: () -> Unit = {},
-    onSelectActiveDoh: (url: String, connectNow: Boolean) -> Unit = { _, _ -> },
-    onAddCustomDohUrls: (String) -> Unit = {},
     onStartScan: (sourceMode: String, customRanges: String, port: Int, maxResults: Int) -> Unit,
     onStopScan: () -> Unit,
     onRefreshGithubSubnets: () -> Unit,
@@ -79,15 +73,20 @@ fun CleanIpScannerScreen(
         selectedIndices: List<Int>,
         cloneMode: Boolean,
         clonesPerConfig: Int
-    ) -> Unit
+    ) -> Unit,
+    onStartDohScan: (String) -> Unit = {},
+    onStopDohScan: () -> Unit = {},
+    onSelectActiveDoh: (url: String, connectNow: Boolean) -> Unit = { _, _ -> },
+    onAddCustomDohUrls: (String) -> Unit = {}
 ) {
     val p = LocalAlanPalette.current
     val context = LocalContext.current
 
-        var activeSubTab by rememberSaveable { mutableStateOf("CLEAN_IP") }
+    var activeSubTab by rememberSaveable { mutableStateOf("CLEAN_IP") }
     var dohTestDomain by rememberSaveable { mutableStateOf("github.com") }
     var customDohInput by rememberSaveable { mutableStateOf("") }
     var showAddDohModal by remember { mutableStateOf(false) }
+
     var sourceMode by rememberSaveable { mutableStateOf("github") }
     var customRangesText by rememberSaveable {
         mutableStateOf("104.16.0.0/20\n172.64.0.0/20\n188.114.96.0/22")
@@ -113,7 +112,7 @@ fun CleanIpScannerScreen(
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-                // Top Dual-Engine Selector: اسکنر IP تمیز | اسکنر DoH (DNSveil)
+        // Dual Engine Switch: رادار IP تمیز کلادفلر | اسکنر و تنظیم DoH (DNSveil)
         Row(
             horizontalArrangement = Arrangement.spacedBy(7.dp),
             modifier = Modifier
@@ -133,11 +132,7 @@ fun CleanIpScannerScreen(
                         .height(37.dp)
                         .then(
                             if (sel) {
-                                Modifier.alanGlassCard(
-                                    highlighted = true,
-                                    cornerRadius = 11.dp,
-                                    accentBorderColor = if (tabKey == "DOH_VEIL") p.emerald else p.accentGold
-                                )
+                                Modifier.alanGlassCard(highlighted = true, cornerRadius = 11.dp)
                             } else {
                                 Modifier.clip(RoundedCornerShape(11.dp))
                             }
@@ -178,7 +173,6 @@ fun CleanIpScannerScreen(
                             Text(
                                 text = dohScanState.activeDohUrl,
                                 color = p.emerald,
-                                fontFamily = FontFamily.Monospace,
                                 fontSize = 10.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -255,7 +249,7 @@ fun CleanIpScannerScreen(
                     ) {
                         Text(
                             text = if (dohScanState.isRunning) "توقف" else "اسکن DoH",
-                            color = Color(0xFF09120E),
+                            color = if (dohScanState.isRunning) Color.White else Color(0xFF07130E),
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 12.5.sp
                         )
@@ -314,7 +308,6 @@ fun CleanIpScannerScreen(
                                         Text(
                                             text = item.category,
                                             color = p.textMuted,
-                                            fontFamily = FontFamily.Monospace,
                                             fontSize = 9.sp
                                         )
                                     }
@@ -324,7 +317,6 @@ fun CleanIpScannerScreen(
                                 Text(
                                     text = item.url,
                                     color = p.textMuted,
-                                    fontFamily = FontFamily.Monospace,
                                     fontSize = 10.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -333,9 +325,8 @@ fun CleanIpScannerScreen(
                             if (item.resolvedIp.isNotBlank()) {
                                 LtrContent {
                                     Text(
-                                        text = "Resolved: ${item.resolvedIp} (${item.statusDetail})",
+                                        text = "IP: ${item.resolvedIp} (${item.statusDetail})",
                                         color = p.emerald,
-                                        fontFamily = FontFamily.Monospace,
                                         fontSize = 9.5.sp
                                     )
                                 }
@@ -351,7 +342,6 @@ fun CleanIpScannerScreen(
                                     Text(
                                         text = "${item.latencyMs} ms",
                                         color = p.emerald,
-                                        fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.ExtraBold,
                                         fontSize = 11.5.sp
                                     )
@@ -377,414 +367,369 @@ fun CleanIpScannerScreen(
                     }
                 }
             }
-            return@Column
-        }
-
-        // Segmented Inset Control: فایل گیت‌هاب / ساب‌نت پیش‌فرض / رنج دلخواه
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .alanNeuInset(cornerRadius = 15.dp)
-                .padding(5.dp)
-        ) {
-            listOf(
-                "github" to "فایل گیت‌هاب",
-                "default" to "ساب‌نت پیش‌فرض",
-                "custom" to "رنج دلخواه"
-            ).forEach { (key, title) ->
-                val sel = sourceMode == key
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(36.dp)
-                        .then(
-                            if (sel) {
-                                Modifier.alanGlassCard(
-                                    highlighted = true,
-                                    cornerRadius = 11.dp,
-                                    accentBorderColor = p.accentGold
-                                )
-                            } else {
-                                Modifier.clip(RoundedCornerShape(11.dp))
-                            }
+        } else {
+            // Segmented Inset Control: فایل گیت‌هاب / ساب‌نت پیش‌فرض / رنج دلخواه
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alanNeuInset(cornerRadius = 15.dp)
+                    .padding(5.dp)
+            ) {
+                listOf(
+                    "github" to "فایل گیت‌هاب",
+                    "default" to "ساب‌نت پیش‌فرض",
+                    "custom" to "رنج دلخواه"
+                ).forEach { (key, title) ->
+                    val sel = sourceMode == key
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .then(
+                                if (sel) {
+                                    Modifier.alanGlassCard(highlighted = true, cornerRadius = 11.dp)
+                                } else {
+                                    Modifier.clip(RoundedCornerShape(11.dp))
+                                }
+                            )
+                            .clickable { sourceMode = key }
+                    ) {
+                        Text(
+                            text = title,
+                            color = if (sel) p.accentGold else p.textSecondary,
+                            fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold,
+                            fontSize = 11.5.sp
                         )
-                        .clickable { sourceMode = key }
-                ) {
-                    Text(
-                        text = title,
-                        color = if (sel) p.accentGold else p.textSecondary,
-                        fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold,
-                        fontSize = 11.5.sp,
-                        maxLines = 1
-                    )
+                    }
                 }
             }
-        }
 
-        // Control Card
-        Column(
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .alanGlassCard(cornerRadius = 18.dp)
-                .padding(14.dp)
-        ) {
-            when (sourceMode) {
-                "github" -> {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alanGlassCard(cornerRadius = 18.dp)
+                    .padding(14.dp)
+            ) {
+                when (sourceMode) {
+                    "github" -> {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "فایل ساب‌نت گیت‌هاب (${cleanIpState.loadedSubnetsCount} رنج فعال)",
+                                    color = p.textPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                LtrContent {
+                                    Text(
+                                        text = settings.subnetsRepoUrl,
+                                        color = p.textMuted,
+                                        fontSize = 9.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                AlanNeuIconButton(
+                                    icon = Icons.Outlined.Edit,
+                                    tint = p.textSecondary,
+                                    size = 34.dp,
+                                    isPressed = editingRepoUrl,
+                                    onClick = { editingRepoUrl = !editingRepoUrl }
+                                )
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .height(34.dp)
+                                        .alanGlassCard(cornerRadius = 10.dp)
+                                        .clickable { onRefreshGithubSubnets() }
+                                        .padding(horizontal = 10.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Outlined.Refresh, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("بروزرسانی", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+
+                        if (editingRepoUrl) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                AlanSheetTextField(
+                                    label = "لینک فایل ساب‌نت گیت‌هاب",
+                                    value = repoUrlDraft,
+                                    onValueChange = { repoUrlDraft = it },
+                                    ltr = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .height(48.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(p.accentGold)
+                                        .clickable {
+                                            if (repoUrlDraft.isNotBlank()) {
+                                                onUpdateSubnetsUrl(repoUrlDraft.trim())
+                                                editingRepoUrl = false
+                                                feedback = "لینک فایل ساب‌نت ذخیره شد."
+                                            }
+                                        }
+                                        .padding(horizontal = 14.dp)
+                                ) {
+                                    Text("ثبت", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                    "custom" -> {
+                        AlanSheetTextField(
+                            label = "رنج‌های CIDR یا بازه IP (هر خط یک رنج)",
+                            value = customRangesText,
+                            onValueChange = { customRangesText = it },
+                            ltr = true,
+                            singleLine = false
+                        )
+                    }
+                    else -> {
+                        Text(
+                            text = "استفاده از ۲۲ ساب‌نت منتخب کلادفلر برای اپراتورهای همراه و ثابت",
+                            color = p.textSecondary,
+                            fontSize = 11.5.sp
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    AlanSheetTextField(
+                        label = "پورت (443/8443)",
+                        value = portText,
+                        onValueChange = { portText = it.filter(Char::isDigit) },
+                        ltr = true,
+                        numeric = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    AlanSheetTextField(
+                        label = "تعداد هدف",
+                        value = maxHitsText,
+                        onValueChange = { maxHitsText = it.filter(Char::isDigit) },
+                        ltr = true,
+                        numeric = true,
+                        modifier = Modifier.weight(0.95f)
+                    )
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .height(48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (cleanIpState.isRunning) p.danger else p.accentGold)
+                            .clickable {
+                                if (cleanIpState.isRunning) {
+                                    onStopScan()
+                                } else {
+                                    checkedIps.clear()
+                                    onStartScan(
+                                        sourceMode,
+                                        customRangesText,
+                                        portText.toIntOrNull()?.coerceIn(1, 65535) ?: 443,
+                                        maxHitsText.toIntOrNull()?.coerceIn(5, 50) ?: 20
+                                    )
+                                }
+                            }
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        Text(
+                            text = if (cleanIpState.isRunning) "توقف" else "شروع اسکن",
+                            color = if (cleanIpState.isRunning) Color.White else p.onAccent,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 12.5.sp
+                        )
+                    }
+                }
+
+                if (cleanIpState.isRunning) {
+                    Box(modifier = Modifier.fillMaxWidth().height(6.dp).alanNeuInset(cornerRadius = 3.dp)) {
+                        Box(modifier = Modifier.fillMaxWidth(animPct).height(6.dp).clip(RoundedCornerShape(3.dp)).background(p.accentGold))
+                    }
+                }
+
+                Text(
+                    text = feedback.ifBlank { cleanIpState.summary },
+                    color = if (feedback.isNotBlank()) p.emerald else p.textSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (cleanIpHits.isNotEmpty()) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp)
+                            .alanGlassCard(cornerRadius = 12.dp)
+                            .clickable {
+                                val targetList = if (checkedIps.isNotEmpty()) checkedIps.toList() else cleanIpHits.map { it.ip }
+                                copyPlainTextToClipboard(context, "CleanIPs", targetList.joinToString("\n"))
+                                feedback = "${targetList.size} آی‌پی تمیز در کلیپ‌بورد کپی شد."
+                            }
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.ContentCopy, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                text = if (checkedIps.isNotEmpty()) "کپی انتخابی (${checkedIps.size})" else "کپی همه (${cleanIpHits.size})",
+                                color = p.textPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.5.sp
+                            )
+                        }
+                    }
+
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1.3f)
+                            .height(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(p.accentGold)
+                            .clickable {
+                                singleQuickIp = null
+                                showApplyModal = true
+                            }
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.Bolt, null, tint = p.onAccent, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = "اعمال و کلون روی کانفیگ‌ها",
+                                color = p.onAccent,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.5.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                itemsIndexed(cleanIpHits, key = { _, item -> item.ip }) { rankIdx, hit ->
+                    val isChecked = hit.ip in checkedIps
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "فایل ساب‌نت گیت‌هاب (${cleanIpState.loadedSubnetsCount} رنج فعال)",
-                                color = p.textPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
-                            LtrContent {
-                                Text(
-                                    text = settings.subnetsRepoUrl,
-                                    color = p.textMuted,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 9.5.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .alanGlassCard(highlighted = rankIdx == 0, cornerRadius = 15.dp)
+                            .clickable {
+                                if (isChecked) checkedIps.remove(hit.ip) else checkedIps.add(hit.ip)
                             }
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            AlanNeuIconButton(
-                                icon = Icons.Outlined.Edit,
-                                tint = p.textSecondary,
-                                size = 34.dp,
-                                isPressed = editingRepoUrl,
-                                onClick = { editingRepoUrl = !editingRepoUrl }
-                            )
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Box(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
-                                    .height(34.dp)
-                                    .alanGlassCard(cornerRadius = 10.dp)
-                                    .clickable { onRefreshGithubSubnets() }
-                                    .padding(horizontal = 10.dp)
+                                    .size(22.dp)
+                                    .then(
+                                        if (isChecked) {
+                                            Modifier.clip(RoundedCornerShape(6.dp)).background(p.accentGold)
+                                        } else {
+                                            Modifier.alanNeuInset(cornerRadius = 6.dp)
+                                        }
+                                    )
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Outlined.Refresh, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
-                                    Spacer(Modifier.width(4.dp))
+                                if (isChecked) {
+                                    Icon(Icons.Outlined.Check, null, tint = p.onAccent, modifier = Modifier.size(14.dp))
+                                }
+                            }
+
+                            LtrContent {
+                                Column {
                                     Text(
-                                        text = "بروزرسانی",
+                                        text = "${hit.ip}:${hit.port}",
                                         color = p.textPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 13.sp
+                                    )
+                                    Text(
+                                        text = "${hit.colo} • ${hit.subnet}",
+                                        color = p.textMuted,
+                                        fontSize = 10.sp
                                     )
                                 }
                             }
                         }
-                    }
 
-                    if (editingRepoUrl) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            horizontalArrangement = Arrangement.spacedBy(7.dp)
                         ) {
-                            AlanSheetTextField(
-                                label = "لینک فایل ساب‌نت گیت‌هاب",
-                                value = repoUrlDraft,
-                                onValueChange = { repoUrlDraft = it },
-                                ltr = true,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .height(48.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(p.accentGold)
-                                    .clickable {
-                                        if (repoUrlDraft.isNotBlank()) {
-                                            onUpdateSubnetsUrl(repoUrlDraft.trim())
-                                            editingRepoUrl = false
-                                            feedback = "لینک فایل ساب‌نت ذخیره شد."
-                                        }
-                                    }
-                                    .padding(horizontal = 14.dp)
-                            ) {
+                            LtrContent {
                                 Text(
-                                    text = "ثبت",
-                                    color = p.onAccent,
+                                    text = "${hit.latencyMs} ms",
+                                    color = p.emerald,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 12.sp
                                 )
                             }
-                        }
-                    }
-                }
-
-                "custom" -> {
-                    AlanSheetTextField(
-                        label = "رنج‌های CIDR یا بازه IP (هر خط یک رنج)",
-                        value = customRangesText,
-                        onValueChange = { customRangesText = it },
-                        ltr = true,
-                        singleLine = false
-                    )
-                }
-
-                else -> {
-                    Text(
-                        text = "استفاده از ۲۲ ساب‌نت منتخب کلادفلر برای اپراتورهای همراه و ثابت",
-                        color = p.textSecondary,
-                        fontSize = 11.5.sp
-                    )
-                }
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                AlanSheetTextField(
-                    label = "پورت (443/8443)",
-                    value = portText,
-                    onValueChange = { portText = it.filter(Char::isDigit) },
-                    ltr = true,
-                    numeric = true,
-                    modifier = Modifier.weight(1f)
-                )
-                AlanSheetTextField(
-                    label = "تعداد هدف",
-                    value = maxHitsText,
-                    onValueChange = { maxHitsText = it.filter(Char::isDigit) },
-                    ltr = true,
-                    numeric = true,
-                    modifier = Modifier.weight(0.95f)
-                )
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .height(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (cleanIpState.isRunning) p.danger else p.accentGold)
-                        .clickable {
-                            if (cleanIpState.isRunning) {
-                                onStopScan()
-                            } else {
-                                checkedIps.clear()
-                                onStartScan(
-                                    sourceMode,
-                                    customRangesText,
-                                    portText.toIntOrNull()?.coerceIn(1, 65535) ?: 443,
-                                    maxHitsText.toIntOrNull()?.coerceIn(5, 50) ?: 20
-                                )
-                            }
-                        }
-                        .padding(horizontal = 16.dp)
-                ) {
-                    Text(
-                        text = if (cleanIpState.isRunning) "توقف" else "شروع اسکن",
-                        color = if (cleanIpState.isRunning) Color.White else p.onAccent,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 12.5.sp
-                    )
-                }
-            }
-
-            if (cleanIpState.isRunning) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .alanNeuInset(cornerRadius = 3.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(animPct)
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(p.accentGold)
-                    )
-                }
-            }
-
-            Text(
-                text = feedback.ifBlank { cleanIpState.summary },
-                color = if (feedback.isNotBlank()) p.emerald else p.textSecondary,
-                fontSize = 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        // Batch Actions Strip
-        if (cleanIpHits.isNotEmpty()) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(40.dp)
-                        .alanGlassCard(cornerRadius = 12.dp)
-                        .clickable {
-                            val targetList = if (checkedIps.isNotEmpty()) checkedIps.toList() else cleanIpHits.map { it.ip }
-                            copyPlainTextToClipboard(context, "CleanIPs", targetList.joinToString("\n"))
-                            feedback = "${targetList.size} آی‌پی تمیز در کلیپ‌بورد کپی شد."
-                        }
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.ContentCopy, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text(
-                            text = if (checkedIps.isNotEmpty()) {
-                                "کپی انتخابی (${checkedIps.size})"
-                            } else {
-                                "کپی همه (${cleanIpHits.size})"
-                            },
-                            color = p.textPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.5.sp
-                        )
-                    }
-                }
-
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .weight(1.3f)
-                        .height(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(p.accentGold)
-                        .clickable {
-                            singleQuickIp = null
-                            showApplyModal = true
-                        }
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Bolt, null, tint = p.onAccent, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            text = "اعمال و کلون روی کانفیگ‌ها",
-                            color = p.onAccent,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 11.5.sp
-                        )
-                    }
-                }
-            }
-        }
-
-        // Clean IP Results List
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(bottom = 18.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-        ) {
-            itemsIndexed(cleanIpHits, key = { _, item -> item.ip }) { rankIdx, hit ->
-                val isChecked = hit.ip in checkedIps
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .alanGlassCard(highlighted = rankIdx == 0, cornerRadius = 15.dp)
-                        .clickable {
-                            if (isChecked) checkedIps.remove(hit.ip) else checkedIps.add(hit.ip)
-                        }
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(22.dp)
-                                .then(
-                                    if (isChecked) {
-                                        Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(p.accentGold)
-                                    } else {
-                                        Modifier.alanNeuInset(cornerRadius = 6.dp)
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .alanNeuInset(cornerRadius = 9.dp)
+                                    .clickable {
+                                        copyPlainTextToClipboard(context, "CleanIP", hit.ip)
+                                        feedback = "آی‌پی ${hit.ip} کپی شد."
                                     }
-                                )
-                        ) {
-                            if (isChecked) {
-                                Icon(Icons.Outlined.Check, null, tint = p.onAccent, modifier = Modifier.size(14.dp))
+                            ) {
+                                Icon(Icons.Outlined.ContentCopy, null, tint = p.textSecondary, modifier = Modifier.size(15.dp))
                             }
-                        }
-
-                        LtrContent {
-                            Column {
-                                Text(
-                                    text = "${hit.ip}:${hit.port}",
-                                    color = p.textPrimary,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 13.sp,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = "${hit.colo} • ${hit.subnet}",
-                                    color = p.textMuted,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .alanGlassCard(cornerRadius = 9.dp)
+                                    .clickable {
+                                        singleQuickIp = hit.ip
+                                        showApplyModal = true
+                                    }
+                            ) {
+                                Icon(Icons.Outlined.Bolt, null, tint = p.accentGold, modifier = Modifier.size(16.dp))
                             }
-                        }
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(7.dp)
-                    ) {
-                        LtrContent {
-                            Text(
-                                text = "${hit.latencyMs} ms",
-                                color = p.emerald,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 12.sp
-                            )
-                        }
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(32.dp)
-                                .alanNeuInset(cornerRadius = 9.dp)
-                                .clickable {
-                                    copyPlainTextToClipboard(context, "CleanIP", hit.ip)
-                                    feedback = "آی‌پی ${hit.ip} کپی شد."
-                                }
-                        ) {
-                            Icon(Icons.Outlined.ContentCopy, null, tint = p.textSecondary, modifier = Modifier.size(15.dp))
-                        }
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(32.dp)
-                                .alanGlassCard(cornerRadius = 9.dp)
-                                .clickable {
-                                    singleQuickIp = hit.ip
-                                    showApplyModal = true
-                                }
-                        ) {
-                            Icon(Icons.Outlined.Bolt, null, tint = p.accentGold, modifier = Modifier.size(16.dp))
                         }
                     }
                 }
@@ -843,8 +788,7 @@ private fun ApplyCleanIpToRepoDialog(
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = p.surfaceBg,
-                border = BorderStroke(1.2.dp, p.cardBorder),
-                shadowElevation = 10.dp,
+                shadowElevation = 12.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -862,12 +806,7 @@ private fun ApplyCleanIpToRepoDialog(
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 14.sp
                         )
-                        AlanNeuIconButton(
-                            icon = Icons.Outlined.Close,
-                            tint = p.textSecondary,
-                            size = 32.dp,
-                            onClick = onDismiss
-                        )
+                        AlanNeuIconButton(Icons.Outlined.Close, p.textSecondary, 32.dp, onClick = onDismiss)
                     }
 
                     Row(
@@ -891,11 +830,7 @@ private fun ApplyCleanIpToRepoDialog(
                                     .height(34.dp)
                                     .then(
                                         if (sel) {
-                                            Modifier.alanGlassCard(
-                                                highlighted = true,
-                                                cornerRadius = 9.dp,
-                                                accentBorderColor = p.accentGold
-                                            )
+                                            Modifier.alanGlassCard(highlighted = true, cornerRadius = 9.dp)
                                         } else {
                                             Modifier.clip(RoundedCornerShape(9.dp))
                                         }
@@ -906,8 +841,7 @@ private fun ApplyCleanIpToRepoDialog(
                                     text = label,
                                     color = if (sel) p.accentGold else p.textSecondary,
                                     fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold,
-                                    fontSize = 10.5.sp,
-                                    maxLines = 1
+                                    fontSize = 10.5.sp
                                 )
                             }
                         }
@@ -930,11 +864,7 @@ private fun ApplyCleanIpToRepoDialog(
                                 .clickable { showMultiPicker = true }
                         ) {
                             Text(
-                                text = if (multiIndices.isEmpty()) {
-                                    "انتخاب کانفیگ‌ها از لیست..."
-                                } else {
-                                    "${multiIndices.size} کانفیگ انتخاب شد"
-                                },
+                                text = if (multiIndices.isEmpty()) "انتخاب کانفیگ‌ها از لیست..." else "${multiIndices.size} کانفیگ انتخاب شد",
                                 color = p.accentGold,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp
@@ -958,7 +888,6 @@ private fun ApplyCleanIpToRepoDialog(
                             fontSize = 11.5.sp,
                             modifier = Modifier.weight(1f)
                         )
-                        Spacer(Modifier.width(8.dp))
                         AlanPillSwitch(checked = cloneMode, onCheckedChange = { cloneMode = it })
                     }
 
@@ -968,11 +897,7 @@ private fun ApplyCleanIpToRepoDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = "تعداد کلون به ازای هر کانفیگ:",
-                                color = p.textSecondary,
-                                fontSize = 11.5.sp
-                            )
+                            Text("تعداد کلون به ازای هر کانفیگ:", color = p.textSecondary, fontSize = 11.5.sp)
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 listOf(2, 3, 5, 8).forEach { cnt ->
                                     val sel = clonesPerCfg == cnt
@@ -983,9 +908,7 @@ private fun ApplyCleanIpToRepoDialog(
                                             .width(36.dp)
                                             .then(
                                                 if (sel) {
-                                                    Modifier
-                                                        .clip(RoundedCornerShape(8.dp))
-                                                        .background(p.accentGold)
+                                                    Modifier.clip(RoundedCornerShape(8.dp)).background(p.accentGold)
                                                 } else {
                                                     Modifier.alanNeuInset(cornerRadius = 8.dp)
                                                 }
@@ -1081,8 +1004,7 @@ fun MultiProfilePickerDialog(
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = p.surfaceBg,
-                border = BorderStroke(1.2.dp, p.cardBorder),
-                shadowElevation = 10.dp,
+                shadowElevation = 12.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -1165,9 +1087,7 @@ fun MultiProfilePickerDialog(
                                         .size(20.dp)
                                         .then(
                                             if (checked) {
-                                                Modifier
-                                                    .clip(RoundedCornerShape(5.dp))
-                                                    .background(p.accentGold)
+                                                Modifier.clip(RoundedCornerShape(5.dp)).background(p.accentGold)
                                             } else {
                                                 Modifier.alanNeuInset(cornerRadius = 5.dp)
                                             }
@@ -1178,8 +1098,6 @@ fun MultiProfilePickerDialog(
                                     }
                                 }
                                 Spacer(Modifier.width(9.dp))
-                                FlagStripeBadge(item.flagStripeColors, item.countryCode, 22.dp, 14.dp)
-                                Spacer(Modifier.width(8.dp))
                                 Text(
                                     text = item.name,
                                     color = p.textPrimary,

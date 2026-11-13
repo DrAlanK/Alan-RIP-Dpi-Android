@@ -818,7 +818,10 @@ class CleanIpScannerEngine(context: Context) {
 
     suspend fun quickFindBestCleanIps(port: Int = 443, neededCount: Int = 3, sampleCount: Int = 40): List<CleanIpHit> =
         withContext(Dispatchers.IO) {
-        val seedIps = listOf("172.64.154.14", "172.64.154.88", "172.64.155.42", "104.18.32.47", "162.159.135.42", "104.16.132.229")
+        val seedIps = listOf(
+            "172.64.154.14", "172.64.154.88", "172.64.155.42", "172.64.148.65",
+            "104.18.32.47", "104.18.38.112", "162.159.135.42", "104.16.132.229"
+        )
         val fastHits = ArrayList<com.alan.ripdpi.ui.CleanIpHit>()
         for (sip in seedIps.shuffled()) {
             val rtt = fastTcpPingBlocking(sip, port, 950)

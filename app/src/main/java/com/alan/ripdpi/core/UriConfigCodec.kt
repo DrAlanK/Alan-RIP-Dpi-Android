@@ -104,8 +104,7 @@ object UriConfigCodec {
     }
 
     fun parseUriToProfileItem(rawUri: String): ProfileItem? {
-        val rawCheck = rawUri.trim()
-        if (rawCheck.isEmpty()) return null
+        if (EnterpriseProtocolEngine.isEnterpriseUri(rawUri)) return EnterpriseProtocolEngine.parseEnterpriseUriToProfileItem(rawUri)
         val uri = rawUri.trim()
         if (uri.isEmpty()) return null
         val spec = parseFullConfig(uri) ?: return null
@@ -1082,11 +1081,9 @@ object UriConfigCodec {
 
         // Wave 1 mixes 3 Zero-OOB framing/fragment vectors (VEC-17, VEC-11, VEC-23) + 3 OOB vectors (VEC-21, VEC-01, VEC-18)!
         val wavePriorityIds = listOf(
-            "VEC-17", // Zero-OOB 3-Record DotSplit (100% stream-safe on Cloudflare, Railway & CDN)
-            "VEC-11", // Zero-OOB Micro-Fragment 5-16B (Universal DPI SNI bypass, zero OOB drops)
-            "VEC-23", // Zero-OOB Chameleon Interleave
-            "VEC-21", // Hybrid OOB
-            "VEC-20", // Zero-OOB Dot-Fibonacci
+            "VEC-21", // Hybrid OOB (Top on Cloudflare Edge)
+            "VEC-17", // Zero-OOB 3-Record DotSplit (Top on Railway / Envoy / TLS 1.3)
+            "VEC-11", // Zero-OOB Micro-Fragment 5-16B (Universal DPI SNI bypass)
             "VEC-01", // Core Alpha SNI-Tag OOB
             "VEC-23", // Zero-OOB Chameleon Interleave
             "VEC-18", // Cipher-Pivot OOB
@@ -1162,7 +1159,7 @@ object UriConfigCodec {
                     .put("port", httpPortVal)
                     .put("protocol", "http")
                     .put("settings", org.json.JSONObject().put("allowTransparent", false))
-                    .put("sniffing", org.json.JSONObject().put("enabled", true).put("destOverride", org.json.JSONArray().put("http").put("tls").put("quic")).put("routeOnly", false))
+                    .put("sniffing", org.json.JSONObject().put("enabled", false))
             )
 
             // Compile outbound cleanly via single-lane helper & retag
@@ -1177,7 +1174,6 @@ object UriConfigCodec {
             val singleJson = org.json.JSONObject(single.configJson)
             val singleOut = singleJson.getJSONArray("outbounds").getJSONObject(0)
             singleOut.put("tag", outTag)
-            singleOut.optJSONObject("streamSettings")?.optJSONObject("sockopt")?.remove("dialerProxy")
             singleOut.optJSONObject("streamSettings")?.optJSONObject("sockopt")?.remove("dialerProxy")
             outboundsArr.put(singleOut)
 
@@ -1219,5 +1215,67 @@ object UriConfigCodec {
             if (code != "UN" && code != "CF") return if (code == "UK") "GB" else code
         }
         return ""
+    }
+
+    fun extractConfigUrisFromText(rawText: String): List<String> {
+        val trimmed = rawText.trim()
+        if (trimmed.isEmpty()) return emptyList()
+
+        val results = LinkedHashSet<String>()
+        val schemeRegex = Regex(
+            """(?i)\b(?:vless|vmess|trojan|ss|socks|anyconnect|openconnect|oc|cisco|ikev2|ipsec|l2tp|hy2|hysteria2|tuic)://[^\s"'<>]+"""
+        )
+
+        fun scanChunk(chunk: String) {
+            schemeRegex.findAll(chunk).forEach { m ->
+                val uri = m.value.trim().trimEnd(',', ';', ')', ']', '}')
+                if (uri.length > 10) {
+                    results.add(uri)
+                }
+            }
+            if (chunk.contains("server:") || chunk.contains("\"server\"")) {
+                val proxyLineRegex = Regex("""\{[^{}]*?(?:"type"|type)\s*:\s*"?(anyconnect|openconnect|ikev2|l2tp|vless|vmess|trojan|ss)"?[^{}]*?\}""", RegexOption.IGNORE_CASE)
+                proxyLineRegex.findAll(chunk).forEach { pm ->
+                    val block = pm.value
+                    fun field(key: String): String {
+                        val r = Regex("""(?:"$key"|$key)\s*:\s*(?:"([^"]*)"|([^\s,}]+))""", RegexOption.IGNORE_CASE)
+                        val fm = r.find(block) ?: return ""
+                        return (fm.groupValues[1].ifEmpty { fm.groupValues[2] }).trim()
+                    }
+                    val pType = field("type").lowercase(Locale.US)
+                    val srv = field("server")
+                    val prt = field("port").toIntOrNull() ?: EnterpriseProtocolEngine.defaultPortFor(pType)
+                    val name = field("name").ifBlank { "${pType.uppercase(Locale.US)} • $srv" }
+                    val usr = field("username").ifBlank { field("uuid").ifBlank { field("user") } }
+                    val pwd = field("password").ifBlank { field("psk").ifBlank { field("secret") } }
+                    val sni = field("sni").ifBlank { field("servername") }
+                    val grp = field("group")
+                    if (srv.isNotEmpty() && EnterpriseProtocolEngine.isEnterpriseProtocol(pType)) {
+                        val cred = if (usr.isNotEmpty() && pwd.isNotEmpty()) "$usr:$pwd@" else if (usr.isNotEmpty()) "$usr@" else ""
+                        val encRem = java.net.URLEncoder.encode(name, "UTF-8")
+                        results.add("${EnterpriseProtocolEngine.normalizeProtocolName(pType)}://$cred$srv:$prt/?sni=$sni&group=$grp#$encRem")
+                    }
+                }
+            }
+        }
+
+        scanChunk(trimmed)
+
+        val compact = trimmed.replace("\\s+".toRegex(), "")
+        for (candidateB64 in listOf(compact) + trimmed.lines().map { it.trim() }.filter { it.length > 16 && !it.contains("://") }) {
+            try {
+                val normalized = candidateB64.replace('-', '+').replace('_', '/').let { s ->
+                    val rem = s.length % 4
+                    if (rem == 0) s else s + "=".repeat(4 - rem)
+                }
+                val decoded = String(java.util.Base64.getDecoder().decode(normalized), Charsets.UTF_8)
+                if (decoded.isNotBlank()) {
+                    scanChunk(decoded)
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
+        return results.toList()
     }
 }

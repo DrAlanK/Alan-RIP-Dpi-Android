@@ -328,37 +328,21 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     override fun selectConfig(index: Int) {
-        val current = _profiles.value
-        if (index < 0) {
-            _selectedIndex.value = -1
-            if (current.any { it.isSelected }) {
-                _profiles.value = current.map { it.copy(isSelected = false) }
-            }
-            _settings.update { it.copy(autoPilot = true) }
-            _telemetry.update {
-                it.copy(
-                    selectedIndex = -1,
-                    activeProfileUid = "__SMART_AUTO__",
-                    activeProfileName = if (it.isConnected) it.activeProfileName else "حالت خودکار • ریپازیتوری",
-                    countryCode = if (it.isConnected) it.countryCode else "UN",
-                    countryName = if (it.isConnected) it.countryName else "خودکار"
-                )
-            }
-            saveSettingsToDisk()
-            return
-        }
-        if (current.isEmpty()) return
-        val safeIdx = index.coerceIn(current.indices)
-        _selectedIndex.value = safeIdx
-        val chosen = current[safeIdx]
-        _profiles.value = current.mapIndexed { i, item -> item.copy(isSelected = i == safeIdx) }
-        // Selecting a user config explicitly disables Auto-Repository mode so ONLY this user config is used!
-        _settings.update { it.copy(autoPilot = false) }
+        val list = _profiles.value
+        if (index !in list.indices) return
+        _selectedIndex.value = index
+        _profiles.value = list.mapIndexed { idx, item -> item.copy(isSelected = idx == index) }
+        val chosen = _profiles.value[index]
+        _settings.update { it.copy(autoPilot = false, autoConnectSource = "USER_CONFIGS") }
+        saveSettingsToDisk()
+        saveRepositoryToDisk()
         _telemetry.update {
             it.copy(
-                selectedIndex = safeIdx,
+                selectedIndex = index,
                 activeProfileUid = chosen.uid,
                 activeProfileName = chosen.name,
+                activeProtocol = chosen.protocol,
+                layerHost = chosen.host,
                 countryCode = chosen.countryCode,
                 countryName = chosen.countryName,
                 flagEmoji = chosen.flagEmoji,
@@ -367,8 +351,12 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 accentSecondaryColor = chosen.accentSecondaryColor
             )
         }
-        saveSettingsToDisk()
+        appendLog("[Profile] کانفیگ شخصی انتخاب شد: '${chosen.name}' (${chosen.protocol} • ${chosen.host}:${chosen.port})")
+        if (_engineState.value == EngineState.CONNECTED) {
+            startManualConnect(index)
+        }
     }
+
 
     override fun importFromClipboard() {
         scope.launch {
@@ -384,55 +372,39 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     override fun importConfigs(rawText: String) {
-        scope.launch {
-            val effectiveText = if (rawText.isNotBlank()) {
-                rawText.trim()
-            } else {
-                kotlinx.coroutines.withContext(Dispatchers.Main) { readClipboardText().trim() }
-            }
-
-            if (effectiveText.isEmpty()) {
-                appendLog("Import skipped: input text is empty.")
-                return@launch
-            }
-
-            if (
-                !effectiveText.contains("\n") &&
-                (effectiveText.startsWith("http://", true) || effectiveText.startsWith("https://", true))
-            ) {
-                addSubscription(effectiveText, "Imported Sub")
-                return@launch
-            }
-
-            val extracted = UriConfigCodec.extractConfigLinesFromSubscriptionBody(effectiveText)
-            if (extracted.isEmpty()) {
-                appendLog("Import failed: no valid VLESS/VMess/Trojan/SS links found.")
-                return@launch
-            }
-
-            val parsedItems = extracted.mapNotNull { UriConfigCodec.parseUriToProfileItem(it) }
-            if (parsedItems.isEmpty()) return@launch
-
-            val list = _profiles.value.toMutableList()
-            val seenUris = list.map { it.uri }.toHashSet()
-            var added = 0
-            for (item in parsedItems) {
-                if (seenUris.add(item.uri)) {
-                    list.add(item)
-                    added++
-                }
-            }
-            _profiles.value = list
-            if (list.isNotEmpty() && _selectedIndex.value !in list.indices) {
-                selectConfig(0)
-            } else if (_selectedIndex.value in list.indices) {
-                selectConfig(_selectedIndex.value)
-            }
+        val textToParse = if (rawText.isBlank()) readClipboardText() else rawText.trim()
+        if (textToParse.isBlank()) {
+            appendLog("[Import] کلیپ‌بورد خالی است.")
+            return
+        }
+        val singleLine = textToParse.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        if (singleLine.size == 1 && (singleLine[0].startsWith("http://", true) || singleLine[0].startsWith("https://", true))) {
+            addSubscription(singleLine[0], "")
+            return
+        }
+        val extracted = UriConfigCodec.extractConfigUrisFromText(textToParse)
+        val parsed = extracted.mapNotNull { u ->
+            UriConfigCodec.parseUriToProfileItem(u)
+                ?.takeIf { !CleanIpScannerEngine.isSubscriptionAnnouncementOrFakeNode(it) }
+        }
+        if (parsed.isEmpty()) {
+            appendLog("[Import] لینک کانفیگ معتبری در متن ورودی یافت نشد.")
+            return
+        }
+        val existingUris = _profiles.value.map { it.uri.trim() }.toHashSet()
+        val fresh = parsed.filter { existingUris.add(it.uri.trim()) }
+        if (fresh.isNotEmpty()) {
+            val merged = _profiles.value + fresh
+            val selIdx = if (_selectedIndex.value in merged.indices) _selectedIndex.value else 0
+            _selectedIndex.value = selIdx
+            _profiles.value = merged.mapIndexed { idx, it -> it.copy(isSelected = idx == selIdx) }
             saveRepositoryToDisk()
-            appendLog("Imported $added server profile(s).")
-            triggerInstantGeoLocationProbes(parsedItems, allowMicroTunnelForCdn = parsedItems.size <= 2)
+            appendLog("[Import] تعداد ${fresh.size} کانفیگ جدید به مخزن اضافه شد.")
+        } else {
+            appendLog("[Import] تمام ${parsed.size} کانفیگ قبلاً در مخزن موجود بودند.")
         }
     }
+
 
     override fun quickPingConfigs() {
         scope.launch {
@@ -473,35 +445,22 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     override fun sortConfigs(by: String) {
-        val current = _profiles.value
-        if (current.size <= 1) return
-        val selUid = current.getOrNull(_selectedIndex.value)?.uid
+        val list = _profiles.value
+        if (list.isEmpty()) return
         val sorted = when (by.lowercase(Locale.ROOT)) {
-            "name" -> current.sortedBy { it.name.lowercase(Locale.ROOT) }
-            "protocol" -> current.sortedWith(
-                compareBy<ProfileItem> { it.protocol.lowercase(Locale.ROOT) }
-                    .thenBy { if (it.pingMs > 0) it.pingMs else Int.MAX_VALUE }
-            )
-            "country" -> current.sortedWith(
-                compareBy<ProfileItem> { if (it.countryCode == "UN") "ZZ" else it.countryCode }
-                    .thenBy { if (it.pingMs > 0) it.pingMs else Int.MAX_VALUE }
-            )
-            else -> current.sortedWith(
-                compareBy<ProfileItem> {
-                    when (it.status) {
-                        "VERIFIED" -> 0
-                        "HEALTHY" -> 1
-                        "UNTESTED" -> 2
-                        else -> 3
-                    }
-                }.thenBy { if (it.pingMs > 0) it.pingMs else Int.MAX_VALUE }
-            )
+            "ping" -> list.sortedBy { if (it.pingMs > 0) it.pingMs else Int.MAX_VALUE }
+            "group" -> list.sortedWith(compareBy<ProfileItem> { it.groupName.lowercase(Locale.ROOT) }.thenBy { if (it.pingMs > 0) it.pingMs else Int.MAX_VALUE })
+            "country" -> list.sortedWith(compareBy<ProfileItem> { it.countryCode }.thenBy { if (it.pingMs > 0) it.pingMs else Int.MAX_VALUE })
+            "protocol" -> list.sortedBy { it.protocol.lowercase(Locale.ROOT) }
+            else -> list.sortedBy { it.name.lowercase(Locale.ROOT) }
         }
-        val newSelIdx = if (_selectedIndex.value < 0) -1 else sorted.indexOfFirst { it.uid == selUid }.coerceAtLeast(0)
-        _selectedIndex.value = newSelIdx
-        _profiles.value = sorted.mapIndexed { idx, item -> item.copy(isSelected = idx == newSelIdx) }
+        _profiles.value = sorted
+        val selIdx = sorted.indexOfFirst { it.isSelected }
+        if (selIdx >= 0) _selectedIndex.value = selIdx
         saveRepositoryToDisk()
+        appendLog("[Repo] لیست کانفیگ‌ها بر اساس '$by' مرتب شد.")
     }
+
 
 
 
@@ -653,58 +612,155 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
     override fun addSubscription(url: String, title: String) {
         val cleanUrl = url.trim()
-        if (cleanUrl.isBlank()) return
-        val current = _subscriptions.value.toMutableList()
-        val existingIdx = current.indexOfFirst { it.url.equals(cleanUrl, ignoreCase = true) }
-        val subId: String
-        if (existingIdx >= 0) {
-            subId = current[existingIdx].id
-            current[existingIdx] = current[existingIdx].copy(
-                title = title.ifBlank { current[existingIdx].title }
-            )
-        } else {
-            subId = "sub-" + UUID.randomUUID().toString().replace("-", "").take(8)
-            current.add(
-                SubscriptionItem(
-                    id = subId,
-                    title = title.ifBlank { "Subscription ${current.size + 1}" },
-                    url = cleanUrl,
-                    updatedAt = "Pending"
-                )
-            )
+        if (cleanUrl.isEmpty()) return
+        val derivedTitle = title.trim().ifBlank {
+            try {
+                java.net.URI(cleanUrl).host?.replace("www.", "")?.substringBefore(".")?.replaceFirstChar { it.uppercase() }
+                    ?: "Sub-${_subscriptions.value.size + 1}"
+            } catch (_: Throwable) {
+                "Sub-${_subscriptions.value.size + 1}"
+            }
         }
-        _subscriptions.value = current
+        val existingIdx = _subscriptions.value.indexOfFirst { it.url.equals(cleanUrl, ignoreCase = true) }
+        if (existingIdx >= 0) {
+            _subscriptions.update { list ->
+                list.mapIndexed { idx, s -> if (idx == existingIdx) s.copy(title = derivedTitle) else s }
+            }
+        } else {
+            val item = SubscriptionItem(
+                id = "sub-${System.currentTimeMillis()}",
+                title = derivedTitle,
+                url = cleanUrl,
+                updatedAt = nowTime()
+            )
+            _subscriptions.value = _subscriptions.value + item
+        }
         saveSubscriptionsToDisk()
-        appendLog("Registered subscription: $cleanUrl")
-        scope.launch {
-            syncSingleSubscriptionSuspend(subId)
+        appendLog("[Sub] اشتراک '$derivedTitle' ثبت شد؛ در حال دریافت و دسته‌بندی کانفیگ‌ها...")
+        refreshSubscriptions()
+    }
+
+
+    override fun refreshSubscriptions() {
+        val subsSnapshot = _subscriptions.value
+        if (subsSnapshot.isEmpty()) {
+            appendLog("[Sub] هیچ لینک اشتراکی ثبت نشده است.")
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            var totalFetched = 0
+            val updatedProfiles = _profiles.value.toMutableList()
+            val updatedSubs = subsSnapshot.toMutableList()
+
+            for ((sIdx, sub) in subsSnapshot.withIndex()) {
+                val grpTitle = sub.title.trim().ifBlank { "Sub-${sIdx + 1}" }
+                try {
+                    val host = try { java.net.URI(sub.url).host.orEmpty() } catch (_: Throwable) { "" }
+                    val resolvedIp = if (host.isNotEmpty()) cleanIpEngine.resolveUnpoisonedIpv4Blocking(host, 1800) else ""
+                    val clientBuilder = OkHttpClient.Builder()
+                        .connectTimeout(10, TimeUnit.SECONDS)
+                        .readTimeout(12, TimeUnit.SECONDS)
+                        .followRedirects(true)
+                        .followSslRedirects(true)
+                    if (resolvedIp.isNotEmpty() && !CleanIpScannerEngine.isPoisonedIranIp(resolvedIp)) {
+                        clientBuilder.dns(object : okhttp3.Dns {
+                            override fun lookup(hostname: String): List<java.net.InetAddress> {
+                                return try {
+                                    if (hostname.equals(host, ignoreCase = true)) {
+                                        listOf(java.net.InetAddress.getByAddress(hostname, java.net.InetAddress.getByName(resolvedIp).address))
+                                    } else {
+                                        java.net.InetAddress.getAllByName(hostname).toList()
+                                    }
+                                } catch (_: Throwable) {
+                                    java.net.InetAddress.getAllByName(hostname).toList()
+                                }
+                            }
+                        })
+                    }
+                    val req = Request.Builder()
+                        .url(sub.url)
+                        .header("User-Agent", "v2rayNG/1.8.38")
+                        .header("Accept", "*/*")
+                        .get()
+                        .build()
+
+                    var rawBody = ""
+                    try {
+                        clientBuilder.build().newCall(req).execute().use { resp ->
+                            if (resp.isSuccessful) {
+                                rawBody = resp.body?.string().orEmpty()
+                            }
+                        }
+                    } catch (e: Throwable) {
+                        appendLog("[Sub] خطا در دریافت مستقیم '$grpTitle': ${e.javaClass.simpleName}")
+                    }
+
+                    if (rawBody.isNotBlank()) {
+                        val uris = UriConfigCodec.extractConfigUrisFromText(rawBody)
+                        val parsedGroupItems = uris.mapNotNull { u ->
+                            UriConfigCodec.parseUriToProfileItem(u)
+                                ?.takeIf { !CleanIpScannerEngine.isSubscriptionAnnouncementOrFakeNode(it) }
+                                ?.copy(groupName = grpTitle)
+                        }
+
+                        if (parsedGroupItems.isNotEmpty()) {
+                            updatedProfiles.removeAll { it.groupName.equals(grpTitle, ignoreCase = true) }
+
+                            val incomingUris = parsedGroupItems.map { it.uri.trim() }.toSet()
+                            val preservedStats = updatedProfiles.filter { it.uri.trim() in incomingUris }.associateBy { it.uri.trim() }
+                            updatedProfiles.removeAll { it.uri.trim() in incomingUris }
+
+                            for (newItem in parsedGroupItems) {
+                                val old = preservedStats[newItem.uri.trim()]
+                                if (old != null) {
+                                    updatedProfiles.add(
+                                        newItem.copy(
+                                            pingMs = old.pingMs,
+                                            status = old.status,
+                                            cachedVectorId = old.cachedVectorId,
+                                            isSelected = old.isSelected,
+                                            groupName = grpTitle
+                                        )
+                                    )
+                                } else {
+                                    updatedProfiles.add(newItem.copy(groupName = grpTitle))
+                                }
+                            }
+
+                            totalFetched += parsedGroupItems.size
+                            updatedSubs[sIdx] = sub.copy(updatedAt = nowTime())
+                            appendLog("[Sub] اشتراک '$grpTitle' بروزرسانی شد: ${parsedGroupItems.size} کانفیگ در گروه '$grpTitle' دسته‌بندی شد.")
+                        } else {
+                            appendLog("[Sub] هیچ کانفیگ معتبری در لینک '$grpTitle' یافت نشد.")
+                        }
+                    }
+                } catch (e: Throwable) {
+                    appendLog("[Sub] خطا در پردازش اشتراک '$grpTitle': ${e.message}")
+                }
+            }
+
+            _subscriptions.value = updatedSubs
+            _profiles.value = updatedProfiles
+            saveSubscriptionsToDisk()
+            saveRepositoryToDisk()
+            appendLog("[Sub] بروزرسانی اشتراک‌ها تکمیل شد (مجموع: $totalFetched کانفیگ).")
         }
     }
 
-    override fun refreshSubscriptions() {
-        scope.launch {
-            syncAllSubscriptionsSuspend()
-        }
-    }
 
     override fun deleteSubscription(index: Int) {
         val current = _subscriptions.value.toMutableList()
         if (index !in current.indices) return
         val removed = current.removeAt(index)
         _subscriptions.value = current
-
-        val remainingProfiles = _profiles.value.filterNot { profileSubOwnerMap[it.uid] == removed.id }
-        val keysToRemove = profileSubOwnerMap.filterValues { it == removed.id }.keys.toList(); for (k in keysToRemove) { profileSubOwnerMap.remove(k) }
-        _profiles.value = remainingProfiles
-        if (remainingProfiles.isNotEmpty()) {
-            selectConfig(_selectedIndex.value.coerceIn(0, remainingProfiles.lastIndex))
-        } else {
-            selectConfig(-1)
+        _profiles.update { list ->
+            list.filterNot { it.groupName.equals(removed.title.trim(), ignoreCase = true) }
         }
         saveSubscriptionsToDisk()
         saveRepositoryToDisk()
-        appendLog("Removed subscription: ${removed.title}")
+        appendLog("[Sub] اشتراک '${removed.title}' و کانفیگ‌های مربوط به آن حذف شدند.")
     }
+
 
     private suspend fun syncAllSubscriptionsSuspend(): Int {
         val subs = _subscriptions.value
@@ -2178,7 +2234,10 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     }
                 }
             } finally {
-                if (!lockedWinner) { xrayCoreManager.stopCore(); bridges.forEach { it.stop() } }
+                if (!lockedWinner) {
+                    xrayCoreManager.stopCore()
+                    bridges.forEach { it.stop() }
+                }
                 xrayCoreManager.probeSilentMode = false
             }
         }
@@ -2633,52 +2692,195 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val vMap = AlanDohEngine.getVerifiedResults().associateBy { it.url }
         _dohServers.value = AlanDohEngine.getAllConfiguredEndpoints().map { ep ->
             val h = vMap[ep.url]
-            DohServerUiItem(ep.id, ep.name, ep.url, ep.category, h?.latencyMs ?: -1, h?.resolvedSampleIp.orEmpty(), h?.isHealthy == true, ep.url.equals(activeUrl, true), h?.statusDetail ?: "آماده")
-        }
+            DohServerUiItem(ep.id, ep.name, ep.url, ep.category, h?.latencyMs ?: -1, h?.resolvedSampleIp.orEmpty(), h?.isHealthy == true, ep.url.equals(activeUrl, true), h?.statusDetail ?: "آماده تست")
+        }.sortedWith(compareByDescending<DohServerUiItem> { it.isSelected }.thenByDescending { it.isHealthy }.thenBy { if (it.latencyMs > 0) it.latencyMs else Int.MAX_VALUE })
     }
+
     override fun startDohScan(testDomain: String) {
-        dohScanJob?.cancel(); dohStopSignal.set(false)
+        dohScanJob?.cancel()
+        dohStopSignal.set(false)
         dohScanJob = scope.launch {
-            _dohScanState.update { it.copy(isRunning = true, percent = 5, summary = "در حال اسکن DoH...") }
+            _dohScanState.update { it.copy(isRunning = true, percent = 5, summary = "در حال اسکن سرورهای DoH...") }
             val w = AlanDohEngine.runFullDohScan(testDomain.ifBlank { "github.com" }, dohStopSignal, { appendLog(it) }) { pct, t, tot, _, s ->
-                _dohScanState.update { it.copy(isRunning = true, percent = pct, testedCount = t, totalCount = tot, summary = s) }; refreshDohUiList()
+                _dohScanState.update { it.copy(isRunning = true, percent = pct, testedCount = t, totalCount = tot, summary = s) }
+                refreshDohUiList()
             }
             if (w.isNotEmpty()) {
-                val b = w.first(); _settings.update { it.copy(activeDohUrl = b.url) }; saveSettingsToDisk()
-                _dohScanState.update { it.copy(isRunning = false, percent = 100, activeDohUrl = b.url, activeDohName = b.name, summary = "فعال: ${b.name} (${b.latencyMs}ms)") }
-            } else _dohScanState.update { it.copy(isRunning = false, percent = 100, summary = "پاسخی دریافت نشد.") }
+                val b = w.first()
+                _settings.update { it.copy(activeDohUrl = b.url) }
+                saveSettingsToDisk()
+                _dohScanState.update { it.copy(isRunning = false, percent = 100, activeDohUrl = b.url, activeDohName = b.name, summary = "بهترین DoH قفل شد: ${b.name} (${b.latencyMs}ms)") }
+            } else {
+                _dohScanState.update { it.copy(isRunning = false, percent = 100, summary = "پاسخی از سرورهای DoH دریافت نشد.") }
+            }
             refreshDohUiList()
         }
     }
-    override fun stopDohScan() { dohStopSignal.set(true); dohScanJob?.cancel(); _dohScanState.update { it.copy(isRunning = false) } }
-    override fun selectActiveDoh(url: String, connectDohVeilNow: Boolean) {
-        AlanDohEngine.activeDohUrl = url.trim(); _settings.update { it.copy(activeDohUrl = url.trim()) }; saveSettingsToDisk(); refreshDohUiList()
+
+    override fun stopDohScan() {
+        dohStopSignal.set(true)
+        dohScanJob?.cancel()
+        _dohScanState.update { it.copy(isRunning = false, summary = "اسکن DoH متوقف شد.") }
     }
-    override fun addCustomDohList(rawUrls: String) { AlanDohEngine.addCustomDohUrls(rawUrls); refreshDohUiList() }
-    override fun setTunnelOperationMode(mode: String) { _settings.update { it.copy(tunnelMode = mode.trim().uppercase(Locale.US)) }; saveSettingsToDisk() }
-    override fun sendAllConfigsToDpiLab(autoConnectBest: Boolean, useCleanIp: Boolean) { startMultiTargetMethodScan("all", _profiles.value.indices.toList(), autoConnectBest, useCleanIp) }
+
+    override fun selectActiveDoh(url: String, connectDohVeilNow: Boolean) {
+        val cleanUrl = url.trim()
+        if (cleanUrl.isEmpty()) return
+        AlanDohEngine.activeDohUrl = cleanUrl
+        val epName = AlanDohEngine.getAllConfiguredEndpoints().firstOrNull { it.url.equals(cleanUrl, true) }?.name ?: "Custom DoH"
+        _settings.update { it.copy(activeDohUrl = cleanUrl, tunDns = "1.1.1.1") }
+        saveSettingsToDisk()
+        _dohScanState.update { it.copy(activeDohUrl = cleanUrl, activeDohName = epName, summary = "سرور DoH روی $epName تنظیم شد.") }
+        refreshDohUiList()
+        appendLog("[DoH] دی‌ان‌اس امن فعال شد: $epName ($cleanUrl)")
+        if (connectDohVeilNow) {
+            setTunnelOperationMode("DOH_VEIL")
+            startSmartConnect()
+        }
+    }
+
+    override fun addCustomDohList(rawUrls: String) {
+        val cnt = AlanDohEngine.addCustomDohUrls(rawUrls)
+        refreshDohUiList()
+        appendLog("[DoH] $cnt سرور DoH سفارشی اضافه شد.")
+    }
+
+    override fun setTunnelOperationMode(mode: String) {
+        val m = mode.trim().uppercase(Locale.US).let { if (it in setOf("VPN", "PROXY", "DOH_VEIL")) it else "VPN" }
+        _settings.update { it.copy(tunnelMode = m) }
+        saveSettingsToDisk()
+        appendLog("[Mode] حالت عملیاتی شبکه روی '$m' قرار گرفت.")
+    }
+
+    override fun sendAllConfigsToDpiLab(autoConnectBest: Boolean, useCleanIp: Boolean) {
+        val indices = _profiles.value.indices.toList()
+        appendLog("[DPI-Lab] ارسال کل مخزن (${indices.size} کانفیگ) به آزمایشگاه ۶ مسیره...")
+        startMultiTargetMethodScan("all", indices, autoConnectBest, useCleanIp)
+    }
+
     override fun loadInstalledAppsList(includeSystem: Boolean) {
         scope.launch(Dispatchers.IO) {
             try {
                 val pm = appContext.packageManager
                 val sel = _settings.value.splitTunnelPackagesCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-                _installedApps.value = pm.getInstalledApplications(PackageManager.GET_META_DATA).asSequence()
-                    .filter { it.packageName != appContext.packageName && pm.getLaunchIntentForPackage(it.packageName) != null && (includeSystem || (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || it.packageName in sel) }
-                    .map { InstalledAppUiItem(it.packageName, try { pm.getApplicationLabel(it).toString() } catch (_: Throwable) { it.packageName }, (it.flags and ApplicationInfo.FLAG_SYSTEM) != 0, it.packageName in sel) }
-                    .sortedWith(compareByDescending<InstalledAppUiItem> { it.isSelected }.thenBy { it.appName.lowercase(Locale.ROOT) }).toList()
-            } catch (_: Throwable) {}
+                val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA).asSequence()
+                    .filter {
+                        it.packageName != appContext.packageName &&
+                            pm.getLaunchIntentForPackage(it.packageName) != null &&
+                            (includeSystem || (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || it.packageName in sel)
+                    }
+                    .map {
+                        InstalledAppUiItem(
+                            packageName = it.packageName,
+                            appName = try { pm.getApplicationLabel(it).toString() } catch (_: Throwable) { it.packageName },
+                            isSystemApp = (it.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
+                            isSelected = it.packageName in sel
+                        )
+                    }
+                    .sortedWith(compareByDescending<InstalledAppUiItem> { it.isSelected }.thenBy { it.appName.lowercase(Locale.ROOT) })
+                    .toList()
+                _installedApps.value = apps
+            } catch (e: Throwable) {
+                appendLog("[SplitTunnel] خطا در خواندن لیست برنامه‌ها: ${e.message}")
+            }
         }
     }
+
     override fun updateSplitTunnelConfig(mode: String, packages: Set<String>) {
-        val m = mode.trim().uppercase(Locale.US); AlanVpnService.splitTunnelMode = m; AlanVpnService.splitTunnelPackages = packages
-        _settings.update { it.copy(splitTunnelMode = m, splitTunnelPackagesCsv = packages.joinToString(",")) }; saveSettingsToDisk()
-        _installedApps.update { l -> l.map { it.copy(isSelected = it.packageName in packages) } }
+        val cleanMode = mode.trim().uppercase(Locale.US).let { if (it in setOf("ALL", "INCLUDE", "EXCLUDE")) it else "ALL" }
+        val csv = packages.map { it.trim() }.filter { it.isNotEmpty() }.joinToString(",")
+        AlanVpnService.splitTunnelMode = cleanMode
+        AlanVpnService.splitTunnelPackages = packages
+        _settings.update { it.copy(splitTunnelMode = cleanMode, splitTunnelPackagesCsv = csv) }
+        saveSettingsToDisk()
+        _installedApps.update { list -> list.map { it.copy(isSelected = it.packageName in packages) } }
+        appendLog("[SplitTunnel] تفکیک برنامه‌ها ذخیره شد: Mode=$cleanMode | تعداد برنامه‌ها=${packages.size}")
     }
+
     override fun connectBestUserConfig(applyDpiMethods: Boolean, groupFilter: String) {
-        _settings.update { it.copy(autoPilot = false, autoConnectSource = "USER_CONFIGS", applyDpiOnUserAuto = applyDpiMethods) }; saveSettingsToDisk()
-        val idxs = _profiles.value.indices.toList()
-        if (idxs.isNotEmpty()) startMultiTargetMethodScan("selected", idxs, autoConnect = true, useCleanIp = applyDpiMethods)
+        _settings.update {
+            it.copy(
+                autoPilot = false,
+                autoConnectSource = "USER_CONFIGS",
+                applyDpiOnUserAuto = applyDpiMethods
+            )
+        }
+        saveSettingsToDisk()
+
+        val all = _profiles.value
+        if (all.isEmpty()) {
+            appendLog("[UserAuto] مخزن شخصی خالی است؛ ابتدا کانفیگ یا اشتراک اضافه کنید.")
+            return
+        }
+
+        val targetPairs = all.mapIndexedNotNull { idx, item ->
+            val grp = item.groupName.trim().let { if (it.isEmpty() || it.equals("Manual", true)) "دستی" else it }
+            val matchGrp = groupFilter == "ALL" || grp.equals(groupFilter, ignoreCase = true)
+            if (matchGrp && !CleanIpScannerEngine.isSubscriptionAnnouncementOrFakeNode(item)) idx to item else null
+        }.ifEmpty { all.mapIndexed { idx, item -> idx to item } }
+
+        val modeTitle = if (applyDpiMethods) "با متد ضد DPI" else "حالت خالص v2ray"
+        appendLog("[UserAuto] شروع اتصال خودکار به بهترین کانفیگ شخصی (${targetPairs.size} کاندید • $modeTitle)...")
+
+        _telemetry.update {
+            it.copy(
+                uiPhase = "HUNTING",
+                isConnecting = true,
+                isConnected = false,
+                progressPercent = 18,
+                statusHeadline = "یافتن بهترین کانفیگ شما...",
+                statusDetail = "بررسی موازی ${targetPairs.size} کانفیگ ($modeTitle)..."
+            )
+        }
+
+        if (applyDpiMethods) {
+            startMultiTargetMethodScan(
+                scopeMode = "selected",
+                selectedIndices = targetPairs.map { it.first },
+                autoConnect = true,
+                useCleanIp = _settings.value.autoCleanIpForCf
+            )
+        } else {
+            scope.launch(Dispatchers.IO) {
+                val sem = Semaphore(20)
+                val hits = java.util.Collections.synchronizedList(ArrayList<Triple<Int, Int, String>>())
+                coroutineScope {
+                    targetPairs.map { (origIdx, prof) ->
+                        async(Dispatchers.IO) {
+                            sem.withPermit {
+                                val rawHost = prof.host.ifBlank { prof.originalHost }.trim()
+                                val ip = cleanIpEngine.resolveUnpoisonedIpv4Blocking(rawHost, 1400).ifBlank { rawHost }
+                                val rtt = cleanIpEngine.fastTcpPingBlocking(ip, prof.port, 1200)
+                                if (rtt >= 0) {
+                                    hits.add(Triple(rtt, origIdx, ip))
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+                val sorted = hits.sortedBy { it.first }
+                if (sorted.isNotEmpty()) {
+                    val (_, bestIdx, bestEp) = sorted.first()
+                    appendLog("[UserAuto] سریع‌ترین کانفیگ شخصی در حالت خالص: '${all[bestIdx].name}' (${sorted.first().first}ms)")
+                    applyScannedVector("VEC-00", bestIdx, bestEp, true)
+                } else {
+                    val fallbackIdx = targetPairs.first().first
+                    startManualConnect(fallbackIdx)
+                }
+            }
+        }
     }
+
+
+    private fun nowTime(): String =
+        java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+
+    private fun startManualConnect(index: Int) {
+        val item = _profiles.value.getOrNull(index) ?: return
+        val vec = if (!_settings.value.applyDpiOnUserAuto) "VEC-00" else item.cachedVectorId.ifBlank { item.preferredVectorId }
+        connectScannedProfile(index, if (vec == "AUTO") "" else vec, item.host)
+    }
+
     override fun clearLogs() {
         synchronized(logLinesBuffer) {
             logLinesBuffer.clear()
@@ -4676,7 +4878,13 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                         darkTheme = j.optBoolean("darkTheme", true),
                         lastActiveTab = j.optInt("lastActiveTab", 0),
                         subnetsRepoUrl = j.optString("subnetsRepoUrl", CleanIpScannerEngine.DEFAULT_GITHUB_SUBNETS_URL),
-                        autoCleanIpForCf = j.optBoolean("autoCleanIpForCf", true)
+                        autoCleanIpForCf = j.optBoolean("autoCleanIpForCf", true),
+                    tunnelMode = j.optString("tunnelMode", "VPN"),
+                    activeDohUrl = j.optString("activeDohUrl", "https://cloudflare-dns.com/dns-query"),
+                    autoConnectSource = j.optString("autoConnectSource", "CLOUD_REPO"),
+                    applyDpiOnUserAuto = j.optBoolean("applyDpiOnUserAuto", true),
+                    splitTunnelMode = j.optString("splitTunnelMode", "ALL"),
+                    splitTunnelPackagesCsv = j.optString("splitTunnelPackagesCsv", "")
                     )
                 } catch (_: Throwable) {
                 }

@@ -3,12 +3,14 @@ package com.alan.ripdpi.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BlurMaskFilter
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -33,11 +35,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -53,18 +60,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -74,14 +85,11 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-
-enum class AlanLang { FA, EN }
-
-val LocalAlanLang = staticCompositionLocalOf { AlanLang.FA }
-
-@Composable
-fun tr(fa: String, en: String): String =
-    if (LocalAlanLang.current == AlanLang.FA) fa else en
+import com.alan.ripdpi.R
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import java.util.EnumMap
 
 @Immutable
 data class AlanPalette(
@@ -107,31 +115,31 @@ data class AlanPalette(
 private val DarkAlanPalette = AlanPalette(
     isDark = true,
     rootBg = Color(0xFF1E232E),
-    surfaceBg = Color(0xFF222836),
+    surfaceBg = Color(0xFF222834),
     cardBg = Color(0xFF1E232E),
-    subtleBg = Color(0xFF161A23),
-    cardBorder = Color(0xFF2E3647),
+    subtleBg = Color(0xFF151922),
+    cardBorder = Color(0xFF2B3242),
     glowBorder = Color(0x99F5C451),
     accentGold = Color(0xFFF5C451),
     accentAmber = Color(0xFFE59A1A),
     accentSoftBg = Color(0x24F5C451),
-    onAccent = Color(0xFF141820),
+    onAccent = Color(0xFF11141B),
     emerald = Color(0xFF10B981),
     cyan = Color(0xFF38BDF8),
     danger = Color(0xFFEF4444),
     textPrimary = Color(0xFFF3F6FC),
     textSecondary = Color(0xFFCBD5E1),
-    textMuted = Color(0xFF94A3B8)
+    textMuted = Color(0xFF8E9DB5)
 )
 
 private val LightAlanPalette = AlanPalette(
     isDark = false,
     rootBg = Color(0xFFE6ECF5),
-    surfaceBg = Color(0xFFEDF2F9),
+    surfaceBg = Color(0xFFEDF2FA),
     cardBg = Color(0xFFE6ECF5),
-    subtleBg = Color(0xFFD7E0EE),
-    cardBorder = Color(0xFFC3D0E2),
-    glowBorder = Color(0x88B45309),
+    subtleBg = Color(0xFFD5DFEE),
+    cardBorder = Color(0xFFBCC7D8),
+    glowBorder = Color(0x99C27803),
     accentGold = Color(0xFFB45309),
     accentAmber = Color(0xFF92400E),
     accentSoftBg = Color(0x22D97706),
@@ -141,18 +149,37 @@ private val LightAlanPalette = AlanPalette(
     danger = Color(0xFFDC2626),
     textPrimary = Color(0xFF0F172A),
     textSecondary = Color(0xFF334155),
-    textMuted = Color(0xFF52637A)
-)
-
-
-val VazirmatnFontFamily = FontFamily(
-    androidx.compose.ui.text.font.Font(com.alan.ripdpi.R.font.vazirmatn_regular, FontWeight.Normal),
-    androidx.compose.ui.text.font.Font(com.alan.ripdpi.R.font.vazirmatn_medium, FontWeight.Medium),
-    androidx.compose.ui.text.font.Font(com.alan.ripdpi.R.font.vazirmatn_bold, FontWeight.Bold),
-    androidx.compose.ui.text.font.Font(com.alan.ripdpi.R.font.vazirmatn_extrabold, FontWeight.ExtraBold)
+    textMuted = Color(0xFF55667E)
 )
 
 val LocalAlanPalette = staticCompositionLocalOf { DarkAlanPalette }
+
+val VazirmatnFontFamily = FontFamily(
+    Font(R.font.vazirmatn_regular, FontWeight.Normal),
+    Font(R.font.vazirmatn_medium, FontWeight.Medium),
+    Font(R.font.vazirmatn_medium, FontWeight.SemiBold),
+    Font(R.font.vazirmatn_bold, FontWeight.Bold),
+    Font(R.font.vazirmatn_extrabold, FontWeight.ExtraBold)
+)
+
+private val BaseM3Typography = Typography()
+val AlanVazirmatnTypography = Typography(
+    displayLarge = BaseM3Typography.displayLarge.copy(fontFamily = VazirmatnFontFamily),
+    displayMedium = BaseM3Typography.displayMedium.copy(fontFamily = VazirmatnFontFamily),
+    displaySmall = BaseM3Typography.displaySmall.copy(fontFamily = VazirmatnFontFamily),
+    headlineLarge = BaseM3Typography.headlineLarge.copy(fontFamily = VazirmatnFontFamily),
+    headlineMedium = BaseM3Typography.headlineMedium.copy(fontFamily = VazirmatnFontFamily),
+    headlineSmall = BaseM3Typography.headlineSmall.copy(fontFamily = VazirmatnFontFamily),
+    titleLarge = BaseM3Typography.titleLarge.copy(fontFamily = VazirmatnFontFamily),
+    titleMedium = BaseM3Typography.titleMedium.copy(fontFamily = VazirmatnFontFamily),
+    titleSmall = BaseM3Typography.titleSmall.copy(fontFamily = VazirmatnFontFamily),
+    bodyLarge = BaseM3Typography.bodyLarge.copy(fontFamily = VazirmatnFontFamily),
+    bodyMedium = BaseM3Typography.bodyMedium.copy(fontFamily = VazirmatnFontFamily),
+    bodySmall = BaseM3Typography.bodySmall.copy(fontFamily = VazirmatnFontFamily),
+    labelLarge = BaseM3Typography.labelLarge.copy(fontFamily = VazirmatnFontFamily),
+    labelMedium = BaseM3Typography.labelMedium.copy(fontFamily = VazirmatnFontFamily),
+    labelSmall = BaseM3Typography.labelSmall.copy(fontFamily = VazirmatnFontFamily)
+)
 
 @Composable
 fun AlanCyberTheme(
@@ -185,7 +212,15 @@ fun AlanCyberTheme(
     }
 
     CompositionLocalProvider(LocalAlanPalette provides palette) {
-        MaterialTheme(colorScheme = materialScheme, content = content)
+        MaterialTheme(
+            colorScheme = materialScheme,
+            typography = AlanVazirmatnTypography
+        ) {
+            ProvideTextStyle(
+                value = LocalTextStyle.current.copy(fontFamily = VazirmatnFontFamily),
+                content = content
+            )
+        }
     }
 }
 
@@ -209,9 +244,9 @@ fun Long.toThemeAwareAccent(fallback: Color): Color {
     } else {
         if (raw.luminance() > 0.44f) {
             Color(
-                red = (raw.red * 0.56f).coerceIn(0f, 1f),
-                green = (raw.green * 0.50f).coerceIn(0f, 1f),
-                blue = (raw.blue * 0.56f).coerceIn(0f, 1f),
+                red = (raw.red * 0.54f).coerceIn(0f, 1f),
+                green = (raw.green * 0.48f).coerceIn(0f, 1f),
+                blue = (raw.blue * 0.54f).coerceIn(0f, 1f),
                 alpha = 1f
             )
         } else {
@@ -228,34 +263,66 @@ fun copyPlainTextToClipboard(context: Context, label: String, text: String) {
     }
 }
 
-// Extruded Soft Neumorphic Card (Convex) - Clean controlled halo + directional 3D bevel
+fun sharePlainText(context: Context, title: String, text: String) {
+    try {
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, title)
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        val chooser = Intent.createChooser(sendIntent, title).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(chooser)
+    } catch (_: Throwable) {
+    }
+}
+
+// ============================================================================
+// PURE BORDERLESS NEUMORPHIC MODIFIERS (Extruded & Inset with BlurMaskFilter)
+// ============================================================================
+
 fun Modifier.alanGlassCard(
     highlighted: Boolean = false,
-    cornerRadius: Dp = 16.dp,
+    cornerRadius: Dp = 18.dp,
     accentBorderColor: Color? = null
 ): Modifier = composed {
     val p = LocalAlanPalette.current
     val isDark = p.isDark
-    val lightShadow = if (isDark) Color(0xFF323B4E).copy(alpha = 0.34f) else Color(0xFFFFFFFF).copy(alpha = 0.85f)
-    val darkShadow = if (isDark) Color(0xFF0A0D13).copy(alpha = 0.56f) else Color(0xFFA8B8CE).copy(alpha = 0.50f)
+    val lightShadow = if (isDark) {
+        Color(0xFF2D3546).copy(alpha = if (highlighted) 0.90f else 0.74f)
+    } else {
+        Color(0xFFFFFFFF).copy(alpha = if (highlighted) 1.0f else 0.94f)
+    }
+    val darkShadow = if (isDark) {
+        Color(0xFF0D1016).copy(alpha = if (highlighted) 0.95f else 0.86f)
+    } else {
+        Color(0xFFB5C2D6).copy(alpha = if (highlighted) 0.90f else 0.78f)
+    }
 
-    val topBevel = if (isDark) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.82f)
-    val bottomBevel = if (isDark) Color.Black.copy(alpha = 0.42f) else Color(0xFFB5C4D9).copy(alpha = 0.72f)
+    val surfaceTop = if (isDark) Color(0xFF252C3B) else Color(0xFFF2F6FD)
+    val surfaceBottom = if (isDark) Color(0xFF191E28) else Color(0xFFDEE6F3)
+    val tintOverlay = if (highlighted) {
+        (accentBorderColor ?: p.accentGold).copy(alpha = if (isDark) 0.08f else 0.06f)
+    } else {
+        Color.Transparent
+    }
     val shape = RoundedCornerShape(cornerRadius)
 
     this
+        .graphicsLayer { clip = false }
         .drawBehind {
             if (size.width > 4f && size.height > 4f) {
                 val cr = cornerRadius.toPx()
-                val blur = 6.dp.toPx()
-                val off = 2.8.dp.toPx()
+                val off = (if (highlighted) 4.5.dp else 3.5.dp).toPx()
+                val blurRad = if (highlighted) 17f else 14f
                 val inset = 1.dp.toPx()
 
                 drawIntoCanvas { canvas ->
                     val darkPaint = Paint().asFrameworkPaint().apply {
                         isAntiAlias = true
                         color = darkShadow.toArgb()
-                        maskFilter = BlurMaskFilter(blur, BlurMaskFilter.Blur.NORMAL)
+                        maskFilter = BlurMaskFilter(blurRad, BlurMaskFilter.Blur.NORMAL)
                     }
                     canvas.nativeCanvas.drawRoundRect(
                         inset + off,
@@ -270,7 +337,7 @@ fun Modifier.alanGlassCard(
                     val lightPaint = Paint().asFrameworkPaint().apply {
                         isAntiAlias = true
                         color = lightShadow.toArgb()
-                        maskFilter = BlurMaskFilter(blur, BlurMaskFilter.Blur.NORMAL)
+                        maskFilter = BlurMaskFilter(blurRad, BlurMaskFilter.Blur.NORMAL)
                     }
                     canvas.nativeCanvas.drawRoundRect(
                         inset - off,
@@ -285,50 +352,108 @@ fun Modifier.alanGlassCard(
             }
         }
         .clip(shape)
-        .background(p.cardBg)
-        
+        .background(Brush.linearGradient(listOf(surfaceTop, p.cardBg, surfaceBottom)))
+        .background(tintOverlay)
 }
 
-// Recessed Soft Neumorphic Well (Concave) - Drawn strictly behind content so text NEVER fades!
-fun Modifier.alanNeuInset(cornerRadius: Dp = 14.dp, accented: Boolean = false): Modifier = composed {
+fun Modifier.alanNeuInset(
+    cornerRadius: Dp = 14.dp,
+    accented: Boolean = false
+): Modifier = composed {
     val p = LocalAlanPalette.current
     val isDark = p.isDark
-    val innerShade = if (isDark) Color.Black.copy(alpha = 0.34f) else Color(0xFF9FB0C7).copy(alpha = 0.36f)
-    val borderTopLeft = if (isDark) Color.Black.copy(alpha = 0.50f) else Color(0xFFB0C0D6).copy(alpha = 0.85f)
-    val borderBottomRight = if (isDark) Color.White.copy(alpha = 0.07f) else Color.White.copy(alpha = 0.92f)
+    val darkInner = if (isDark) Color(0xFF0C0F14).copy(alpha = 0.92f) else Color(0xFFB5C2D6).copy(alpha = 0.88f)
+    val lightInner = if (isDark) Color(0xFF2C3444).copy(alpha = 0.58f) else Color(0xFFFFFFFF).copy(alpha = 0.96f)
     val shape = RoundedCornerShape(cornerRadius)
+    val bgCol = if (accented) {
+        if (isDark) Color(0xFF131720) else Color(0xFFD0DBEC)
+    } else {
+        p.subtleBg
+    }
 
     this
         .clip(shape)
-        .background(p.subtleBg)
+        .background(bgCol)
         .drawBehind {
-            val band = 5.dp.toPx().coerceAtMost(size.minDimension / 2f)
-            if (band > 1f) {
-                drawRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(innerShade, Color.Transparent),
-                        startY = 0f,
-                        endY = band
-                    ),
-                    topLeft = Offset.Zero,
-                    size = Size(size.width, band)
-                )
-                drawRect(
-                    brush = Brush.horizontalGradient(
-                        colors = listOf(innerShade.copy(alpha = innerShade.alpha * 0.7f), Color.Transparent),
-                        startX = 0f,
-                        endX = band
-                    ),
-                    topLeft = Offset.Zero,
-                    size = Size(band, size.height)
-                )
+            if (size.width > 4f && size.height > 4f) {
+                val cr = cornerRadius.toPx()
+                val strokeW = (if (accented) 3.8.dp else 3.2.dp).toPx()
+                val shift = 1.9.dp.toPx()
+
+                drawIntoCanvas { canvas ->
+                    canvas.save()
+                    val clipPath = android.graphics.Path().apply {
+                        addRoundRect(0f, 0f, size.width, size.height, cr, cr, android.graphics.Path.Direction.CW)
+                    }
+                    canvas.nativeCanvas.clipPath(clipPath)
+
+                    val darkPaint = Paint().asFrameworkPaint().apply {
+                        isAntiAlias = true
+                        style = android.graphics.Paint.Style.STROKE
+                        strokeWidth = strokeW
+                        color = darkInner.toArgb()
+                        maskFilter = BlurMaskFilter(11f, BlurMaskFilter.Blur.NORMAL)
+                    }
+                    canvas.nativeCanvas.drawRoundRect(
+                        -shift,
+                        -shift,
+                        size.width + strokeW,
+                        size.height + strokeW,
+                        cr,
+                        cr,
+                        darkPaint
+                    )
+
+                    val lightPaint = Paint().asFrameworkPaint().apply {
+                        isAntiAlias = true
+                        style = android.graphics.Paint.Style.STROKE
+                        strokeWidth = strokeW
+                        color = lightInner.toArgb()
+                        maskFilter = BlurMaskFilter(11f, BlurMaskFilter.Blur.NORMAL)
+                    }
+                    canvas.nativeCanvas.drawRoundRect(
+                        -strokeW,
+                        -strokeW,
+                        size.width + shift,
+                        size.height + shift,
+                        cr,
+                        cr,
+                        lightPaint
+                    )
+                    canvas.restore()
+                }
             }
         }
-        .border(
-            width = 1.dp,
-            brush = Brush.linearGradient(listOf(borderTopLeft, borderBottomRight)),
-            shape = shape
+}
+
+@Composable
+fun AlanNeuIconButton(
+    icon: ImageVector,
+    tint: Color,
+    size: Dp = 42.dp,
+    isPressed: Boolean = false,
+    onClick: () -> Unit
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(size)
+            .then(
+                if (isPressed) {
+                    Modifier.alanNeuInset(cornerRadius = 13.dp, accented = true)
+                } else {
+                    Modifier.alanGlassCard(cornerRadius = 13.dp)
+                }
+            )
+            .clickable(onClick = onClick)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size((size.value * 0.46f).dp)
         )
+    }
 }
 
 @Composable
@@ -343,12 +468,12 @@ fun AlanPillSwitch(
         label = "swThumb"
     )
     val trackTint by animateColorAsState(
-        targetValue = if (checked) p.accentGold.copy(alpha = if (p.isDark) 0.24f else 0.18f) else Color.Transparent,
+        targetValue = if (checked) p.emerald.copy(alpha = if (p.isDark) 0.22f else 0.16f) else Color.Transparent,
         animationSpec = tween(180),
         label = "swTrack"
     )
     val thumbColor by animateColorAsState(
-        targetValue = if (checked) p.accentGold else p.textMuted,
+        targetValue = if (checked) p.emerald else p.textMuted,
         animationSpec = tween(180),
         label = "swThumbCol"
     )
@@ -359,7 +484,7 @@ fun AlanPillSwitch(
             modifier = Modifier
                 .width(44.dp)
                 .height(25.dp)
-                .alanNeuInset(cornerRadius = 13.dp)
+                .alanNeuInset(cornerRadius = 13.dp, accented = checked)
                 .background(trackTint)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -372,11 +497,6 @@ fun AlanPillSwitch(
                     .size(19.dp)
                     .clip(CircleShape)
                     .background(thumbColor)
-                    .border(
-                        width = 1.dp,
-                        color = Color.White.copy(alpha = if (p.isDark) 0.25f else 0.65f),
-                        shape = CircleShape
-                    )
             )
         }
     }
@@ -395,17 +515,13 @@ fun AlanSheetTextField(
     val p = LocalAlanPalette.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val shape = RoundedCornerShape(12.dp)
 
     Box(
         contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,
         modifier = modifier
-            .then(if (singleLine) Modifier.height(48.dp) else Modifier.heightIn(min = 84.dp))
-            .alanNeuInset(cornerRadius = 12.dp)
-            .then(
-                if (isFocused) Modifier.border(1.3.dp, p.accentGold, shape) else Modifier
-            )
-            .padding(horizontal = 12.dp, vertical = if (singleLine) 5.dp else 8.dp)
+            .then(if (singleLine) Modifier.height(48.dp) else Modifier.heightIn(min = 88.dp))
+            .alanNeuInset(cornerRadius = 14.dp, accented = isFocused)
+            .padding(horizontal = 13.dp, vertical = if (singleLine) 5.dp else 9.dp)
     ) {
         Column(
             verticalArrangement = Arrangement.Center,
@@ -415,6 +531,7 @@ fun AlanSheetTextField(
                 Text(
                     text = label,
                     color = if (isFocused) p.accentGold else p.textMuted,
+                    fontFamily = VazirmatnFontFamily,
                     fontSize = 9.5.sp,
                     lineHeight = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -428,12 +545,12 @@ fun AlanSheetTextField(
                     value = value,
                     onValueChange = onValueChange,
                     singleLine = singleLine,
-                    maxLines = if (singleLine) 1 else 5,
+                    maxLines = if (singleLine) 1 else 6,
                     interactionSource = interactionSource,
                     cursorBrush = SolidColor(p.accentGold),
                     textStyle = TextStyle(
                         color = p.textPrimary,
-                        fontFamily = if (ltr) FontFamily.Monospace else VazirmatnFontFamily,
+                        fontFamily = VazirmatnFontFamily,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 12.5.sp,
                         lineHeight = 17.sp
@@ -450,6 +567,7 @@ fun AlanSheetTextField(
                                 Text(
                                     text = label,
                                     color = p.textMuted,
+                                    fontFamily = VazirmatnFontFamily,
                                     fontSize = 12.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -482,7 +600,6 @@ fun AlanCustomSelectBox(
     modifier: Modifier = Modifier
 ) {
     val p = LocalAlanPalette.current
-    val layoutDir = if (LocalAlanLang.current == AlanLang.FA) LayoutDirection.Rtl else LayoutDirection.Ltr
     var dialogOpen by remember { mutableStateOf(false) }
     val selectedOption = remember(selectedValue, options) {
         options.firstOrNull { it.value == selectedValue }
@@ -507,9 +624,9 @@ fun AlanCustomSelectBox(
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier
                 .fillMaxWidth()
-                .alanNeuInset(cornerRadius = 12.dp)
+                .alanNeuInset(cornerRadius = 14.dp)
                 .clickable { if (options.isNotEmpty()) dialogOpen = true }
-                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .padding(horizontal = 13.dp, vertical = 10.dp)
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -542,12 +659,11 @@ fun AlanCustomSelectBox(
 
     if (dialogOpen) {
         Dialog(onDismissRequest = { dialogOpen = false }) {
-            CompositionLocalProvider(LocalLayoutDirection provides layoutDir) {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                 Surface(
                     shape = RoundedCornerShape(22.dp),
                     color = p.surfaceBg,
-                    border = androidx.compose.foundation.BorderStroke(1.2.dp, p.cardBorder),
-                    shadowElevation = 10.dp,
+                    shadowElevation = 12.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -560,25 +676,22 @@ fun AlanCustomSelectBox(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = label.ifBlank { tr("انتخاب گزینه", "Select Option") },
+                                text = label.ifBlank { "انتخاب گزینه" },
                                 color = p.accentGold,
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 14.sp,
                                 modifier = Modifier.weight(1f)
                             )
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(30.dp)
-                                    .alanNeuInset(cornerRadius = 15.dp)
-                                    .clickable { dialogOpen = false }
-                            ) {
-                                Icon(Icons.Outlined.Close, null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
-                            }
+                            AlanNeuIconButton(
+                                icon = Icons.Outlined.Close,
+                                tint = p.textSecondary,
+                                size = 32.dp,
+                                onClick = { dialogOpen = false }
+                            )
                         }
 
                         Column(
-                            verticalArrangement = Arrangement.spacedBy(7.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = 350.dp)
@@ -593,18 +706,16 @@ fun AlanCustomSelectBox(
                                         .fillMaxWidth()
                                         .then(
                                             if (isSel) {
-                                                Modifier
-                                                    .alanNeuInset(11.dp)
-                                                    .border(1.1.dp, p.accentGold, RoundedCornerShape(11.dp))
+                                                Modifier.alanNeuInset(cornerRadius = 12.dp, accented = true)
                                             } else {
-                                                Modifier.alanGlassCard(cornerRadius = 11.dp)
+                                                Modifier.alanGlassCard(cornerRadius = 12.dp)
                                             }
                                         )
                                         .clickable {
                                             dialogOpen = false
                                             onSelect(opt.value)
                                         }
-                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                        .padding(horizontal = 13.dp, vertical = 10.dp)
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
@@ -650,15 +761,12 @@ fun DarkActionMenuDialog(
     onDismiss: () -> Unit
 ) {
     val p = LocalAlanPalette.current
-    val layoutDir = if (LocalAlanLang.current == AlanLang.FA) LayoutDirection.Rtl else LayoutDirection.Ltr
-
     Dialog(onDismissRequest = onDismiss) {
-        CompositionLocalProvider(LocalLayoutDirection provides layoutDir) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = p.surfaceBg,
-                border = androidx.compose.foundation.BorderStroke(1.2.dp, p.cardBorder),
-                shadowElevation = 10.dp,
+                shadowElevation = 12.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -677,26 +785,21 @@ fun DarkActionMenuDialog(
                             fontSize = 14.sp,
                             modifier = Modifier.weight(1f)
                         )
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(30.dp)
-                                .alanNeuInset(cornerRadius = 15.dp)
-                                .clickable { onDismiss() }
-                        ) {
-                            Icon(Icons.Outlined.Close, null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
-                        }
+                        AlanNeuIconButton(
+                            icon = Icons.Outlined.Close,
+                            tint = p.textSecondary,
+                            size = 32.dp,
+                            onClick = onDismiss
+                        )
                     }
 
                     actions.forEach { (label, act) ->
-                        val isDanger = label.contains("حذف") || label.contains("پاک") ||
-                            label.contains("Delete", ignoreCase = true) || label.contains("Clear", ignoreCase = true) ||
-                            label.contains("Remove", ignoreCase = true)
+                        val isDanger = label.contains("حذف") || label.contains("پاک")
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .alanGlassCard(cornerRadius = 11.dp)
+                                .alanGlassCard(cornerRadius = 12.dp)
                                 .clickable {
                                     onDismiss()
                                     act()
@@ -716,21 +819,170 @@ fun DarkActionMenuDialog(
         }
     }
 }
+
 @Composable
-fun AlanNeuIconButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    tint: Color,
-    size: Dp = 42.dp,
-    isPressed: Boolean = false,
-    onClick: () -> Unit
+fun QrCodeDisplayDialog(
+    title: String,
+    subtitle: String,
+    qrContent: String,
+    onDismiss: () -> Unit
 ) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(size)
-            .then(if (isPressed) Modifier.alanNeuInset(cornerRadius = 13.dp, accented = true) else Modifier.alanGlassCard(cornerRadius = 13.dp))
-            .clickable(onClick = onClick)
-    ) {
-        Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size((size.value * 0.46f).dp))
+    val p = LocalAlanPalette.current
+    val context = LocalContext.current
+    var copied by remember { mutableStateOf(false) }
+
+    val qrBitmap = remember(qrContent) {
+        generateQrCodeBitmap(qrContent, 640)
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = p.surfaceBg,
+                shadowElevation = 14.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(18.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = title,
+                                color = p.textPrimary,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 14.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (subtitle.isNotBlank()) {
+                                LtrContent {
+                                    Text(
+                                        text = subtitle,
+                                        color = p.textMuted,
+                                        fontSize = 10.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        AlanNeuIconButton(
+                            icon = Icons.Outlined.Close,
+                            tint = p.textSecondary,
+                            size = 34.dp,
+                            onClick = onDismiss
+                        )
+                    }
+
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(236.dp)
+                            .alanGlassCard(highlighted = true, cornerRadius = 22.dp)
+                            .padding(10.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.White)
+                            .padding(10.dp)
+                    ) {
+                        if (qrBitmap != null) {
+                            Image(
+                                bitmap = qrBitmap.asImageBitmap(),
+                                contentDescription = title,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.size(200.dp)
+                            )
+                        } else {
+                            Text("خطا در ساخت QR", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    if (copied) {
+                        Text(
+                            text = "لینک کانفیگ در کلیپ‌بورد کپی شد.",
+                            color = p.emerald,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.5.sp
+                        )
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .alanGlassCard(cornerRadius = 12.dp)
+                                .clickable {
+                                    copyPlainTextToClipboard(context, title, qrContent)
+                                    copied = true
+                                }
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.ContentCopy, null, tint = p.accentGold, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("کپی لینک", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(p.accentGold)
+                                .clickable {
+                                    sharePlainText(context, title, qrContent)
+                                }
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Share, null, tint = p.onAccent, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("اشتراک‌گذاری", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
+
+private fun generateQrCodeBitmap(content: String, sizePx: Int): Bitmap? {
+    if (content.isBlank()) return null
+    return try {
+        val hints = EnumMap<EncodeHintType, Any>(EncodeHintType::class.java).apply {
+            put(EncodeHintType.CHARACTER_SET, "UTF-8")
+            put(EncodeHintType.MARGIN, 1)
+        }
+        val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
+        val w = matrix.width
+        val h = matrix.height
+        val pixels = IntArray(w * h)
+        for (y in 0 until h) {
+            val offset = y * w
+            for (x in 0 until w) {
+                pixels[offset + x] = if (matrix.get(x, y)) 0xFF0F172A.toInt() else 0xFFFFFFFF.toInt()
+            }
+        }
+        Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+            setPixels(pixels, 0, w, 0, 0, w, h)
+        }
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+fun setAutoRenameOnScanPreference(enabled: Boolean) {}

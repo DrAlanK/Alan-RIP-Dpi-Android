@@ -188,7 +188,6 @@ data class SubscriptionItem(
     val updatedAt: String = ""
 )
 
-
 data class CleanIpHit(
     val ip: String,
     val port: Int = 443,
@@ -205,7 +204,6 @@ data class CleanIpScanState(
     val summary: String = "آماده اسکن IP تمیز کلادفلر",
     val loadedSubnetsCount: Int = 22
 )
-
 
 data class RepoLocationOption(
     val countryCode: String,
@@ -224,7 +222,6 @@ data class RepoScanReportSummary(
     val activeLocationsCount: Int = 0,
     val sourceLabel: String = "GitHub Auto-Repo"
 )
-
 
 data class DohServerUiItem(
     val id: String,
@@ -248,7 +245,12 @@ data class DohScanUiState(
     val summary: String = "آماده اسکن سرورهای DoH (DNSveil)"
 )
 
-data class InstalledAppUiItem(val packageName: String, val appName: String, val isSystemApp: Boolean = false, val isSelected: Boolean = false)
+data class InstalledAppUiItem(
+    val packageName: String,
+    val appName: String,
+    val isSystemApp: Boolean = false,
+    val isSelected: Boolean = false
+)
 
 interface AlanEngineController {
     val telemetry: StateFlow<TelemetrySnapshot>
@@ -396,12 +398,16 @@ interface AlanEngineController {
     fun setTunnelOperationMode(mode: String) {}
 
     fun sendAllConfigsToDpiLab(autoConnectBest: Boolean = true, useCleanIp: Boolean = true) {}
-    val installedApps: StateFlow<List<InstalledAppUiItem>> get() = MutableStateFlow(emptyList())
+
+    val installedApps: StateFlow<List<InstalledAppUiItem>>
+        get() = MutableStateFlow(emptyList())
+
     fun loadInstalledAppsList(includeSystem: Boolean = false) {}
+
     fun updateSplitTunnelConfig(mode: String, packages: Set<String>) {}
+
     fun connectBestUserConfig(applyDpiMethods: Boolean = true, groupFilter: String = "ALL") {}
 }
-
 
 class DemoAlanEngineController : AlanEngineController {
     private val deSpec = CountryPaletteRegistry.resolveByCode("DE")

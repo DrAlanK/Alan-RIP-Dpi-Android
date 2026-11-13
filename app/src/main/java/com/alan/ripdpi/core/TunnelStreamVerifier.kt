@@ -120,7 +120,7 @@ object TunnelStreamVerifier {
         }
     }
 
-            fun fastProbe(httpPort: Int, timeoutMs: Long = 3400L): ProbeVerdict {
+    fun fastProbe(httpPort: Int, timeoutMs: Long = 3400L): ProbeVerdict {
         val client = okhttp3.OkHttpClient.Builder()
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -140,6 +140,7 @@ object TunnelStreamVerifier {
         }
         return ProbeVerdict(false, -1L, 0)
     }
+
 
     fun checkGeminiAccess(httpPort: Int, timeoutMs: Long = 4500L): Pair<Boolean, String> {
         val client = okhttp3.OkHttpClient.Builder()

@@ -1,18 +1,7 @@
 package com.alan.ripdpi.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -36,17 +25,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
-import androidx.compose.material.icons.outlined.AutoFixHigh
-import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentPaste
-import androidx.compose.material.icons.outlined.Dns
-import androidx.compose.material.icons.outlined.ChevronLeft
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Route
@@ -69,12 +54,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -82,7 +63,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.alan.ripdpi.model.CountryPaletteRegistry
 import java.util.Locale
 
 @Composable
@@ -116,24 +96,40 @@ fun HomeTabScreen(
 
     val isPureAutoMode = settings.autoPilot || telemetry.activeProfileUid == "__SMART_AUTO__"
     val preferredAutoCode = settings.preferredAutoCountry.uppercase(Locale.US)
+
     val selectedAutoLocation = remember(availableRepoLocations, preferredAutoCode) {
-        availableRepoLocations.firstOrNull { it.countryCode.equals(preferredAutoCode, true) }
-            ?: availableRepoLocations.firstOrNull()
-            ?: RepoLocationOption("AUTO", "خودکار", "", "", emptyList(), profiles.size.coerceAtLeast(12), 140)
+        availableRepoLocations.firstOrNull {
+            it.countryCode.equals(preferredAutoCode, ignoreCase = true)
+        } ?: availableRepoLocations.firstOrNull() ?: RepoLocationOption(
+            countryCode = "AUTO",
+            countryNameFa = "خودکار (سریع‌ترین)",
+            flagEmoji = "",
+            serverCount = profiles.size.coerceAtLeast(12),
+            avgPingMs = 140
+        )
     }
 
     val activeIdx = remember(profiles, telemetry.selectedIndex, isPureAutoMode) {
-        if (isPureAutoMode) -1 else profiles.indexOfFirst { it.isSelected }.let { if (it >= 0) it else if (telemetry.selectedIndex in profiles.indices) telemetry.selectedIndex else -1 }
+        if (isPureAutoMode) {
+            -1
+        } else {
+            val byFlag = profiles.indexOfFirst { it.isSelected }
+            when {
+                byFlag >= 0 -> byFlag
+                telemetry.selectedIndex in profiles.indices -> telemetry.selectedIndex
+                else -> -1
+            }
+        }
     }
     val activeProfile = if (isPureAutoMode) null else profiles.getOrNull(activeIdx)
-    val isErrorPhase = telemetry.uiPhase.equals("ERROR", true)
+    val isErrorPhase = telemetry.uiPhase.equals("ERROR", ignoreCase = true)
 
     val cleanStatusHeadline = when {
         telemetry.isConnected && isPureAutoMode -> "متصل از طریق شبکه ابری هوشمند"
-        telemetry.isConnected -> "تونل امن روی پروفایل شخصی فعال است"
+        telemetry.isConnected -> "تونل امن روی پروفایل شخصی برقرار است"
         telemetry.isConnecting -> telemetry.statusDetail.ifBlank { "در حال مذاکره و قفل سریع‌ترین مسیر..." }
         isErrorPhase -> telemetry.statusDetail.ifBlank { "ارتباط برقرار نشد؛ مجدداً تلاش کنید" }
-        isPureAutoMode -> "آماده برقراری ارتباط هوشمند"
+        isPureAutoMode -> "آماده اتصال هوشمند"
         else -> "آماده برقراری ارتباط"
     }
 
@@ -148,17 +144,29 @@ fun HomeTabScreen(
         else -> "${selectedAutoLocation.serverCount} سرور مخزن"
     }
 
-    val activeVecLabel = if (telemetry.isConnected) telemetry.activeVectorId else if (!settings.applyDpiOnUserAuto && !isPureAutoMode) "VEC-00" else settings.manualVectorId
+    val activeVecLabel = if (telemetry.isConnected) {
+        telemetry.activeVectorId
+    } else if (!settings.applyDpiOnUserAuto && !isPureAutoMode) {
+        "VEC-00"
+    } else {
+        settings.manualVectorId
+    }
+
     val connectionTitleText = when {
         isPureAutoMode -> "مخزن ابری هوشمند"
-        activeProfile != null -> activeProfile.name.replace("VLESS · ", "").replace("VMESS · ", "").trim().ifBlank { activeProfile.protocol }
+        activeProfile != null -> activeProfile.name
+            .replace("VLESS · ", "")
+            .replace("VMESS · ", "")
+            .trim()
+            .ifBlank { activeProfile.protocol }
         else -> "کانفیگ‌های من (${profiles.size})"
     }
 
     val activeDohLabel = remember(dohScanState.activeDohName, settings.activeDohUrl) {
         dohScanState.activeDohName.ifBlank { "Cloudflare DoH" }
     }
-    val splitBadge = remember(settings.splitTunnelMode, settings.splitTunnelPackagesCsv) {
+
+    val splitTunnelBadge = remember(settings.splitTunnelMode, settings.splitTunnelPackagesCsv) {
         val cnt = settings.splitTunnelPackagesCsv.split(",").count { it.isNotBlank() }
         when (settings.splitTunnelMode.uppercase(Locale.US)) {
             "INCLUDE" -> if (cnt > 0) "فقط $cnt برنامه" else "تفکیک برنامه‌ها"
@@ -167,12 +175,24 @@ fun HomeTabScreen(
         }
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 6.dp)) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+    ) {
         val compact = maxHeight < 650.dp
-        val orbH = if (compact) 176.dp else 212.dp
+        val orbAreaHeight = if (compact) 202.dp else 244.dp
 
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxSize()) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            // 1. Top Hero: Wide Bubble Field + Seamless One-Piece Morphing Orb
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 CenterPowerOrbButton(
                     isConnected = telemetry.isConnected,
                     isConnecting = telemetry.isConnecting,
@@ -180,109 +200,365 @@ fun HomeTabScreen(
                     progressPercent = telemetry.progressPercent,
                     accentColorLong = telemetry.accentPrimaryColor,
                     onClick = onToggleConnection,
-                    modifier = Modifier.fillMaxWidth().height(orbH)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(orbAreaHeight)
                 )
+
                 Text(
                     text = cleanStatusHeadline,
-                    color = if (telemetry.isConnected) p.emerald else if (telemetry.isConnecting) p.accentGold else if (isErrorPhase) p.danger else p.textSecondary,
+                    color = when {
+                        telemetry.isConnected -> p.emerald
+                        telemetry.isConnecting -> p.accentGold
+                        isErrorPhase -> p.danger
+                        else -> p.textSecondary
+                    },
                     fontWeight = FontWeight.Bold,
                     fontSize = 12.5.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.clickable { if (telemetry.isConnecting || telemetry.isConnected) showLiveRouteModal = true }
+                    modifier = Modifier.clickable {
+                        if (telemetry.isConnecting || telemetry.isConnected) {
+                            showLiveRouteModal = true
+                        }
+                    }
                 )
             }
 
-            // Telemetry & Quick User Auto-Connect Pod
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().alanGlassCard(cornerRadius = 22.dp).padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+            // 2. Telemetry & Quick User Auto-Connect Pod
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alanGlassCard(cornerRadius = 22.dp)
+                    .padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.height(34.dp).alanGlassCard(cornerRadius = 11.dp).clickable { if (isPureAutoMode) onActivateAutoMode(true) else onToggleConnection() }.padding(horizontal = 11.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Icon(Icons.Outlined.Refresh, null, tint = if (telemetry.isConnected) p.emerald else p.accentGold, modifier = Modifier.size(14.dp))
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .height(34.dp)
+                                .alanGlassCard(cornerRadius = 11.dp)
+                                .clickable {
+                                    if (isPureAutoMode) onActivateAutoMode(true) else onToggleConnection()
+                                }
+                                .padding(horizontal = 11.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Refresh,
+                                    contentDescription = "اتصال مجدد",
+                                    tint = if (telemetry.isConnected) p.emerald else p.accentGold,
+                                    modifier = Modifier.size(14.dp)
+                                )
                                 Text("اتصال مجدد", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             }
                         }
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.height(34.dp).alanGlassCard(cornerRadius = 11.dp).clickable { onConnectBestUserConfig(settings.applyDpiOnUserAuto) }.padding(horizontal = 10.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .height(34.dp)
+                                .alanGlassCard(cornerRadius = 11.dp)
+                                .clickable {
+                                    onConnectBestUserConfig(settings.applyDpiOnUserAuto)
+                                }
+                                .padding(horizontal = 10.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
                                 Icon(Icons.Outlined.Bolt, null, tint = p.accentGold, modifier = Modifier.size(14.dp))
-                                Text("بهترینِ کانفیگ من", color = p.accentGold, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
+                                Text(
+                                    text = "بهترینِ کانفیگ من",
+                                    color = p.accentGold,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.5.sp
+                                )
                             }
                         }
                     }
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.height(34.dp).alanNeuInset(cornerRadius = 11.dp).padding(horizontal = 12.dp)) {
-                        LtrContent { Text(if (telemetry.isConnected) telemetry.uptimeLabel else "00:00:00", color = if (telemetry.isConnected) p.emerald else p.textPrimary, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.ExtraBold, fontSize = 13.5.sp) }
+
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .height(34.dp)
+                            .alanNeuInset(cornerRadius = 11.dp)
+                            .padding(horizontal = 12.dp)
+                    ) {
+                        LtrContent {
+                            Text(
+                                text = if (telemetry.isConnected) telemetry.uptimeLabel else "00:00:00",
+                                color = if (telemetry.isConnected) p.emerald else p.textPrimary,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 13.sp
+                            )
+                        }
                     }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.weight(1f).alanNeuInset(cornerRadius = 12.dp).padding(horizontal = 11.dp, vertical = 7.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .weight(1f)
+                            .alanNeuInset(cornerRadius = 12.dp)
+                            .padding(horizontal = 11.dp, vertical = 7.dp)
+                    ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             Icon(Icons.Outlined.ArrowDownward, null, tint = p.emerald, modifier = Modifier.size(13.dp))
                             Text("دریافت", color = p.textMuted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
                         }
-                        LtrContent { Text(if (telemetry.isConnected) telemetry.rxRateLabel else "0 B/s", color = p.textPrimary, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp) }
+                        LtrContent {
+                            Text(
+                                text = if (telemetry.isConnected) telemetry.rxRateLabel else "0 B/s",
+                                color = p.textPrimary,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.5.sp
+                            )
+                        }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.weight(1f).alanNeuInset(cornerRadius = 12.dp).padding(horizontal = 11.dp, vertical = 7.dp)) {
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .weight(1f)
+                            .alanNeuInset(cornerRadius = 12.dp)
+                            .padding(horizontal = 11.dp, vertical = 7.dp)
+                    ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             Icon(Icons.Outlined.ArrowUpward, null, tint = p.accentGold, modifier = Modifier.size(13.dp))
                             Text("ارسال", color = p.textMuted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
                         }
-                        LtrContent { Text(if (telemetry.isConnected) telemetry.txRateLabel else "0 B/s", color = p.textPrimary, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp) }
+                        LtrContent {
+                            Text(
+                                text = if (telemetry.isConnected) telemetry.txRateLabel else "0 B/s",
+                                color = p.textPrimary,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.5.sp
+                            )
+                        }
                     }
                 }
             }
 
-            // Borderless Mode Switcher
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth().alanNeuInset(cornerRadius = 16.dp).padding(5.dp)) {
+            // 3. Borderless Mode Switcher
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alanNeuInset(cornerRadius = 16.dp)
+                    .padding(5.dp)
+            ) {
                 val curMode = settings.tunnelMode.uppercase(Locale.US).ifBlank { "VPN" }
-                listOf("VPN" to "وی‌پی‌ان", "PROXY" to "پروکسی", "DOH_VEIL" to "دی‌ان‌اس DoH").forEach { (mKey, mTitle) ->
-                    val sel = curMode == mKey
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.weight(1f).height(36.dp).then(if (sel) Modifier.alanGlassCard(highlighted = true, cornerRadius = 12.dp) else Modifier.clip(RoundedCornerShape(12.dp))).clickable { onSetTunnelMode(mKey) }) {
-                        Text(mTitle, color = if (sel && mKey == "VPN") p.emerald else if (sel) p.accentGold else p.textSecondary, fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold, fontSize = 11.5.sp)
+                listOf(
+                    "VPN" to "وی‌پی‌ان",
+                    "PROXY" to "پروکسی",
+                    "DOH_VEIL" to "دی‌ان‌اس DoH"
+                ).forEach { (modeKey, modeTitle) ->
+                    val selected = curMode == modeKey
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .then(
+                                if (selected) {
+                                    Modifier.alanGlassCard(highlighted = true, cornerRadius = 12.dp)
+                                } else {
+                                    Modifier.clip(RoundedCornerShape(12.dp))
+                                }
+                            )
+                            .clickable { onSetTunnelMode(modeKey) }
+                    ) {
+                        Text(
+                            text = modeTitle,
+                            color = when {
+                                selected && modeKey == "VPN" -> p.emerald
+                                selected -> p.accentGold
+                                else -> p.textSecondary
+                            },
+                            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                            fontSize = 11.5.sp
+                        )
                     }
                 }
             }
 
-            // Bento Deck (Location + Profile/DPI Mode + DoH & Split-Tunnel Bar)
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f).alanGlassCard(cornerRadius = 20.dp).clickable { showAutoLocationSheet = true }.padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+            // 4. Bento Deck (Location Tile + Profile/DPI Mode Tile + DoH & Split-Tunnel Bar)
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .alanGlassCard(cornerRadius = 20.dp)
+                            .clickable { showAutoLocationSheet = true }
+                            .padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                             Text("موقعیت سرور", color = p.textMuted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(28.dp).alanNeuInset(cornerRadius = 8.dp)) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .alanNeuInset(cornerRadius = 8.dp)
+                            ) {
                                 Icon(Icons.Outlined.Public, null, tint = p.emerald, modifier = Modifier.size(15.dp))
                             }
                         }
-                        Text(locationTitleText, color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        LtrContent { Text(locationSubText, color = p.textSecondary, fontFamily = FontFamily.Monospace, fontSize = 9.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        Text(
+                            text = locationTitleText,
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 12.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        LtrContent {
+                            Text(
+                                text = locationSubText,
+                                color = p.textSecondary,
+                                fontSize = 9.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
 
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f).alanGlassCard(cornerRadius = 20.dp).clickable { showManualServerPicker = true }.padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .alanGlassCard(cornerRadius = 20.dp)
+                            .clickable { showManualServerPicker = true }
+                            .padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                             Text("پروفایل و متد", color = p.textMuted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.height(24.dp).alanNeuInset(cornerRadius = 7.dp).clickable { onToggleApplyDpiOnUserAuto(!settings.applyDpiOnUserAuto) }.padding(horizontal = 6.dp)) {
-                                Text(if (settings.applyDpiOnUserAuto) "ضد DPI" else "خالص v2ray", color = if (settings.applyDpiOnUserAuto) p.accentGold else p.textSecondary, fontWeight = FontWeight.ExtraBold, fontSize = 8.5.sp)
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .alanNeuInset(cornerRadius = 7.dp, accented = settings.applyDpiOnUserAuto)
+                                    .clickable { onToggleApplyDpiOnUserAuto(!settings.applyDpiOnUserAuto) }
+                                    .padding(horizontal = 6.dp)
+                            ) {
+                                Text(
+                                    text = if (settings.applyDpiOnUserAuto) "ضد DPI فعال" else "خالص v2ray",
+                                    color = if (settings.applyDpiOnUserAuto) p.accentGold else p.textSecondary,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 8.5.sp
+                                )
                             }
                         }
-                        LtrContent { Text(connectionTitleText, color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                        LtrContent { Text("${activeProfile?.protocol?.uppercase(Locale.US) ?: "VLESS"} • $activeVecLabel", color = p.emerald, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 9.5.sp, maxLines = 1) }
+                        LtrContent {
+                            Text(
+                                text = connectionTitleText,
+                                color = p.textPrimary,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        LtrContent {
+                            Text(
+                                text = "${activeProfile?.protocol?.uppercase(Locale.US) ?: "VLESS"} • $activeVecLabel",
+                                color = p.emerald,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 9.5.sp,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.weight(1.1f).alanGlassCard(cornerRadius = 16.dp).clickable { onOpenDohScanner() }.padding(horizontal = 12.dp, vertical = 9.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .weight(1.1f)
+                            .alanGlassCard(cornerRadius = 16.dp)
+                            .clickable { onOpenDohScanner() }
+                            .padding(horizontal = 12.dp, vertical = 9.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(p.emerald))
-                            LtrContent { Text(activeDohLabel, color = p.textPrimary, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                            LtrContent {
+                                Text(
+                                    text = activeDohLabel,
+                                    color = p.textPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.5.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                         Text("DoH", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 9.5.sp)
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.weight(1f).alanGlassCard(cornerRadius = 16.dp).clickable { onOpenSplitTunnelDialog() }.padding(horizontal = 12.dp, vertical = 9.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .weight(1f)
+                            .alanGlassCard(cornerRadius = 16.dp)
+                            .clickable { onOpenSplitTunnelDialog() }
+                            .padding(horizontal = 12.dp, vertical = 9.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Icon(Icons.Outlined.Apps, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
-                            Text(splitBadge, color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                text = splitTunnelBadge,
+                                color = p.textPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
@@ -291,13 +567,57 @@ fun HomeTabScreen(
     }
 
     if (showAutoLocationSheet) {
-        SmartRepoLocationPickerSheet(availableRepoLocations, preferredAutoCode, repoScanReport, telemetry.isConnected, { showAutoLocationSheet = false }, onRefreshAutoRepoCatalog, { code -> showAutoLocationSheet = false; onSelectAutoRepoCountry(code, telemetry.isConnected) }, { showAutoLocationSheet = false; showManualServerPicker = true })
+        SmartRepoLocationPickerSheet(
+            locations = availableRepoLocations,
+            selectedCode = preferredAutoCode,
+            report = repoScanReport,
+            isConnected = telemetry.isConnected,
+            onDismiss = { showAutoLocationSheet = false },
+            onRefreshCatalog = onRefreshAutoRepoCatalog,
+            onSelectLocation = { code ->
+                showAutoLocationSheet = false
+                onSelectAutoRepoCountry(code, telemetry.isConnected)
+            },
+            onSwitchToManualList = {
+                showAutoLocationSheet = false
+                showManualServerPicker = true
+            }
+        )
     }
+
     if (showManualServerPicker) {
-        ManualServerPickerDialog(profiles, activeIdx, isPureAutoMode, { showManualServerPicker = false }, { showManualServerPicker = false; onImportFromClipboard() }, { showManualServerPicker = false; onActivateAutoMode(false); showAutoLocationSheet = true }, { idx -> showManualServerPicker = false; onSelectProfile(idx) })
+        ManualServerPickerDialog(
+            profiles = profiles,
+            activeIdx = activeIdx,
+            isPureAutoMode = isPureAutoMode,
+            applyDpiOnUserAuto = settings.applyDpiOnUserAuto,
+            onDismiss = { showManualServerPicker = false },
+            onImportFromClipboard = {
+                showManualServerPicker = false
+                onImportFromClipboard()
+            },
+            onSwitchToAutoRepo = {
+                showManualServerPicker = false
+                onActivateAutoMode(false)
+                showAutoLocationSheet = true
+            },
+            onConnectBestUserConfig = { applyDpi ->
+                showManualServerPicker = false
+                onConnectBestUserConfig(applyDpi)
+            },
+            onSelectProfile = { idx ->
+                showManualServerPicker = false
+                onSelectProfile(idx)
+            }
+        )
     }
+
     if (showLiveRouteModal) {
-        LiveRouteTimelineDialog(connectionStages, liveVectorProbes, { showLiveRouteModal = false })
+        LiveRouteTimelineDialog(
+            stages = connectionStages,
+            probes = liveVectorProbes,
+            onDismiss = { showLiveRouteModal = false }
+        )
     }
 }
 
@@ -331,43 +651,17 @@ private fun SmartRepoLocationPickerSheet(
                     .padding(horizontal = 18.dp, vertical = 8.dp)
                     .padding(bottom = 16.dp)
             ) {
-                // Sheet Header
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(9.dp)
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(38.dp)
-                                .alanGlassCard(highlighted = true, cornerRadius = 12.dp)
-                        ) {
-                            Icon(Icons.Outlined.Public, null, tint = p.accentGold, modifier = Modifier.size(20.dp))
-                        }
-                        Column {
-                            Text(
-                                text = "انتخاب لوکیشن ریپازیتوری هوشمند",
-                                color = p.textPrimary,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 14.5.sp
-                            )
-                            Text(
-                                text = if (isConnected) {
-                                    "با انتخاب هر کشور، تونل فوراً به آن لوکیشن سوییچ می‌شود"
-                                } else {
-                                    "انتخاب لوکیشن هدف برای اتصال هوشمند گیت‌هاب"
-                                },
-                                color = p.textMuted,
-                                fontSize = 10.5.sp
-                            )
-                        }
-                    }
-
+                    Text(
+                        text = "انتخاب لوکیشن مخزن هوشمند",
+                        color = p.textPrimary,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 14.5.sp
+                    )
                     AlanNeuIconButton(
                         icon = Icons.Outlined.Close,
                         tint = p.textSecondary,
@@ -376,7 +670,6 @@ private fun SmartRepoLocationPickerSheet(
                     )
                 }
 
-                // Sunken Concave Scan Report Box (repoScanReport + Refresh Button)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -385,76 +678,41 @@ private fun SmartRepoLocationPickerSheet(
                         .alanNeuInset(cornerRadius = 15.dp, accented = true)
                         .padding(horizontal = 13.dp, vertical = 11.dp)
                 ) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .clip(CircleShape)
-                                    .background(p.emerald)
-                            )
-                            Text(
-                                text = "گزارش اسکن مخزن: ${report.totalVerified} سرور سالم از ${report.totalScanned}",
-                                color = p.textPrimary,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 11.5.sp
-                            )
-                        }
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "آخرین بروزرسانی: ${report.updatedAtLabel} • ${report.activeLocationsCount} کشور فعال",
+                            text = "سرورهای تاییدشده: ${report.totalVerified} از ${report.totalScanned}",
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 11.5.sp
+                        )
+                        Text(
+                            text = "بروزرسانی: ${report.updatedAtLabel} • ${report.activeLocationsCount} کشور فعال",
                             color = p.textMuted,
                             fontSize = 10.sp
                         )
                     }
-
-                    Spacer(Modifier.width(8.dp))
-
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
-                            .height(36.dp)
-                            .alanGlassCard(cornerRadius = 11.dp)
+                            .height(34.dp)
+                            .alanGlassCard(cornerRadius = 10.dp)
                             .clickable { onRefreshCatalog() }
                             .padding(horizontal = 11.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Icon(Icons.Outlined.Refresh, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
-                            Text(
-                                text = "بروزرسانی",
-                                color = p.accentGold,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 11.sp
-                            )
-                        }
+                        Text("بروزرسانی", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp)
                     }
                 }
 
-                // Locations List
                 Column(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 330.dp)
+                        .heightIn(max = 310.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
                     locations.forEach { loc ->
                         val isSelected = loc.countryCode.equals(selectedCode, ignoreCase = true) ||
                             (selectedCode.isBlank() && loc.countryCode == "AUTO")
-                        val pingTint = when {
-                            loc.avgPingMs in 1..200 -> p.emerald
-                            loc.avgPingMs > 200 -> p.accentGold
-                            else -> p.textMuted
-                        }
-
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -470,77 +728,26 @@ private fun SmartRepoLocationPickerSheet(
                                 .clickable { onSelectLocation(loc.countryCode) }
                                 .padding(horizontal = 13.dp, vertical = 11.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                if (loc.countryCode == "AUTO") {
-                                    Box(
-                                        contentAlignment = Alignment.Center,
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .alanNeuInset(cornerRadius = 10.dp)
-                                    ) {
-                                        Text("⚡", fontSize = 16.sp)
-                                    }
-                                } else {
-                                    FlagStripeBadge(
-                                        stripeColors = loc.flagStripeColors,
-                                        countryCode = loc.countryCode,
-                                        width = 30.dp,
-                                        height = 20.dp
-                                    )
-                                }
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = if (loc.countryCode == "AUTO") {
-                                            "⚡ ${loc.countryNameFa}"
-                                        } else {
-                                            "${loc.flagEmoji} ${loc.countryNameFa}"
-                                        },
-                                        color = if (isSelected) p.accentGold else p.textPrimary,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 12.5.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "${loc.serverCount} سرور آماده در ریپازیتوری",
-                                        color = p.textMuted,
-                                        fontSize = 10.sp
-                                    )
-                                }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = loc.countryNameFa,
+                                    color = if (isSelected) p.accentGold else p.textPrimary,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 12.5.sp
+                                )
+                                Text(
+                                    text = "${loc.serverCount} سرور آماده",
+                                    color = p.textMuted,
+                                    fontSize = 10.sp
+                                )
                             }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                if (loc.avgPingMs > 0) {
-                                    Box(
-                                        modifier = Modifier
-                                            .alanNeuInset(cornerRadius = 8.dp)
-                                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                                    ) {
-                                        LtrContent {
-                                            Text(
-                                                text = "~${loc.avgPingMs} ms",
-                                                color = pingTint,
-                                                fontFamily = FontFamily.Monospace,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                fontSize = 10.5.sp
-                                            )
-                                        }
-                                    }
-                                }
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Check,
-                                        contentDescription = null,
-                                        tint = p.accentGold,
-                                        modifier = Modifier.size(18.dp)
+                            if (loc.avgPingMs > 0) {
+                                LtrContent {
+                                    Text(
+                                        text = "~${loc.avgPingMs} ms",
+                                        color = p.emerald,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 11.sp
                                     )
                                 }
                             }
@@ -548,7 +755,6 @@ private fun SmartRepoLocationPickerSheet(
                     }
                 }
 
-                // Switch to Manual Personal Profiles Button
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
@@ -558,8 +764,8 @@ private fun SmartRepoLocationPickerSheet(
                         .clickable { onSwitchToManualList() }
                 ) {
                     Text(
-                        text = "سوییچ به لیست کانفیگ‌های شخصی (حالت دستی)",
-                        color = p.textSecondary,
+                        text = "انتخاب از کانفیگ‌های شخصی من",
+                        color = p.textPrimary,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp
                     )
@@ -574,19 +780,22 @@ private fun ManualServerPickerDialog(
     profiles: List<ProfileItem>,
     activeIdx: Int,
     isPureAutoMode: Boolean,
+    applyDpiOnUserAuto: Boolean = true,
     onDismiss: () -> Unit,
     onImportFromClipboard: () -> Unit,
     onSwitchToAutoRepo: () -> Unit,
+    onConnectBestUserConfig: (Boolean) -> Unit = {},
     onSelectProfile: (Int) -> Unit
 ) {
     val p = LocalAlanPalette.current
+    var applyDpiLocal by remember(applyDpiOnUserAuto) { mutableStateOf(applyDpiOnUserAuto) }
+
     Dialog(onDismissRequest = onDismiss) {
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = p.surfaceBg,
-                border = BorderStroke(1.2.dp, p.cardBorder),
-                shadowElevation = 10.dp,
+                shadowElevation = 12.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -599,10 +808,10 @@ private fun ManualServerPickerDialog(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = "انتخاب سریع کانفیگ شخصی",
+                            text = "کانفیگ‌های من و اتصال هوشمند",
                             color = p.accentGold,
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 15.sp
+                            fontSize = 14.sp
                         )
                         AlanNeuIconButton(
                             icon = Icons.Outlined.Close,
@@ -610,6 +819,61 @@ private fun ManualServerPickerDialog(
                             size = 32.dp,
                             onClick = onDismiss
                         )
+                    }
+
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .alanNeuInset(cornerRadius = 15.dp, accented = true)
+                            .padding(11.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { applyDpiLocal = !applyDpiLocal }
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "اعمال متدهای ضد DPI و IP تمیز",
+                                    color = p.textPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.5.sp
+                                )
+                                Text(
+                                    text = if (applyDpiLocal) "فعال: تست خودکار متدهای ضد فیلتر" else "غیرفعال: اتصال خالص استاندارد v2rayNG",
+                                    color = p.textMuted,
+                                    fontSize = 9.5.sp
+                                )
+                            }
+                            AlanPillSwitch(checked = applyDpiLocal, onCheckedChange = { applyDpiLocal = it })
+                        }
+
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(p.emerald)
+                                .clickable { onConnectBestUserConfig(applyDpiLocal) }
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(Icons.Outlined.Bolt, null, tint = Color(0xFF07130E), modifier = Modifier.size(16.dp))
+                                Text(
+                                    text = if (applyDpiLocal) {
+                                        "اتصال خودکار به بهترین کانفیگ من (با متد DPI)"
+                                    } else {
+                                        "اتصال خودکار به بهترین کانفیگ من (خالص v2ray)"
+                                    },
+                                    color = Color(0xFF07130E),
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
                     }
 
                     Row(
@@ -620,12 +884,12 @@ private fun ManualServerPickerDialog(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
                                 .weight(1f)
-                                .height(40.dp)
+                                .height(38.dp)
                                 .alanGlassCard(cornerRadius = 11.dp)
                                 .clickable { onImportFromClipboard() }
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Outlined.ContentPaste, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
+                                Icon(Icons.Outlined.ContentPaste, null, tint = p.accentGold, modifier = Modifier.size(14.dp))
                                 Spacer(Modifier.width(5.dp))
                                 Text("افزودن کلیپ‌بورد", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             }
@@ -634,16 +898,15 @@ private fun ManualServerPickerDialog(
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .weight(1.15f)
-                                .height(40.dp)
-                                .clip(RoundedCornerShape(11.dp))
-                                .background(p.accentGold)
+                                .weight(1.1f)
+                                .height(38.dp)
+                                .alanGlassCard(cornerRadius = 11.dp)
                                 .clickable { onSwitchToAutoRepo() }
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Outlined.Bolt, null, tint = p.onAccent, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("لوکیشن‌های خودکار", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp)
+                                Icon(Icons.Outlined.Public, null, tint = p.emerald, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(5.dp))
+                                Text("مخزن ابری گیت‌هاب", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             }
                         }
                     }
@@ -654,7 +917,7 @@ private fun ManualServerPickerDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .alanNeuInset(cornerRadius = 13.dp)
-                                .padding(20.dp)
+                                .padding(18.dp)
                         ) {
                             Text(
                                 text = "کانفیگ شخصی ثبت نشده است؛ از کلیپ‌بورد یا تب کانفیگ‌ها اضافه کنید.",
@@ -668,7 +931,7 @@ private fun ManualServerPickerDialog(
                             verticalArrangement = Arrangement.spacedBy(7.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 280.dp)
+                                .heightIn(max = 240.dp)
                                 .verticalScroll(rememberScrollState())
                         ) {
                             profiles.forEachIndexed { idx, item ->
@@ -688,26 +951,22 @@ private fun ManualServerPickerDialog(
                                         .clickable { onSelectProfile(idx) }
                                         .padding(horizontal = 12.dp, vertical = 10.dp)
                                 ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        FlagStripeBadge(item.flagStripeColors, item.countryCode, 22.dp, 14.dp)
+                                    LtrContent {
                                         Text(
                                             text = item.name,
                                             color = if (sel) p.accentGold else p.textPrimary,
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 12.sp,
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
                                         )
                                     }
+                                    Spacer(Modifier.width(8.dp))
                                     LtrContent {
                                         Text(
                                             text = if (item.pingMs > 0) "${item.pingMs} ms" else item.protocol,
                                             color = if (item.pingMs in 1..280) p.emerald else p.textMuted,
-                                            fontFamily = FontFamily.Monospace,
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 10.5.sp
                                         )
@@ -717,147 +976,6 @@ private fun ManualServerPickerDialog(
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun LiveStepperHeaderCard(
-    telemetry: TelemetrySnapshot,
-    stages: List<ConnectionStageStep>,
-    autoPilot: Boolean,
-    onOpenModal: () -> Unit
-) {
-    val p = LocalAlanPalette.current
-    val animPct by animateFloatAsState(
-        targetValue = (telemetry.progressPercent.coerceIn(0, 100)) / 100f,
-        animationSpec = tween(240),
-        label = "liveStepPct"
-    )
-
-    val shortLabels = listOf("اپراتور", "پینگ", "هسته", "کش", "متدها", "تست", "اتصال")
-    val headerStatus = when {
-        telemetry.isConnected -> "مسیر امن فعال"
-        telemetry.isConnecting -> "در حال راه‌اندازی تونل"
-        else -> "توقف در مسیر"
-    }
-    val dotTint = when {
-        telemetry.isConnected -> p.emerald
-        telemetry.isConnecting -> p.accentGold
-        else -> p.danger
-    }
-
-    Column(
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .alanGlassCard(highlighted = telemetry.isConnecting, cornerRadius = 18.dp)
-            .clickable(onClick = onOpenModal)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(dotTint)
-                )
-                Text(
-                    text = headerStatus,
-                    color = p.textPrimary,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 11.sp
-                )
-                Box(
-                    modifier = Modifier
-                        .alanNeuInset(cornerRadius = 7.dp)
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    LtrContent {
-                        Text(
-                            text = if (telemetry.isConnected) telemetry.activeVectorId else if (autoPilot) "Auto" else telemetry.activeVectorId,
-                            color = p.accentGold,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 9.sp
-                        )
-                    }
-                }
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Icon(Icons.Outlined.Route, null, tint = p.accentGold, modifier = Modifier.size(14.dp))
-                Text(
-                    text = "جزئیات مسیر",
-                    color = p.accentGold,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp
-                )
-            }
-        }
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            shortLabels.forEachIndexed { i, title ->
-                val st = stages.getOrNull(i)?.state ?: "PENDING"
-                val nodeColor = when (st) {
-                    "DONE" -> p.emerald
-                    "ACTIVE" -> p.accentGold
-                    "FAILED" -> p.danger
-                    else -> p.textMuted
-                }
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(if (st == "ACTIVE") 8.5.dp else 6.5.dp)
-                            .clip(CircleShape)
-                            .background(nodeColor)
-                    )
-                    Text(
-                        text = title,
-                        color = if (st == "DONE" || st == "ACTIVE") p.textPrimary else p.textMuted,
-                        fontSize = 8.5.sp,
-                        fontWeight = if (st == "ACTIVE") FontWeight.ExtraBold else FontWeight.Medium,
-                        maxLines = 1
-                    )
-                }
-            }
-        }
-
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(3.dp)
-                .clip(RoundedCornerShape(2.dp))
-        ) {
-            // پس‌زمینه نوار پیشرفت (فرورفته نئومورفیک را با کشیدن شبیه‌سازی می‌کنیم یا ساده رندر می‌کنیم)
-            drawRect(color = p.subtleBg, size = size)
-            when {
-                telemetry.isConnected -> drawRect(color = p.emerald, size = size)
-                telemetry.isConnecting -> drawRect(
-                    color = p.accentGold,
-                    size = Size(size.width * animPct.coerceAtLeast(0.08f), size.height)
-                )
-                else -> drawRect(color = p.danger.copy(alpha = 0.7f), size = size)
             }
         }
     }
@@ -875,61 +993,30 @@ private fun LiveRouteTimelineDialog(
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = p.surfaceBg,
-                border = BorderStroke(1.2.dp, p.cardBorder),
-                shadowElevation = 10.dp,
+                shadowElevation = 12.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    modifier = Modifier
-                        .alanGlassCard(cornerRadius = 24.dp, highlighted = true)
-                        .padding(20.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(16.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(9.dp)
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .alanNeuInset(cornerRadius = 11.dp)
-                            ) {
-                                Icon(Icons.Outlined.Route, null, tint = p.accentGold, modifier = Modifier.size(18.dp))
-                            }
-                            Column {
-                                Text(
-                                    text = "مسیر زنده اتصال",
-                                    color = p.textPrimary,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 14.sp
-                                )
-                                Text(
-                                    text = "فرایند اتصال، مرحله‌به‌مرحله",
-                                    color = p.textMuted,
-                                    fontSize = 10.5.sp
-                                )
-                            }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Outlined.Route, null, tint = p.accentGold, modifier = Modifier.size(18.dp))
+                            Text("مسیر زنده اتصال", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
                         }
-
-                        AlanNeuIconButton(
-                            icon = Icons.Outlined.Close,
-                            tint = p.textSecondary,
-                            size = 32.dp,
-                            onClick = onDismiss
-                        )
+                        AlanNeuIconButton(Icons.Outlined.Close, p.textSecondary, 32.dp, onClick = onDismiss)
                     }
 
                     Column(
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 340.dp)
+                            .heightIn(max = 320.dp)
                             .verticalScroll(rememberScrollState())
                     ) {
                         stages.forEach { step ->
@@ -937,7 +1024,6 @@ private fun LiveRouteTimelineDialog(
                                 "DONE" -> "انجام شد" to p.emerald
                                 "ACTIVE" -> "در حال اجرا" to p.accentGold
                                 "FAILED" -> "ناموفق" to p.danger
-                                "SKIPPED" -> "عبور" to p.textMuted
                                 else -> "در انتظار" to p.textMuted
                             }
                             Row(
@@ -945,143 +1031,22 @@ private fun LiveRouteTimelineDialog(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .then(
-                                        if (step.state == "ACTIVE") {
-                                            Modifier.alanNeuInset(cornerRadius = 12.dp, accented = true)
-                                        } else {
-                                            Modifier.alanGlassCard(cornerRadius = 12.dp)
-                                        }
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                                    .alanGlassCard(cornerRadius = 12.dp)
+                                    .padding(horizontal = 12.dp, vertical = 9.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(dotCol)
-                                    )
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = step.title,
-                                            color = p.textPrimary,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 11.5.sp,
-                                            maxLines = 1
-                                        )
-                                        if (step.subtitle.isNotBlank()) {
-                                            Text(
-                                                text = step.subtitle,
-                                                color = p.textMuted,
-                                                fontSize = 10.sp,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(step.title, color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                                    if (step.subtitle.isNotBlank()) {
+                                        Text(step.subtitle, color = p.textMuted, fontSize = 10.sp, maxLines = 1)
                                     }
                                 }
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(statusFa, color = dotCol, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                                    if (step.badgeText.isNotBlank()) {
-                                        LtrContent {
-                                            Text(
-                                                text = step.badgeText,
-                                                color = p.textSecondary,
-                                                fontFamily = FontFamily.Monospace,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 9.5.sp
-                                            )
-                                        }
-                                    }
-                                }
+                                Text(statusFa, color = dotCol, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
                             }
-                        }
-
-                        val hitProbes = probes.filter { it.state == "PASSED" || it.state == "QUALIFIED" }
-                        if (hitProbes.isNotEmpty()) {
-                            Text(
-                                text = "متدهای موفق: " + hitProbes.joinToString(" ، ") { "${it.vectorId} (${it.latencyMs}ms)" },
-                                color = p.emerald,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Bold
-                            )
                         }
                     }
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun SpeedMetricCard(
-    title: String,
-    rateLabel: String,
-    icon: ImageVector,
-    accent: Color,
-    samples: List<Float>,
-    isConnected: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val p = LocalAlanPalette.current
-    Column(
-        verticalArrangement = Arrangement.spacedBy(5.dp),
-        modifier = modifier
-            .alanGlassCard(
-                highlighted = isConnected,
-                cornerRadius = 16.dp,
-                accentBorderColor = accent.copy(alpha = 0.55f)
-            )
-            .padding(horizontal = 11.dp, vertical = 9.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = title,
-                    color = p.textSecondary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp,
-                    maxLines = 1
-                )
-                LtrContent {
-                    Text(
-                        text = rateLabel,
-                        color = p.textPrimary,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 13.5.sp,
-                        maxLines = 1
-                    )
-                }
-            }
-
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(32.dp)
-                    .alanNeuInset(cornerRadius = 16.dp)
-            ) {
-                Icon(icon, title, tint = accent, modifier = Modifier.size(16.dp))
-            }
-        }
-
-        LiveSparklineCanvas(
-            samples = samples,
-            isConnected = isConnected,
-            lineColor = accent,
-            modifier = Modifier.height(19.dp)
-        )
     }
 }
 
@@ -1100,7 +1065,7 @@ fun ScannerTabScreen(
 ) {
     val p = LocalAlanPalette.current
     var scopeMode by rememberSaveable { mutableStateOf("single") }
-    var autoConnectFirst by rememberSaveable { mutableStateOf(false) }
+    var autoConnectFirst by rememberSaveable { mutableStateOf(true) }
     var useCleanIpInScan by rememberSaveable { mutableStateOf(true) }
     var showMultiPicker by remember { mutableStateOf(false) }
     val selectedMultiIndices = remember { mutableStateListOf<Int>() }
@@ -1135,14 +1100,13 @@ fun ScannerTabScreen(
     )
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        // Segmented Inset Control: یک کانفیگ / چند کانفیگ / کل مخزن
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .alanNeuInset(cornerRadius = 15.dp)
@@ -1161,11 +1125,7 @@ fun ScannerTabScreen(
                         .height(36.dp)
                         .then(
                             if (sel) {
-                                Modifier.alanGlassCard(
-                                    highlighted = true,
-                                    cornerRadius = 11.dp,
-                                    accentBorderColor = p.accentGold
-                                )
+                                Modifier.alanGlassCard(highlighted = true, cornerRadius = 11.dp)
                             } else {
                                 Modifier.clip(RoundedCornerShape(11.dp))
                             }
@@ -1176,14 +1136,12 @@ fun ScannerTabScreen(
                         text = label,
                         color = if (sel) p.accentGold else p.textSecondary,
                         fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold,
-                        fontSize = 11.5.sp,
-                        maxLines = 1
+                        fontSize = 11.5.sp
                     )
                 }
             }
         }
 
-        // Scanner Config Panel
         Column(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier
@@ -1199,12 +1157,7 @@ fun ScannerTabScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = "کانفیگی در لیست نیست؛ از کلیپ‌بورد وارد کنید:",
-                                color = p.textSecondary,
-                                fontSize = 11.5.sp,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Text("کانفیگی در لیست نیست؛ از کلیپ‌بورد وارد کنید:", color = p.textSecondary, fontSize = 11.5.sp, modifier = Modifier.weight(1f))
                             Box(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
@@ -1213,12 +1166,7 @@ fun ScannerTabScreen(
                                     .clickable { onImportFromClipboard() }
                                     .padding(horizontal = 12.dp)
                             ) {
-                                Text(
-                                    text = "افزودن کلیپ‌بورد",
-                                    color = p.accentGold,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp
-                                )
+                                Text("افزودن کلیپ‌بورد", color = p.accentGold, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             }
                         }
                     } else {
@@ -1230,7 +1178,6 @@ fun ScannerTabScreen(
                         )
                     }
                 }
-
                 "selected" -> {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1242,31 +1189,17 @@ fun ScannerTabScreen(
                             .padding(horizontal = 13.dp, vertical = 12.dp)
                     ) {
                         Text(
-                            text = if (selectedMultiIndices.isEmpty()) {
-                                "انتخاب چند کانفیگ از لیست (${profiles.size} موجود)..."
-                            } else {
-                                "${selectedMultiIndices.size} کانفیگ برای تست انتخاب شد"
-                            },
+                            text = if (selectedMultiIndices.isEmpty()) "انتخاب چند کانفیگ از لیست (${profiles.size} موجود)..." else "${selectedMultiIndices.size} کانفیگ برای تست انتخاب شد",
                             color = p.textPrimary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
                         )
-                        Text(
-                            text = "انتخاب",
-                            color = p.accentGold,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 11.5.sp
-                        )
+                        Text("انتخاب", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp)
                     }
                 }
-
                 else -> {
                     Text(
-                        text = if (profiles.isNotEmpty()) {
-                            "اسکن هوشمند متدها روی تمام ${profiles.size} کانفیگ موجود در مخزن"
-                        } else {
-                            "اسکن مستقیم متدها روی سرورهای ریپازیتوری گیت‌هاب"
-                        },
+                        text = "اسکن هوشمند متدها روی تمام ${profiles.size} کانفیگ موجود در مخزن",
                         color = p.textSecondary,
                         fontSize = 11.5.sp
                     )
@@ -1282,14 +1215,7 @@ fun ScannerTabScreen(
                     .clickable { autoConnectFirst = !autoConnectFirst }
                     .padding(horizontal = 12.dp, vertical = 9.dp)
             ) {
-                Text(
-                    text = "اتصال خودکار به سریع‌ترین متد تاییدشده",
-                    color = p.textPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 11.5.sp,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
+                Text("اتصال خودکار به سریع‌ترین متد تاییدشده", color = p.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 11.5.sp, modifier = Modifier.weight(1f))
                 AlanPillSwitch(checked = autoConnectFirst, onCheckedChange = { autoConnectFirst = it })
             }
 
@@ -1302,60 +1228,19 @@ fun ScannerTabScreen(
                     .clickable { useCleanIpInScan = !useCleanIpInScan }
                     .padding(horizontal = 12.dp, vertical = 9.dp)
             ) {
-                Text(
-                    text = "تست همراه با IP تمیز کلادفلر (خاموش = تست خالص سرور)",
-                    color = p.textPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 11.5.sp,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
+                Text("تزریق خودکار IP تمیز کلادفلر حین تست", color = p.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 11.5.sp, modifier = Modifier.weight(1f))
                 AlanPillSwitch(checked = useCleanIpInScan, onCheckedChange = { useCleanIpInScan = it })
             }
 
-            // Concave Progress Bar
             if (scanState.isRunning) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .alanNeuInset(cornerRadius = 3.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(animScanPct)
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(p.accentGold)
-                    )
+                Box(modifier = Modifier.fillMaxWidth().height(6.dp).alanNeuInset(cornerRadius = 3.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth(animScanPct).height(6.dp).clip(RoundedCornerShape(3.dp)).background(p.accentGold))
                 }
             }
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { autoConnectFirst = !autoConnectFirst }
-            ) {
-                AlanPillSwitch(checked = autoConnectFirst, onCheckedChange = { autoConnectFirst = it })
-                Spacer(Modifier.width(10.dp))
-                Text("اتصال خودکار به سریع‌ترین متد", color = p.textSecondary, fontSize = 12.sp)
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { useCleanIpInScan = !useCleanIpInScan }
-            ) {
-                AlanPillSwitch(checked = useCleanIpInScan, onCheckedChange = { useCleanIpInScan = it })
-                Spacer(Modifier.width(10.dp))
-                Text("تست همراه با IP تمیز", color = p.textSecondary, fontSize = 12.sp)
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Box(
@@ -1389,7 +1274,7 @@ fun ScannerTabScreen(
                 Text(
                     text = scanState.summary,
                     color = p.textSecondary,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -1397,7 +1282,6 @@ fun ScannerTabScreen(
             }
         }
 
-        // Scan Results List
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(9.dp),
             contentPadding = PaddingValues(bottom = 18.dp),
@@ -1434,17 +1318,13 @@ fun ScannerTabScreen(
                             Text(
                                 text = "${row.tunnelMs} ms",
                                 color = p.emerald,
-                                fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 13.sp
                             )
                         }
                     }
 
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
@@ -1453,12 +1333,7 @@ fun ScannerTabScreen(
                                 .alanNeuInset(cornerRadius = 11.dp)
                                 .clickable { onApplyVectorSingle(row.itemId, row.targetIndex, row.endpoint) }
                         ) {
-                            Text(
-                                text = "ثبت متد",
-                                color = p.textPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.5.sp
-                            )
+                            Text("ثبت متد", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
                         }
                         Box(
                             contentAlignment = Alignment.Center,
@@ -1469,12 +1344,7 @@ fun ScannerTabScreen(
                                 .background(p.accentGold)
                                 .clickable { onApplyVectorAndConnect(row.itemId, row.targetIndex, row.endpoint) }
                         ) {
-                            Text(
-                                text = "ثبت و اتصال فوری",
-                                color = p.onAccent,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 11.5.sp
-                            )
+                            Text("ثبت و اتصال فوری", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp)
                         }
                     }
                 }

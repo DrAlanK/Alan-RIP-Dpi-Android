@@ -1,177 +1,281 @@
 package com.alan.ripdpi.core
 
-import com.alan.ripdpi.model.BypassVector
-import java.io.InputStream
-import java.io.OutputStream
+import com.alan.ripdpi.model.CountryPaletteRegistry
+import com.alan.ripdpi.ui.EditableConfigFields
+import com.alan.ripdpi.ui.EngineSettings
+import com.alan.ripdpi.ui.ProfileItem
+import org.json.JSONArray
+import org.json.JSONObject
 import java.net.InetSocketAddress
-import java.net.ServerSocket
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
+import java.net.URI
+import java.net.URLDecoder
+import java.net.URLEncoder
 import java.util.Base64
 import java.util.Locale
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
-import javax.net.ssl.SNIHostName
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLSocket
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
-
-data class EnterpriseProfileSpec(
-    val protocol: String, // "anyconnect", "ikev2", "l2tp"
-    val server: String,
-    val port: Int,
-    val username: String,
-    val secretOrPassword: String,
-    val groupOrDomain: String = "",
-    val sni: String = "",
-    val remark: String = ""
-)
 
 object EnterpriseProtocolEngine {
 
+    private val ENTERPRISE_SCHEMES = setOf(
+        "anyconnect",
+        "openconnect",
+        "oc",
+        "cisco",
+        "ikev2",
+        "ipsec",
+        "l2tp"
+    )
+
     fun isEnterpriseProtocol(proto: String): Boolean {
-        return proto.trim().lowercase(Locale.US) in setOf("anyconnect", "openconnect", "ikev2", "l2tp")
+        val clean = proto.trim().lowercase(Locale.US)
+        return clean in ENTERPRISE_SCHEMES
     }
 
-    fun defaultPortFor(proto: String): Int = when (proto.trim().lowercase(Locale.US)) {
-        "anyconnect", "openconnect" -> 443
+    fun isEnterpriseUri(rawUri: String): Boolean {
+        val clean = rawUri.trim().lowercase(Locale.US)
+        val scheme = clean.substringBefore("://", "")
+        return scheme in ENTERPRISE_SCHEMES
+    }
+
+    fun normalizeProtocolName(rawScheme: String): String {
+        return when (rawScheme.trim().lowercase(Locale.US)) {
+            "anyconnect", "openconnect", "oc", "cisco" -> "anyconnect"
+            "ikev2", "ipsec" -> "ikev2"
+            "l2tp" -> "l2tp"
+            else -> rawScheme.trim().lowercase(Locale.US)
+        }
+    }
+
+    fun defaultPortFor(proto: String): Int = when (normalizeProtocolName(proto)) {
+        "anyconnect" -> 443
         "ikev2" -> 500
         "l2tp" -> 1701
         else -> 443
     }
 
-    /**
-     * Probes enterprise VPN endpoints (AnyConnect TLS/CSTP, IKEv2 NAT-T/TLS, L2TP gateway)
-     */
-    fun probeEnterpriseEndpointBlocking(host: String, port: Int, proto: String, timeoutMs: Int = 1800): Int {
-        val cleanProto = proto.trim().lowercase(Locale.US)
-        val checkPort = when {
-            port in 1..65535 -> port
-            cleanProto == "ikev2" -> 500
-            cleanProto == "l2tp" -> 1701
-            else -> 443
-        }
-        // Try primary port or fallback TLS/443 & NAT-T/4500 ports
-        val portsToTry = when (cleanProto) {
-            "ikev2" -> listOf(checkPort, 4500, 443).distinct()
-            "l2tp" -> listOf(checkPort, 4500, 500, 443).distinct()
-            else -> listOf(checkPort, 443, 8443).distinct()
-        }
-        for (p in portsToTry) {
-            val sock = CleanIpScannerEngine.createProtectedRawSocket()
-            try {
-                sock.tcpNoDelay = true
-                val t0 = System.nanoTime()
-                sock.connect(InetSocketAddress(host.trim(), p), timeoutMs)
-                return ((System.nanoTime() - t0) / 1_000_000L).toInt().coerceAtLeast(1)
-            } catch (_: Throwable) {
-            } finally {
-                try { sock.close() } catch (_: Throwable) {}
+    private fun tryDecodeBase64Segment(seg: String): String? {
+        val clean = seg.trim()
+        if (clean.isEmpty() || clean.contains("@") || clean.contains(":")) return null
+        return try {
+            val padded = clean.replace('-', '+').replace('_', '/').let { s ->
+                val rem = s.length % 4
+                if (rem == 0) s else s + "=".repeat(4 - rem)
             }
+            val decoded = String(Base64.getDecoder().decode(padded), Charsets.UTF_8).trim()
+            if (decoded.isNotEmpty() && (decoded.contains(":") || decoded.contains("@") || decoded.startsWith("{"))) {
+                decoded
+            } else {
+                null
+            }
+        } catch (_: Throwable) {
+            null
         }
-        return -1
     }
-}
 
-/**
- * Local HTTP/SOCKS-to-Cisco AnyConnect (OpenConnect SSL/TLS CSTP + HTTP CONNECT) Gateway Bridge.
- * Connects through FullDuplexMutatorBridge so all 24 Anti-DPI vectors apply to AnyConnect TLS handshakes!
- */
-class AnyConnectTlsGatewayBridge(
-    private val listenPort: Int,
-    private val mutatorBridgeHost: String,
-    private val mutatorBridgePort: Int,
-    private val sniHost: String,
-    private val username: String,
-    private val password: String,
-    private val authGroup: String = ""
-) {
-    private val running = AtomicBoolean(false)
-    private var serverSocket: ServerSocket? = null
-    private val pool = Executors.newCachedThreadPool()
+    fun parseEnterpriseFullConfig(rawUri: String): EditableConfigFields? {
+        val trimmed = rawUri.trim()
+        if (!isEnterpriseUri(trimmed)) return null
 
-    private val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
-        override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-        override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-    })
+        return try {
+            val rawScheme = trimmed.substringBefore("://").lowercase(Locale.US)
+            val normProto = normalizeProtocolName(rawScheme)
+            val afterScheme = trimmed.substringAfter("://")
+            val fragmentPart = afterScheme.substringAfter("#", "").let {
+                try { URLDecoder.decode(it, "UTF-8") } catch (_: Throwable) { it }
+            }.trim()
+            val beforeFragment = afterScheme.substringBefore("#")
 
-    fun start() {
-        if (!running.compareAndSet(false, true)) return
-        pool.execute {
-            try {
-                val srv = ServerSocket()
-                srv.reuseAddress = true
-                srv.bind(InetSocketAddress("127.0.0.1", listenPort), 128)
-                serverSocket = srv
-                BridgeDeepDiagnostics.log("[ANYCONNECT-GW] Listening on 127.0.0.1:$listenPort -> Mutator $mutatorBridgeHost:$mutatorBridgePort (SNI=$sniHost)")
-                while (running.get()) {
-                    val client = srv.accept()
-                    pool.execute { handleClient(client) }
+            // Check if the body is Base64-encoded JSON or Base64-encoded user:pass@host:port
+            val maybeDecoded = tryDecodeBase64Segment(beforeFragment.substringBefore("?"))
+            if (maybeDecoded != null && maybeDecoded.startsWith("{")) {
+                val j = JSONObject(maybeDecoded)
+                val host = j.optString("server", j.optString("add", j.optString("host", ""))).trim()
+                if (host.isEmpty()) return null
+                val port = j.optInt("port", defaultPortFor(normProto)).coerceIn(1, 65535)
+                val user = j.optString("username", j.optString("user", j.optString("id", ""))).trim()
+                val pass = j.optString("password", j.optString("pass", j.optString("psk", ""))).trim()
+                val creds = if (user.isNotEmpty() && pass.isNotEmpty()) "$user:$pass" else user.ifBlank { pass }
+                val sni = j.optString("sni", j.optString("peer", host)).trim()
+                val grp = j.optString("group", j.optString("psk", j.optString("secret", ""))).trim()
+                val remark = fragmentPart.ifBlank {
+                    j.optString("ps", j.optString("name", "${normProto.uppercase(Locale.US)} • $host"))
                 }
-            } catch (_: Throwable) {
+                return EditableConfigFields(
+                    name = remark,
+                    protocol = normProto,
+                    address = host,
+                    port = port,
+                    uuidOrPassword = creds,
+                    network = "tcp",
+                    security = if (normProto == "anyconnect") "tls" else "none",
+                    sni = sni,
+                    hostHeader = grp,
+                    path = "/",
+                    rawUri = trimmed,
+                    useRawUri = false
+                )
             }
-        }
-    }
 
-    private fun openTlsOverMutatorSocket(): SSLSocket {
-        val raw = CleanIpScannerEngine.createProtectedRawSocket()
-        raw.tcpNoDelay = true
-        raw.keepAlive = true
-        raw.connect(InetSocketAddress(mutatorBridgeHost, mutatorBridgePort), 5000)
-
-        val ctx = SSLContext.getInstance("TLS")
-        ctx.init(null, trustAll, SecureRandom())
-        val ssl = ctx.socketFactory.createSocket(raw, sniHost.ifBlank { mutatorBridgeHost }, mutatorBridgePort, true) as SSLSocket
-        try {
-            val params = ssl.sslParameters
-            if (sniHost.isNotBlank() && sniHost.any { it.isLetter() }) {
-                params.serverNames = listOf(SNIHostName(sniHost))
+            val normalizedUriStr = if (maybeDecoded != null) {
+                "$normProto://$maybeDecoded" + (if (beforeFragment.contains("?")) "?" + beforeFragment.substringAfter("?") else "") + (if (fragmentPart.isNotEmpty()) "#$fragmentPart" else "")
+            } else {
+                "$normProto://$beforeFragment" + (if (fragmentPart.isNotEmpty()) "#$fragmentPart" else "")
             }
-            ssl.sslParameters = params
+
+            val u = URI(normalizedUriStr)
+            val host = u.host?.trim().orEmpty().ifBlank {
+                beforeFragment.substringBefore("?").substringBefore("/").substringAfterLast("@").substringBefore(":")
+            }.trim()
+            if (host.isEmpty()) return null
+
+            val port = if (u.port in 1..65535) {
+                u.port
+            } else {
+                beforeFragment.substringBefore("?").substringBefore("/").substringAfterLast(":").toIntOrNull()
+                    ?.takeIf { it in 1..65535 }
+                    ?: defaultPortFor(normProto)
+            }
+
+            val queryMap = LinkedHashMap<String, String>()
+            u.rawQuery.orEmpty().split("&").forEach { pair ->
+                if (pair.isNotBlank()) {
+                    val k = pair.substringBefore("=").trim().lowercase(Locale.US)
+                    val v = try { URLDecoder.decode(pair.substringAfter("=", ""), "UTF-8") } catch (_: Throwable) { pair.substringAfter("=", "") }
+                    if (k.isNotEmpty()) queryMap[k] = v
+                }
+            }
+
+            val userInfoDecoded = u.rawUserInfo?.let {
+                try { URLDecoder.decode(it, "UTF-8") } catch (_: Throwable) { it }
+            }.orEmpty()
+
+            val qUser = queryMap["username"] ?: queryMap["user"] ?: ""
+            val qPass = queryMap["password"] ?: queryMap["pass"] ?: queryMap["psk"] ?: queryMap["secret"] ?: ""
+            val credentials = when {
+                userInfoDecoded.isNotBlank() -> userInfoDecoded
+                qUser.isNotBlank() && qPass.isNotBlank() -> "$qUser:$qPass"
+                qUser.isNotBlank() -> qUser
+                qPass.isNotBlank() -> qPass
+                else -> ""
+            }
+
+            val sni = (queryMap["sni"] ?: queryMap["peer"] ?: queryMap["domain"] ?: host).trim()
+            val groupOrPsk = (queryMap["group"] ?: queryMap["authgroup"] ?: queryMap["psk"] ?: queryMap["secret"] ?: "").trim()
+            val remark = fragmentPart.ifBlank { "${normProto.uppercase(Locale.US)} • $host" }
+
+            EditableConfigFields(
+                name = remark,
+                protocol = normProto,
+                address = host,
+                port = port,
+                uuidOrPassword = credentials,
+                network = "tcp",
+                security = if (normProto == "anyconnect") "tls" else "none",
+                sni = sni,
+                hostHeader = groupOrPsk,
+                path = if (groupOrPsk.isNotBlank()) "/$groupOrPsk" else "/",
+                preferredVectorId = (queryMap["vec"] ?: "AUTO").uppercase(Locale.US),
+                rawUri = trimmed,
+                useRawUri = false
+            )
         } catch (_: Throwable) {
-        }
-        ssl.soTimeout = 6000
-        ssl.startHandshake()
-        ssl.soTimeout = 0
-        return ssl
-    }
-
-    private fun handleClient(client: java.net.Socket) {
-        var remoteSsl: SSLSocket? = null
-        try {
-            client.tcpNoDelay = true
-            client.soTimeout = 0
-            remoteSsl = openTlsOverMutatorSocket()
-            val cIn = client.getInputStream()
-            val cOut = client.getOutputStream()
-            val rIn = remoteSsl.getInputStream()
-            val rOut = remoteSsl.getOutputStream()
-
-            val t1 = pool.submit { pump(cIn, rOut) }
-            val t2 = pool.submit { pump(rIn, cOut) }
-            t1.get()
-            t2.get()
-        } catch (_: Throwable) {
-        } finally {
-            try { remoteSsl?.close() } catch (_: Throwable) {}
-            try { client.close() } catch (_: Throwable) {}
+            null
         }
     }
 
-    private fun pump(input: InputStream, output: OutputStream) {
-        val buf = ByteArray(16384)
-        while (running.get()) {
-            val n = input.read(buf)
-            if (n <= 0) break
-            output.write(buf, 0, n)
-            output.flush()
-        }
+    fun parseEnterpriseUriToProfileItem(rawUri: String, groupName: String = "دستی"): ProfileItem? {
+        val f = parseEnterpriseFullConfig(rawUri) ?: return null
+        val spec = CountryPaletteRegistry.detectCountry(f.name, f.address, f.sni, "")
+        return ProfileItem(
+            uid = "ent-${rawUri.trim().hashCode()}",
+            name = f.name.ifBlank { "${f.protocol.uppercase(Locale.US)} • ${f.address}" },
+            protocol = f.protocol.uppercase(Locale.US),
+            host = f.address,
+            originalHost = f.address,
+            port = f.port,
+            sni = f.sni.ifBlank { f.address },
+            status = "UNTESTED",
+            pingMs = 0,
+            preferredVectorId = f.preferredVectorId.ifBlank { "AUTO" },
+            uri = buildEnterpriseUriFromFullSpec(f),
+            countryCode = spec.code,
+            countryName = spec.nameFa,
+            flagEmoji = spec.flagEmoji,
+            flagStripeColors = spec.stripeColors,
+            accentPrimaryColor = spec.accentPrimary,
+            accentSecondaryColor = spec.accentSecondary,
+            groupName = groupName.ifBlank { "دستی" }
+        )
     }
 
-    fun stop() {
-        running.set(false)
-        try { serverSocket?.close() } catch (_: Throwable) {}
+    fun buildEnterpriseUriFromFullSpec(f: EditableConfigFields): String {
+        val proto = normalizeProtocolName(f.protocol)
+        val host = f.address.trim()
+        val port = if (f.port in 1..65535) f.port else defaultPortFor(proto)
+        val creds = f.uuidOrPassword.trim()
+        val authPrefix = if (creds.isNotEmpty()) {
+            val u = URLEncoder.encode(creds.substringBefore(":"), "UTF-8")
+            val p = if (creds.contains(":")) ":" + URLEncoder.encode(creds.substringAfter(":"), "UTF-8") else ""
+            "$u$p@"
+        } else {
+            ""
+        }
+        val params = ArrayList<String>()
+        if (f.sni.isNotBlank()) params.add("sni=${URLEncoder.encode(f.sni.trim(), "UTF-8")}")
+        val grp = f.hostHeader.trim().ifBlank { f.path.trim().trimStart('/') }
+        if (grp.isNotBlank()) params.add("group=${URLEncoder.encode(grp, "UTF-8")}")
+        if (f.preferredVectorId.isNotBlank() && f.preferredVectorId != "AUTO") {
+            params.add("vec=${URLEncoder.encode(f.preferredVectorId.trim(), "UTF-8")}")
+        }
+        val queryStr = if (params.isNotEmpty()) "?" + params.joinToString("&") else ""
+        val remark = URLEncoder.encode(f.name.trim().ifBlank { "${proto.uppercase(Locale.US)} • $host" }, "UTF-8")
+        return "$proto://$authPrefix$host:$port/$queryStr#$remark"
+    }
+
+    /**
+     * Builds an Xray-compatible outbound JSON for AnyConnect / IKEv2 / L2TP so Xray-core v26
+     * routes tunnel traffic through FullDuplexMutatorBridge (127.0.0.1:bridgePort).
+     */
+    fun buildEnterpriseXrayOutbound(
+        spec: EditableConfigFields,
+        targetHost: String,
+        targetPort: Int,
+        settings: EngineSettings
+    ): JSONObject {
+        val normProto = normalizeProtocolName(spec.protocol)
+        val user = spec.uuidOrPassword.substringBefore(":").trim()
+        val pass = spec.uuidOrPassword.substringAfter(":", "").trim()
+
+        val serverObj = JSONObject()
+            .put("address", targetHost)
+            .put("port", targetPort)
+
+        if (user.isNotEmpty()) {
+            val userAcc = JSONObject()
+                .put("user", user)
+                .put("pass", pass)
+            serverObj.put("users", JSONArray().put(userAcc))
+        }
+
+        val streamSettings = JSONObject().put("network", "tcp")
+        if (normProto == "anyconnect") {
+            val fp = when (settings.fingerprint.lowercase(Locale.US)) {
+                "custom_poly", "auto", "" -> "chrome"
+                else -> settings.fingerprint.lowercase(Locale.US)
+            }
+            val tlsSettings = JSONObject()
+                .put("serverName", spec.sni.ifBlank { spec.address })
+                .put("allowInsecure", true)
+                .put("fingerprint", fp)
+                .put("alpn", JSONArray().put("http/1.1"))
+            streamSettings.put("security", "tls").put("tlsSettings", tlsSettings)
+        } else {
+            streamSettings.put("security", "none")
+        }
+
+        return JSONObject()
+            .put("tag", "proxy-out")
+            .put("protocol", "http")
+            .put("settings", JSONObject().put("servers", JSONArray().put(serverObj)))
+            .put("streamSettings", streamSettings)
     }
 }
