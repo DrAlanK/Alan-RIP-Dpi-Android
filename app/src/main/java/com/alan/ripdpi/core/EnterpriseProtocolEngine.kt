@@ -396,13 +396,23 @@ object EnterpriseProtocolEngine {
      * Compiles a standalone, zero-bridge Xray session for IKEv2 / L2TP / AnyConnect profiles.
      * Never uses VEC-01..VEC-23 or FullDuplexMutatorBridge (which would fail on UDP 500/1701).
      */
-    fun compileEnterpriseNativeSession(
+        fun compileEnterpriseNativeSession(
         rawUri: String,
         gatewayIp: String,
         settings: EngineSettings
     ): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "warning"))
+
+        // DNS configuration so AlanTUN port 53 queries resolve cleanly while tunnel is up
+        val dnsObj = JSONObject()
+        val serversArr = JSONArray()
+            .put("tcp://1.1.1.1:53")
+            .put("tcp://8.8.8.8:53")
+            .put("1.1.1.1")
+        dnsObj.put("servers", serversArr)
+        dnsObj.put("queryStrategy", "UseIPv4")
+        root.put("dns", dnsObj)
 
         val inbounds = JSONArray()
         inbounds.put(
@@ -412,6 +422,13 @@ object EnterpriseProtocolEngine {
                 .put("listen", "127.0.0.1")
                 .put("protocol", "socks")
                 .put("settings", JSONObject().put("auth", "noauth").put("udp", true))
+                .put(
+                    "sniffing",
+                    JSONObject()
+                        .put("enabled", true)
+                        .put("destOverride", JSONArray().put("http").put("tls").put("quic"))
+                        .put("routeOnly", true)
+                )
         )
         inbounds.put(
             JSONObject()
@@ -423,18 +440,52 @@ object EnterpriseProtocolEngine {
         )
         root.put("inbounds", inbounds)
 
-        // 100% RAW unfragmented freedom outbound (NO fragment, NO VEC, NO mutator!)
+        // 100% RAW unfragmented outbound (NO fragment, NO VEC, NO mutator bridge)
         val rawOut = JSONObject()
             .put("tag", "proxy-out")
             .put("protocol", "freedom")
-            .put("settings", JSONObject().put("domainStrategy", "AsIs"))
+            .put("settings", JSONObject().put("domainStrategy", "UseIPv4"))
+            .put(
+                "streamSettings",
+                JSONObject().put(
+                    "sockopt",
+                    JSONObject().put("tcpNoDelay", true).put("tcpKeepAliveIdle", 30)
+                )
+            )
 
         val directOut = JSONObject()
             .put("tag", "direct")
             .put("protocol", "freedom")
-            .put("settings", JSONObject().put("domainStrategy", "AsIs"))
+            .put("settings", JSONObject().put("domainStrategy", "UseIPv4"))
 
-        root.put("outbounds", JSONArray().put(rawOut).put(directOut))
+        val dnsOut = JSONObject()
+            .put("tag", "dns-out")
+            .put("protocol", "dns")
+            .put("settings", JSONObject().put("network", "tcp").put("address", "1.1.1.1").put("port", 53))
+
+        root.put("outbounds", JSONArray().put(rawOut).put(directOut).put(dnsOut))
+
+        val rules = JSONArray()
+        rules.put(
+            JSONObject()
+                .put("type", "field")
+                .put("inboundTag", JSONArray().put("socks-in").put("http-in"))
+                .put("port", 53)
+                .put("outboundTag", "dns-out")
+        )
+        rules.put(
+            JSONObject()
+                .put("type", "field")
+                .put("ip", JSONArray().put("127.0.0.0/8").put("10.0.0.0/8").put("192.168.0.0/16"))
+                .put("outboundTag", "direct")
+        )
+        rules.put(
+            JSONObject()
+                .put("type", "field")
+                .put("network", "tcp,udp")
+                .put("outboundTag", "proxy-out")
+        )
+        root.put("routing", JSONObject().put("domainStrategy", "IPIfNonMatch").put("rules", rules))
         return root.toString()
     }
 }

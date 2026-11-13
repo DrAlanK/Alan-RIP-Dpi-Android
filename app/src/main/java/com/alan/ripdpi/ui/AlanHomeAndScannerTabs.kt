@@ -173,8 +173,8 @@ fun HomeTabScreen(
     }
 
     val isEnterpriseActive = activeProfile != null && activeProfile.protocol.lowercase(Locale.US) in setOf("anyconnect", "openconnect", "ikev2", "l2tp")
-    val activeVecLabel = if (isEnterpriseActive) {
-        "NATIVE"
+    val activeVecLabel = if (isEnterpriseActive || !settings.applyDpiOnUserAuto) {
+        "RAW"
     } else if (telemetry.isConnected) {
         telemetry.activeVectorId
     } else if (!settings.applyDpiOnUserAuto && !isPureAutoMode) {
@@ -501,7 +501,7 @@ fun HomeTabScreen(
                                     .padding(horizontal = 6.dp)
                             ) {
                                 Text(
-                                    text = if (isEnterpriseActive) "پروتکل بومی" else if (settings.applyDpiOnUserAuto) "ضد DPI فعال" else "خالص v2ray",
+                                    text = if (settings.applyDpiOnUserAuto) "ضد DPI فعال" else "خالص v2ray",
                                     color = if (settings.applyDpiOnUserAuto) p.accentGold else p.textSecondary,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 8.5.sp
@@ -628,6 +628,7 @@ fun HomeTabScreen(
                 onActivateAutoMode(false)
                 showAutoLocationSheet = true
             },
+            onToggleApplyDpi = { en -> onToggleApplyDpiOnUserAuto(en) },
             onConnectBestUserConfig = { applyDpi ->
                 showManualServerPicker = false
                 onConnectBestUserConfig(applyDpi)
@@ -811,6 +812,7 @@ private fun ManualServerPickerDialog(
     onDismiss: () -> Unit,
     onImportFromClipboard: () -> Unit,
     onSwitchToAutoRepo: () -> Unit,
+    onToggleApplyDpi: (Boolean) -> Unit = {},
     onConnectBestUserConfig: (Boolean) -> Unit = {},
     onSelectProfile: (Int) -> Unit
 ) {
@@ -860,7 +862,7 @@ private fun ManualServerPickerDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { applyDpiLocal = !applyDpiLocal }
+                                .clickable { val next = !applyDpiLocal; applyDpiLocal = next; onToggleApplyDpi(next) }
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
@@ -875,7 +877,7 @@ private fun ManualServerPickerDialog(
                                     fontSize = 9.5.sp
                                 )
                             }
-                            AlanPillSwitch(checked = applyDpiLocal, onCheckedChange = { applyDpiLocal = it })
+                            AlanPillSwitch(checked = applyDpiLocal, onCheckedChange = { applyDpiLocal = it; onToggleApplyDpi(it) })
                         }
 
                         Box(

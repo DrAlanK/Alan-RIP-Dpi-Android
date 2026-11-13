@@ -939,36 +939,48 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     override fun updateSettings(patch: Map<String, Any>) {
         var cur = _settings.value
         for ((k, v) in patch) {
-            cur = when (k) {
-                "autoPilot", "autopilotEnabled" -> cur.copy(autoPilot = asBool(v, cur.autoPilot))
-                "requireYoutube6s" -> cur.copy(requireYoutube6s = asBool(v, cur.requireYoutube6s))
-                "verifyUploadStream" -> cur.copy(verifyUploadStream = asBool(v, cur.verifyUploadStream))
-                "selfHealingWatchdog" -> cur.copy(selfHealingWatchdog = asBool(v, cur.selfHealingWatchdog))
-                "engineMode" -> cur.copy(engineMode = v.toString())
-                "fragmentEnabled" -> cur.copy(fragmentEnabled = asBool(v, cur.fragmentEnabled))
-                "fragmentPackets" -> cur.copy(fragmentPackets = v.toString())
-                "fragmentLength" -> cur.copy(fragmentLength = v.toString())
-                "fragmentInterval" -> cur.copy(fragmentInterval = v.toString())
-                "fingerprint" -> cur.copy(fingerprint = v.toString())
-                "alpnOverride" -> cur.copy(alpnOverride = v.toString())
-                "wsEarlyData" -> cur.copy(wsEarlyData = asInt(v, cur.wsEarlyData))
-                "muxEnabled" -> cur.copy(muxEnabled = asBool(v, cur.muxEnabled))
-                "muxConcurrency" -> cur.copy(muxConcurrency = asInt(v, cur.muxConcurrency).coerceIn(1, 64))
-                "manualVectorId" -> cur.copy(manualVectorId = v.toString())
-                "forwardStrideBytes" -> cur.copy(forwardStrideBytes = asInt(v, cur.forwardStrideBytes).coerceAtLeast(0))
-                "strideJitterBytes" -> cur.copy(strideJitterBytes = asInt(v, cur.strideJitterBytes).coerceAtLeast(0))
-                "tunMtu" -> cur.copy(tunMtu = asInt(v, cur.tunMtu).coerceIn(1280, 9000))
-                "tunDns" -> cur.copy(tunDns = v.toString().ifBlank { "1.1.1.1" })
-                "socksPort" -> cur.copy(socksPort = asInt(v, cur.socksPort).coerceIn(1025, 65534))
-                "httpPort" -> cur.copy(httpPort = asInt(v, cur.httpPort).coerceIn(1025, 65534))
-                "darkTheme" -> cur.copy(darkTheme = asBool(v, cur.darkTheme))
-                "lastActiveTab" -> cur.copy(lastActiveTab = asInt(v, cur.lastActiveTab).coerceIn(0, 6))
-                "subnetsRepoUrl" -> cur.copy(subnetsRepoUrl = v.toString().trim().ifBlank { CleanIpScannerEngine.DEFAULT_GITHUB_SUBNETS_URL })
-                "autoCleanIpForCf" -> cur.copy(autoCleanIpForCf = asBool(v, cur.autoCleanIpForCf))
-                else -> cur
+            when (k) {
+                "autoPilot" -> cur = cur.copy(autoPilot = v as? Boolean ?: cur.autoPilot)
+                "applyDpiOnUserAuto" -> {
+                    val en = v as? Boolean ?: (v.toString().toBooleanStrictOrNull() ?: !cur.applyDpiOnUserAuto)
+                    cur = cur.copy(applyDpiOnUserAuto = en)
+                    appendLog(if (en) "[Mode] حالت اتصال شخصی: متد ضد DPI فعال شد." else "[Mode] حالت اتصال شخصی: حالت خالص (Raw) بدون متد فعال شد.")
+                }
+                "requireYoutube6s" -> cur = cur.copy(requireYoutube6s = v as? Boolean ?: cur.requireYoutube6s)
+                "verifyUploadStream" -> cur = cur.copy(verifyUploadStream = v as? Boolean ?: cur.verifyUploadStream)
+                "selfHealingWatchdog" -> cur = cur.copy(selfHealingWatchdog = v as? Boolean ?: cur.selfHealingWatchdog)
+                "engineMode" -> cur = cur.copy(engineMode = v.toString())
+                "fragmentEnabled" -> cur = cur.copy(fragmentEnabled = v as? Boolean ?: cur.fragmentEnabled)
+                "fragmentPackets" -> cur = cur.copy(fragmentPackets = v.toString())
+                "fragmentLength" -> cur = cur.copy(fragmentLength = v.toString())
+                "fragmentInterval" -> cur = cur.copy(fragmentInterval = v.toString())
+                "fingerprint" -> cur = cur.copy(fingerprint = v.toString())
+                "alpnOverride" -> cur = cur.copy(alpnOverride = v.toString())
+                "wsEarlyData" -> cur = cur.copy(wsEarlyData = (v as? Number)?.toInt() ?: cur.wsEarlyData)
+                "muxEnabled" -> cur = cur.copy(muxEnabled = v as? Boolean ?: cur.muxEnabled)
+                "muxConcurrency" -> cur = cur.copy(muxConcurrency = (v as? Number)?.toInt() ?: cur.muxConcurrency)
+                "manualVectorId" -> cur = cur.copy(manualVectorId = v.toString())
+                "forwardStrideBytes" -> cur = cur.copy(forwardStrideBytes = (v as? Number)?.toInt() ?: cur.forwardStrideBytes)
+                "strideJitterBytes" -> cur = cur.copy(strideJitterBytes = (v as? Number)?.toInt() ?: cur.strideJitterBytes)
+                "tunMtu" -> cur = cur.copy(tunMtu = (v as? Number)?.toInt() ?: cur.tunMtu)
+                "tunDns" -> cur = cur.copy(tunDns = v.toString())
+                "socksPort" -> cur = cur.copy(socksPort = (v as? Number)?.toInt() ?: cur.socksPort)
+                "httpPort" -> cur = cur.copy(httpPort = (v as? Number)?.toInt() ?: cur.httpPort)
+                "darkTheme" -> cur = cur.copy(darkTheme = v as? Boolean ?: cur.darkTheme)
+                "lastActiveTab" -> cur = cur.copy(lastActiveTab = (v as? Number)?.toInt() ?: cur.lastActiveTab)
+                "subnetsRepoUrl" -> cur = cur.copy(subnetsRepoUrl = v.toString())
+                "autoCleanIpForCf" -> cur = cur.copy(autoCleanIpForCf = v as? Boolean ?: cur.autoCleanIpForCf)
+                "preferredAutoCountry" -> cur = cur.copy(preferredAutoCountry = v.toString())
+                "autoRenameOnScan" -> cur = cur.copy(autoRenameOnScan = v as? Boolean ?: cur.autoRenameOnScan)
+                "tunnelMode" -> cur = cur.copy(tunnelMode = v.toString())
+                "activeDohUrl" -> cur = cur.copy(activeDohUrl = v.toString())
+                "autoConnectSource" -> cur = cur.copy(autoConnectSource = v.toString())
+                "splitTunnelMode" -> cur = cur.copy(splitTunnelMode = v.toString())
+                "splitTunnelPackagesCsv" -> cur = cur.copy(splitTunnelPackagesCsv = v.toString())
             }
         }
-        updateSettings(cur)
+        _settings.value = cur
+        saveSettingsToDisk()
     }
 
     override fun getVectors(): List<VectorSpec> {
@@ -1833,98 +1845,64 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         isHiddenAutoNode: Boolean = false,
         rawUriForMeta: String = rawNode.uri
     ): Boolean {
-        if (EnterpriseProtocolEngine.isEnterpriseProtocol(rawNode.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(rawNode.uri)) {
+        val isEnterpriseNode = EnterpriseProtocolEngine.isEnterpriseProtocol(rawNode.protocol) || EnterpriseProtocolEngine.isEnterpriseUri(rawNode.uri)
+        val isPureUserV2ray = !isEnterpriseNode && !isHiddenAutoNode && !_settings.value.applyDpiOnUserAuto
+        if (isEnterpriseNode || isPureUserV2ray) {
             val protoUp = rawNode.protocol.uppercase(Locale.US)
             val rawHost = rawNode.host.ifBlank { rawNode.originalHost }.trim()
+            val modeLabel = if (isEnterpriseNode) "RAW C Core ($protoUp)" else "Pure v2ray ($protoUp)"
+
             _telemetry.update {
                 it.copy(
                     uiPhase = "HANDSHAKING",
                     isConnecting = true,
                     isConnected = false,
-                    progressPercent = 40,
+                    progressPercent = 35,
                     activeProfileUid = rawNode.uid,
                     activeProfileName = rawNode.name,
                     activeProtocol = protoUp,
-                    activeVectorId = "RAW",
-                    activeVectorName = "Raw C Core ($protoUp)",
+                    activeVectorId = if (isEnterpriseNode) "RAW" else "RAW-V2RAY",
+                    activeVectorName = modeLabel,
                     statusHeadline = "در حال اتصال خام $protoUp...",
-                    statusDetail = "برقراری نشست مستقیم در هسته C بدون متد و فرگمنت..."
+                    statusDetail = "برقراری ارتباط مستقیم بدون متد و بدون فرگمنت..."
                 )
             }
-            appendLog("[$protoUp] اتصال مستقیم و خام در هسته C به '${rawNode.name}' ($rawHost:${rawNode.port})...")
+            appendLog("[$protoUp] شروع اتصال خام ($modeLabel) به '${rawNode.name}' ($rawHost:${rawNode.port})...")
 
             val resolvedIp = withContext(Dispatchers.IO) {
                 cleanIpEngine.resolveUnpoisonedIpv4Blocking(rawHost, 1600).ifBlank { rawHost }
             }
             val probedRtt = withContext(Dispatchers.IO) {
-                NativeOobBridge.probeEnterpriseInCCore(resolvedIp, rawNode.port, rawNode.protocol, 1500)
+                if (isEnterpriseNode) {
+                    NativeOobBridge.probeEnterpriseInCCore(resolvedIp, rawNode.port, rawNode.protocol, 1600)
+                } else {
+                    cleanIpEngine.fastTcpPingBlocking(resolvedIp, rawNode.port, 1400)
+                }
             }
             if (!isGenValid(gen)) return false
-            val finalPing = if (probedRtt > 0) probedRtt else 115
-
-            withContext(Dispatchers.IO) {
-                try { xrayCoreManager.stopCore() } catch (_: Throwable) {}
-                NativeOobBridge.startEnterpriseRawInCCore(resolvedIp, rawNode.port, rawNode.protocol)
-                val settingsSnap = _settings.value
-                val rawJson = EnterpriseProtocolEngine.compileEnterpriseNativeSession(rawNode.uri, resolvedIp, settingsSnap)
-                xrayCoreManager.startCore(rawJson)
-                if (settingsSnap.tunnelMode.uppercase(Locale.US) != "PROXY") {
-                    AlanVpnService.splitTunnelMode = settingsSnap.splitTunnelMode
-                    AlanVpnService.splitTunnelPackages = settingsSnap.splitTunnelPackagesCsv
-                        .split(",")
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                        .toSet()
-                    AlanVpnService.resetTunHandshakeState()
-                }
+            if (probedRtt <= 0) {
+                appendLog("[$protoUp] سرور پاسخ نداد ($rawHost:${rawNode.port}).")
+                return false
             }
 
-            val spec = CountryPaletteRegistry.detectCountry(rawNode.name, rawHost, rawNode.sni, rawNode.countryCode)
-            _profiles.update { list ->
-                list.map { item ->
-                    if (item.uid == rawNode.uid) {
-                        item.copy(
-                            pingMs = finalPing,
-                            status = "ONLINE",
-                            cachedVectorId = "RAW",
-                            preferredVectorId = "RAW",
-                            isSelected = true
-                        )
-                    } else {
-                        item.copy(isSelected = false)
-                    }
-                }
-            }
-            saveRepositoryToDisk()
-
-            _engineState.value = EngineState.CONNECTED
             _telemetry.update {
                 it.copy(
-                    uiPhase = "CONNECTED",
-                    isConnecting = false,
-                    isConnected = true,
-                    progressPercent = 100,
-                    statusHeadline = "متصل ($protoUp)",
-                    statusDetail = "تونل خام روی پروفایل شخصی برقرار است",
-                    buttonText = "قطع اتصال",
-                    egressIp = resolvedIp,
-                    activeVectorId = "RAW",
-                    activeVectorName = "Raw C Core ($protoUp)",
-                    activeProfileUid = rawNode.uid,
-                    activeProfileName = rawNode.name,
-                    activeProtocol = protoUp,
-                    layerHost = "$rawHost:${rawNode.port}",
-                    pingMs = finalPing,
-                    countryCode = spec.code,
-                    countryName = spec.nameFa,
-                    flagEmoji = spec.flagEmoji,
-                    flagStripeColors = spec.stripeColors,
-                    accentPrimaryColor = spec.accentPrimary,
-                    accentSecondaryColor = spec.accentSecondary
+                    progressPercent = 75,
+                    statusDetail = "راه‌اندازی سرویس AlanTUN و هسته شبکه..."
                 )
             }
-            appendLog("[$protoUp] متصل شد (RAW C Core): '${rawNode.name}' ($resolvedIp:${rawNode.port}) | پینگ: ${finalPing}ms")
-            return true
+
+            val rawVec = VectorCatalog.findVector("VEC-00")
+            finalizeAndLockWinnerUnlocked(
+                gen = gen,
+                baseNode = rawNode,
+                endpointIp = resolvedIp,
+                vec = rawVec,
+                pingMs = probedRtt.toLong(),
+                isHiddenAutoNode = isHiddenAutoNode,
+                rawUriForMeta = rawNode.uri
+            )
+            return _engineState.value == EngineState.CONNECTED
         }
         val cfg = _settings.value
         val dispName = if (isHiddenAutoNode) "Alan Smart Auto-Server" else rawNode.name
