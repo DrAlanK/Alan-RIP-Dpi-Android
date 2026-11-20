@@ -6,6 +6,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.telephony.TelephonyManager
+import com.alan.ripdpi.model.APP_NAME
 import com.alan.ripdpi.model.BypassVector
 import com.alan.ripdpi.model.CountryPaletteRegistry
 import com.alan.ripdpi.model.CountryThemeSpec
@@ -140,6 +141,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     private var selectedProfileUidPersist = ""
 
     private val profileSubOwnerMap = ConcurrentHashMap<String, String>()
+    private val activeTempBridges = Collections.newSetFromMap(ConcurrentHashMap<FullDuplexMutatorBridge, Boolean>())
     private val rxHistoryQueue = ArrayDeque<Float>(SPARKLINE_WINDOW)
     private val txHistoryQueue = ArrayDeque<Float>(SPARKLINE_WINDOW)
     private val pingHistoryQueue = ArrayDeque<Float>(SPARKLINE_WINDOW)
@@ -213,7 +215,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         startTelemetryTicker()
         startSelfHealingWatchdog()
         triggerInstantGeoLocationProbes(_profiles.value.filter { it.countryCode == "UN" }, allowMicroTunnelForCdn = false)
-        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.6.0] Core Ready (${xrayCoreManager.getXrayVersion()})") }
+        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.7.0] Core Ready (${xrayCoreManager.getXrayVersion()})") }
     }
 
     fun bindVpnPermissionRequester(requester: ((() -> Unit) -> Unit)?) {
@@ -261,27 +263,33 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     override fun toggleConnection() {
-        if (_telemetry.value.isConnecting || _telemetry.value.isConnected || _scanState.value.isRunning) {
-            _telemetry.update {
-                it.copy(
-                    uiPhase = "DISCONNECTING",
-                    isConnecting = false,
-                    isConnected = false,
-                    statusHeadline = "در حال قطع اتصال...",
-                    statusDetail = "در حال توقف هسته و بستن تونل...",
-                    buttonText = "در حال قطع..."
-                )
-            }
-            stopScanner()
-            NativeOobBridge.stopEnterpriseRawInCCore()
-        }
         val cur = _engineState.value
         val snap = _telemetry.value
-        if (cur == EngineState.CONNECTED || snap.isConnecting || snap.isConnected) {
+        val busy = cur == EngineState.CONNECTED ||
+            cur == EngineState.CONNECTING ||
+            cur == EngineState.HUNTING_BEST ||
+            cur == EngineState.PROBING_VECTORS ||
+            cur == EngineState.VERIFYING_STABILITY ||
+            cur == EngineState.FAST_RESUME ||
+            snap.isConnecting ||
+            snap.isConnected ||
+            snap.uiPhase.equals("DISCONNECTING", true) ||
+            (connectionJob?.isActive == true)
+
+        if (busy) {
             disconnectTunnel()
             return
         }
         startSmartConnect()
+    }
+
+    override fun reconnectActiveTunnel() {
+        appendLog("[Control] درخواست اتصال مجدد...")
+        disconnectTunnel()
+        scope.launch {
+            delay(320L)
+            startSmartConnect()
+        }
     }
 
 
@@ -297,13 +305,40 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     fun disconnectTunnel() {
-        opGeneration.incrementAndGet()
+        val genNow = opGeneration.incrementAndGet()
+        appendLog("[Disconnect] قطع فوری درخواست شد (gen=$genNow)...")
+
+        _telemetry.update {
+            it.copy(
+                uiPhase = "DISCONNECTING",
+                isConnecting = false,
+                isConnected = false,
+                statusHeadline = "در حال قطع اتصال...",
+                statusDetail = "توقف فوری هسته و بستن سوکت‌ها...",
+                buttonText = "در حال قطع..."
+            )
+        }
+
+        // Cancel ALL jobs immediately without blocking on pipelineMutex!
         connectionJob?.cancel()
         connectionJob = null
-        scope.launch {
-            pipelineMutex.withLock {
-                teardownActiveRuntime()
-                clearSparklines()
+        scannerJob?.cancel()
+        scannerJob = null
+        bestMethodJob?.cancel()
+        bestMethodJob = null
+        _scanState.update { it.copy(isRunning = false) }
+        NativeOobBridge.stopEnterpriseRawInCCore()
+
+        scope.launch(Dispatchers.IO) {
+            // Immediately close every active bridge socket so any blocked probe IO exits in <50ms
+            val tempSnap = activeTempBridges.toList()
+            activeTempBridges.clear()
+            tempSnap.forEach { b -> try { b.stop() } catch (_: Throwable) {} }
+
+            teardownActiveRuntime()
+            clearSparklines()
+
+            if (opGeneration.get() == genNow) {
                 _engineState.value = EngineState.DISCONNECTED
                 _connectionStages.value = buildDefaultStages()
                 _liveVectorProbes.value = emptyList()
@@ -314,8 +349,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                         isConnecting = false,
                         isConnected = false,
                         statusHeadline = "آماده اتصال",
-                        statusDetail = "موتور هوشمند آماده برقراری تونل امن است.",
-                        buttonText = "اتصال هوشمند",
+                        statusDetail = "تونل با موفقیت قطع شد.",
+                        buttonText = "اتصال",
                         uptimeLabel = "00:00:00",
                         rxRateKbps = 0f,
                         txRateKbps = 0f,
@@ -328,7 +363,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                         pingHistory = emptyList()
                     )
                 }
-                appendLog("Tunnel disconnected.")
+                appendLog("[Disconnect] Tunnel disconnected cleanly.")
             }
         }
     }
@@ -1494,7 +1529,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         scopeMode: String,
         selectedIndices: List<Int>,
         autoConnect: Boolean,
-        useCleanIp: Boolean
+        useCleanIp: Boolean,
+        selectedVectorIds: List<String>
     ) {
         scannerJob?.cancel()
         scannerJob = scope.launch {
@@ -1524,7 +1560,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 mode = "active_profile",
                 percent = 4,
                 summary = if (targets.size == 1) {
-                    "اسکن موازی ۶ مسیره روی «${targets.first().second.name}»..."
+                    "اسکن موازی روی «${targets.first().second.name}»..."
                 } else {
                     "اسکن موازی آزمایشگاه روی ${targets.size} کانفیگ..."
                 }
@@ -1534,6 +1570,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             var winnerForAutoConnect: Triple<Int, String, String>? = null
             val portEdgeCache = HashMap<Int, List<String>>()
             val myGen = opGeneration.get()
+            val userSelectedSet = selectedVectorIds.map { it.trim().uppercase(Locale.US) }.filter { it.isNotEmpty() }.toSet()
+            appendLog("[DPI-Lab] شروع اسکن | Targets=${targets.size} | SelectedVecs=${if (userSelectedSet.isEmpty()) "ALL" else userSelectedSet.joinToString(",")} | CleanIP=$useCleanIp | AutoConnect=$autoConnect")
 
             try {
                 pipelineMutex.withLock {
@@ -1549,7 +1587,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                             if (!isActive) break
                             val (origIdx, prof) = pair
 
-                            // Never inject Cloudflare IP unless user explicitly checked `useCleanIp = true`!
                             val reachableEps: List<String> = if (useCleanIp && cleanIpEngine.isCloudflareEdgeProfile(prof)) {
                                 resolveCandidateEndpointsForNode(
                                     node = prof,
@@ -1569,7 +1606,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                             }
 
                             if (reachableEps.isEmpty()) {
-                                appendLog("[Lab] Server unreachable on TCP: '${prof.name}' (${prof.host}:${prof.port})")
+                                appendLog("[DPI-Lab] Server unreachable on TCP: '${prof.name}' (${prof.host}:${prof.port})")
                                 continue
                             }
 
@@ -1578,12 +1615,18 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                                 cleanIpEngine.fastTcpPingBlocking(activeEp, prof.port, 1200).coerceAtLeast(1)
                             }
 
-                            val plan: List<BypassVector> = if (targets.size == 1) {
+                            val basePlan: List<BypassVector> = if (targets.size == 1) {
                                 UriConfigCodec.buildBalancedRacePlan(prof.copy(cachedVectorId = "", preferredVectorId = "AUTO"), cfg)
                             } else if (cleanIpEngine.isDomesticOrDirectTunnel(prof)) {
                                 listOf(VectorCatalog.findVector("VEC-00"))
                             } else {
                                 UriConfigCodec.buildBalancedRacePlan(prof.copy(cachedVectorId = "", preferredVectorId = "AUTO"), cfg).take(12)
+                            }
+
+                            val plan: List<BypassVector> = if (userSelectedSet.isNotEmpty()) {
+                                VectorCatalog.VECTOR_REGISTRY.filter { it.vectorId.uppercase(Locale.US) in userSelectedSet }.ifEmpty { basePlan }
+                            } else {
+                                basePlan
                             }
 
                             val waves = plan.chunked(6)
@@ -1592,9 +1635,9 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                             for ((wIdx, waveVecs) in waves.withIndex()) {
                                 if (!isActive) break
                                 val pct = if (targets.size == 1) {
-                                    (12 + (((wIdx + 1) * 86) / waves.size.coerceAtLeast(1))).coerceIn(12, 99)
+                                    (12 + (((wIdx + 1) * 84) / waves.size.coerceAtLeast(1))).coerceIn(12, 96)
                                 } else {
-                                    (8 + (((tPos * waves.size + wIdx + 1) * 90) / (targets.size * waves.size).coerceAtLeast(1))).coerceIn(8, 99)
+                                    (8 + (((tPos * waves.size + wIdx + 1) * 88) / (targets.size * waves.size).coerceAtLeast(1))).coerceIn(8, 96)
                                 }
                                 val waveLabel = waveVecs.joinToString("/") { it.vectorId }
                                 _scanState.value = _scanState.value.copy(
@@ -1620,15 +1663,17 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                                             initialVector = vec,
                                             initialCustomStride = cfg.forwardStrideBytes,
                                             initialJitterBytes = cfg.strideJitterBytes,
-                                            initialRawPassthrough = vec.family == "DIRECT"
+                                            initialRawPassthrough = vec.family == "DIRECT",
+                                            onLog = { m -> appendLog(m) }
                                         )
+                                        activeTempBridges.add(br)
                                         br.start()
                                         bridges.add(br)
                                     }
 
                                     if (!xrayCoreManager.startCore(multiSession.configJson)) continue
                                     val firstLane = multiSession.lanes.firstOrNull() ?: continue
-                    waitLocalHttpReady(firstLane.httpPort, 480L)
+                                    waitLocalHttpReady(firstLane.httpPort, 480L)
 
                                     val waveHits = coroutineScope {
                                         multiSession.lanes.mapIndexed { lIdx, lane ->
@@ -1641,31 +1686,39 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                                                     fetchGeo = (detectedCountryOnNode == "UN" || detectedCountryOnNode.isBlank())
                                                 )
                                                 if (!geoRes.ok) return@async null
-                                                val (upOk, upKbps) = TunnelStreamVerifier.quickUploadCheck(lane.httpPort, 1600L)
-                                                Triple(vec, geoRes, upOk to upKbps)
+
+                                                // Step 2: 160KB Sustained Download Check (defeats Karaj/provincial PMTU & 16KB stall false-positives!)
+                                                val dlRes = TunnelStreamVerifier.measureSustainedDownloadKbps(lane.httpPort, 4800L)
+                                                if (!dlRes.ok) {
+                                                    appendLog("[DPI-Lab] ${vec.vectorId} رد شد (Ping=${geoRes.latencyMs}ms): ${dlRes.reason}")
+                                                    return@async null
+                                                }
+
+                                                // Step 3: Real 192KB Upload Bandwidth Test
+                                                val ulRes = TunnelStreamVerifier.measureAccurateUploadKbps(lane.httpPort, 5200L)
+                                                val ulKbps = if (ulRes.ok) ulRes.kbps else 0f
+                                                appendLog("[DPI-Lab] ${vec.vectorId} تایید شد | Ping=${geoRes.latencyMs}ms | ${dlRes.reason} | ${ulRes.reason}")
+                                                Triple(vec, geoRes, ulKbps to dlRes.kbps)
                                             }
                                         }.awaitAll()
                                     }.filterNotNull()
 
-                                    for ((vec, geoRes, upPair) in waveHits) {
-                                        val (upOk, upKbps) = upPair
+                                    for ((vec, geoRes, bwPair) in waveHits) {
+                                        val (ulKbps, dlKbps) = bwPair
                                         if (geoRes.countryCode != "UN" && geoRes.countryCode.length == 2) {
                                             detectedCountryOnNode = geoRes.countryCode
                                         }
                                         val cSpec = CountryPaletteRegistry.resolveByCode(detectedCountryOnNode)
                                         val finalRtt = geoRes.latencyMs.coerceAtLeast(1)
-                                        val detailStr = if (upOk && upKbps > 0.0) {
-                                            "${cSpec.flagEmoji} ${cSpec.nameFa} | Up=${upKbps.toInt()} KB/s | ${vec.codeName}"
-                                        } else {
-                                            "${cSpec.flagEmoji} ${cSpec.nameFa} | ${finalRtt}ms | ${vec.codeName}"
-                                        }
+                                        // Weighted ranking score from Windows v1.5.0: ping_ms - min(150, upload_kbps * 0.30) (lower = better)
+                                        val effectiveRankScore = (finalRtt - minOf(150.0, ulKbps * 0.30)).toFloat()
+                                        val detailStr = "DL=${formatByteRate(dlKbps)} | UL=${formatByteRate(ulKbps)} | ${vec.codeName}"
                                         val rowTitle = if (targets.size == 1) {
                                             "${vec.vectorId} • ${vec.codeName}"
                                         } else {
-                                            "${cSpec.flagEmoji} ${prof.name} [${vec.vectorId}]"
+                                            "${prof.name} [${vec.vectorId}]"
                                         }
                                         val shownEndpoint = if (useCleanIp) "$activeEp:${prof.port}" else "${prof.host}:${prof.port}"
-                                        val scoreVal = (100f - (finalRtt / 24f)).coerceIn(15f, 100f)
 
                                         collected.add(
                                             ScanResultRow(
@@ -1680,16 +1733,17 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                                                 tcpMs = tcpRtt,
                                                 tunnelMs = finalRtt,
                                                 status = "VERIFIED",
-                                                score = scoreVal,
+                                                score = effectiveRankScore,
                                                 detail = detailStr,
                                                 countryCode = cSpec.code,
-                                                flagEmoji = cSpec.flagEmoji
+                                                flagEmoji = cSpec.flagEmoji,
+                                                uploadKbps = ulKbps
                                             )
                                         )
                                     }
 
                                     if (waveHits.isNotEmpty()) {
-                                        val ranked = collected.sortedBy { it.tunnelMs }
+                                        val ranked = collected.sortedBy { it.score }
                                             .mapIndexed { i, r -> r.copy(rank = i + 1) }
                                         _scanRows.value = ranked
 
@@ -1718,7 +1772,10 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                                     }
                                 } finally {
                                     xrayCoreManager.stopCore()
-                                    bridges.forEach { it.stop() }
+                                    bridges.forEach {
+                                        activeTempBridges.remove(it)
+                                        it.stop()
+                                    }
                                 }
                             }
                         }
@@ -1730,26 +1787,38 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
                 val finalRanked = _scanRows.value
                 saveScanCacheToDisk()
-                _scanState.value = ScanUiState(
-                    isRunning = false,
-                    mode = "active_profile",
-                    percent = 100,
-                    summary = if (finalRanked.isNotEmpty()) {
-                        "برنده آزمایشگاه: ${finalRanked.first().boundVector} (${finalRanked.first().tunnelMs}ms) — ${finalRanked.size} متد فعال"
-                    } else {
-                        "متد فعالی پاسخ نداد (اگر کانفیگ کلادفلر فیلتر است، گزینه IP تمیز را فعال کنید)."
-                    }
-                )
 
                 if (autoConnect && winnerForAutoConnect != null) {
                     val (wIdx, wVec, wEp) = winnerForAutoConnect!!
+                    val bestRow = finalRanked.firstOrNull()
+                    _scanState.value = ScanUiState(
+                        isRunning = false,
+                        mode = "auto_connecting",
+                        percent = 100,
+                        summary = "⚡ برنده: $wVec (${bestRow?.tunnelMs ?: 0}ms) — در حال اتصال خودکار؛ کلیک نکنید..."
+                    )
+                    appendLog("[DPI-Lab] اتصال خودکار به بهترین متد تاییدشده ($wVec) آغاز شد...")
+                    delay(350L)
                     applyScannedVector(wVec, wIdx, wEp, true)
+                } else {
+                    _scanState.value = ScanUiState(
+                        isRunning = false,
+                        mode = "active_profile",
+                        percent = 100,
+                        summary = if (finalRanked.isNotEmpty()) {
+                            "برنده آزمایشگاه: ${finalRanked.first().boundVector} (${finalRanked.first().tunnelMs}ms • UL ${formatByteRate(finalRanked.first().uploadKbps)}) — ${finalRanked.size} متد فعال"
+                        } else {
+                            "متد فعالی از تست ۱۶۰KB دانلود عبور نکرد."
+                        }
+                    )
                 }
             } catch (_: CancellationException) {
                 _scanState.value = _scanState.value.copy(isRunning = false, summary = "اسکن توسط کاربر متوقف شد.")
             } finally {
                 xrayCoreManager.probeSilentMode = false
-                _scanState.value = _scanState.value.copy(isRunning = false)
+                if (_scanState.value.mode != "auto_connecting") {
+                    _scanState.value = _scanState.value.copy(isRunning = false)
+                }
             }
         }
     }
@@ -2015,11 +2084,19 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     })
                                 if (!fp.ok) return@async null
                                 val rtt = fp.latencyMs.coerceAtLeast(1L)
-                                if (cfg.verifyUploadStream) {
-                                    val (upOk, _) = TunnelStreamVerifier.quickUploadCheck(lane.httpPort, 1600L)
-                                    if (!upOk) return@async (vec to (rtt + 250L))
+                                val dlCheck = TunnelStreamVerifier.measureSustainedDownloadKbps(lane.httpPort, 4200L)
+                                if (!dlCheck.ok) {
+                                    appendLog("[Verifier] ${vec.vectorId} رد شد: ${dlCheck.reason} (Ping=${rtt}ms)")
+                                    return@async null
                                 }
-                                vec to rtt
+                                var scoreMs = rtt
+                                if (cfg.verifyUploadStream) {
+                                    val ulCheck = TunnelStreamVerifier.measureAccurateUploadKbps(lane.httpPort, 4600L)
+                                    val ulKbps = if (ulCheck.ok) ulCheck.kbps else 0f
+                                    scoreMs = (rtt - minOf(150.0, ulKbps * 0.30)).toLong().coerceAtLeast(1L)
+                                    appendLog("[Verifier] ${vec.vectorId} تایید شد | Ping=${rtt}ms | ${dlCheck.reason} | ${ulCheck.reason} | Score=$scoreMs")
+                                }
+                                vec to scoreMs
                             }
                         }.awaitAll()
                     }
@@ -2276,7 +2353,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
         val cfg = _settings.value
         val candidateBatches = shortlist.chunked(6)
-        val roundVecIds = listOf("VEC-21", "VEC-17", "VEC-11")
+        val roundVecIds = listOf("VEC-27", "VEC-28", "VEC-24", "VEC-25", "VEC-26", "VEC-21", "VEC-17")
 
         for ((bIdx, batch) in candidateBatches.withIndex()) {
             if (!isGenValid(gen)) return
@@ -2903,7 +2980,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     override fun sendAllConfigsToDpiLab(autoConnectBest: Boolean, useCleanIp: Boolean) {
         val indices = _profiles.value.indices.toList()
         appendLog("[DPI-Lab] ارسال کل مخزن (${indices.size} کانفیگ) به آزمایشگاه ۶ مسیره...")
-        startMultiTargetMethodScan("all", indices, autoConnectBest, useCleanIp)
+        startMultiTargetMethodScan("all", indices, autoConnectBest, useCleanIp, emptyList())
     }
 
     override fun loadInstalledAppsList(includeSystem: Boolean) {
@@ -2939,6 +3016,11 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val csv = packages.map { it.trim() }.filter { it.isNotEmpty() }.joinToString(",")
         AlanVpnService.splitTunnelMode = cleanMode
         AlanVpnService.splitTunnelPackages = packages
+        appContext.getSharedPreferences("alan_rip_dpi_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putString("splitTunnelMode", cleanMode)
+            .putString("splitTunnelPackagesCsv", csv)
+            .commit()
         _settings.update { it.copy(splitTunnelMode = cleanMode, splitTunnelPackagesCsv = csv) }
         saveSettingsToDisk()
         _installedApps.update { list -> list.map { it.copy(isSelected = it.packageName in packages) } }
@@ -3029,7 +3111,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             scopeMode = "selected",
             selectedIndices = v2Indices,
             autoConnect = true,
-            useCleanIp = _settings.value.autoCleanIpForCf
+            useCleanIp = _settings.value.autoCleanIpForCf,
+            selectedVectorIds = emptyList()
         )
     }
 
@@ -3812,9 +3895,11 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             initialJitterBytes = cfgSettings.strideJitterBytes,
             initialRawPassthrough = isPureRaw,
             socks5DynamicMode = isEnt,
-            protectSocket = { sock -> AlanVpnService.protectRawSocket(sock) }
+            protectSocket = { sock -> AlanVpnService.protectRawSocket(sock) },
+            onLog = { m -> appendLog(m) }
         )
-        bridge.start()
+        val boundP = bridge.start()
+        appendLog("[Core] Bridge active on 127.0.0.1:$boundP -> ${session.remoteHost}:${session.remotePort} (${vector.vectorId})")
 
         if (!xrayCoreManager.startCore(session.configJson)) {
             bridge.stop()
@@ -4389,6 +4474,16 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                         rxHistory = rxHist,
                         txHistory = txHist,
                         pingHistory = pingHist
+                    )
+                }
+                if (_engineState.value == EngineState.CONNECTED) {
+                    val tNow = _telemetry.value
+                    val remarkTitle = tNow.activeProfileName.trim().ifBlank { APP_NAME }
+                    val vecTag = if (tNow.pingMs > 0) "${tNow.activeVectorId} • ${tNow.pingMs}ms" else tNow.activeVectorId
+                    AlanVpnService.activeInstance?.updateNotificationLive(
+                        profileTitle = remarkTitle,
+                        vectorLabel = vecTag,
+                        speedLine = "↓ ${tNow.rxRateLabel}  •  ↑ ${tNow.txRateLabel}"
                     )
                 }
             }
@@ -5063,7 +5158,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                         manualVectorId = j.optString("manualVectorId", "VEC-01"),
                         forwardStrideBytes = j.optInt("forwardStrideBytes", 400),
                         strideJitterBytes = j.optInt("strideJitterBytes", 32),
-                        tunMtu = j.optInt("tunMtu", 1500),
+                        tunMtu = j.optInt("tunMtu", 1360),
                         tunDns = j.optString("tunDns", "1.1.1.1"),
                         socksPort = j.optInt("socksPort", 10808),
                         httpPort = j.optInt("httpPort", 10809),
@@ -5074,10 +5169,18 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     tunnelMode = j.optString("tunnelMode", "VPN"),
                     activeDohUrl = j.optString("activeDohUrl", "https://cloudflare-dns.com/dns-query"),
                     autoConnectSource = j.optString("autoConnectSource", "CLOUD_REPO"),
-                    applyDpiOnUserAuto = j.optBoolean("applyDpiOnUserAuto", true),
-                    splitTunnelMode = j.optString("splitTunnelMode", "ALL"),
-                    splitTunnelPackagesCsv = j.optString("splitTunnelPackagesCsv", "")
+                    applyDpiOnUserAuto = j.optBoolean("applyDpiOnUserAuto", appContext.getSharedPreferences("alan_rip_dpi_prefs", Context.MODE_PRIVATE).getBoolean("applyDpiOnUserAuto", true)),
+                    splitTunnelMode = j.optString("splitTunnelMode", appContext.getSharedPreferences("alan_rip_dpi_prefs", Context.MODE_PRIVATE).getString("splitTunnelMode", "ALL") ?: "ALL"),
+                    splitTunnelPackagesCsv = j.optString("splitTunnelPackagesCsv", appContext.getSharedPreferences("alan_rip_dpi_prefs", Context.MODE_PRIVATE).getString("splitTunnelPackagesCsv", "") ?: ""),
+                        preferredAutoCountry = j.optString("preferredAutoCountry", "AUTO"),
+                        autoRenameOnScan = j.optBoolean("autoRenameOnScan", true)
                     )
+                    AlanVpnService.splitTunnelMode = _settings.value.splitTunnelMode
+                    AlanVpnService.splitTunnelPackages = _settings.value.splitTunnelPackagesCsv
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .toSet()
                 } catch (_: Throwable) {
                 }
             }
@@ -5217,12 +5320,27 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     put("lastActiveTab", s.lastActiveTab)
                     put("subnetsRepoUrl", s.subnetsRepoUrl)
                     put("autoCleanIpForCf", s.autoCleanIpForCf)
+                    put("preferredAutoCountry", s.preferredAutoCountry)
+                    put("autoRenameOnScan", s.autoRenameOnScan)
+                    put("tunnelMode", s.tunnelMode)
+                    put("activeDohUrl", s.activeDohUrl)
+                    put("autoConnectSource", s.autoConnectSource)
+                    put("applyDpiOnUserAuto", s.applyDpiOnUserAuto)
+                    put("splitTunnelMode", s.splitTunnelMode)
+                    put("splitTunnelPackagesCsv", s.splitTunnelPackagesCsv)
                     put("autoMethodStatus", _autoMethodStatus.value)
                     put("bridgePort", configuredBridgePort)
                     put("selectedProfileUid", selectedProfileUidPersist)
                     put("selectedIndex", _selectedIndex.value)
                 }
                 settingsFile.writeText(j.toString(2), Charsets.UTF_8)
+                appContext.getSharedPreferences("alan_rip_dpi_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("splitTunnelMode", s.splitTunnelMode)
+                    .putString("splitTunnelPackagesCsv", s.splitTunnelPackagesCsv)
+                    .putBoolean("applyDpiOnUserAuto", s.applyDpiOnUserAuto)
+                    .putInt("tunMtu", s.tunMtu)
+                    .commit()
             } catch (_: Throwable) {
             }
         }
@@ -5314,7 +5432,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val line = "[$stamp] $msg"
         synchronized(logLinesBuffer) {
             logLinesBuffer.add(line)
-            while (logLinesBuffer.size > 300) {
+            while (logLinesBuffer.size > 1500) {
                 logLinesBuffer.removeAt(0)
             }
             _logs.value = logLinesBuffer.toList()

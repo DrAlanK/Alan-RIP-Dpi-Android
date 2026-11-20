@@ -30,6 +30,9 @@ class AlanVpnService : VpnService() {
         const val ACTION_START_TUN = "com.alan.ripdpi.action.START_TUN"
         const val ACTION_STOP_TUN = "com.alan.ripdpi.action.STOP_TUN"
         const val ACTION_DISCONNECT_FROM_NOTIF = "com.alan.ripdpi.action.DISCONNECT_FROM_NOTIF"
+        const val ACTION_RECONNECT_FROM_NOTIF = "com.alan.ripdpi.action.RECONNECT_FROM_NOTIF"
+        const val ACTION_BEST_SERVER_FROM_NOTIF = "com.alan.ripdpi.action.BEST_SERVER_FROM_NOTIF"
+        @Volatile var lastNotifSpeedLine: String = "↓ 0 B/s  •  ↑ 0 B/s"
 
         const val EXTRA_SOCKS_PORT = "extra_socks_port"
         const val EXTRA_TUN_MTU = "extra_tun_mtu"
@@ -142,13 +145,22 @@ class AlanVpnService : VpnService() {
                 stopImmediatelyFromEngine()
                 return START_NOT_STICKY
             }
+            ACTION_RECONNECT_FROM_NOTIF -> {
+                AlanAutoPilotEngine.getInstance(applicationContext).reconnectActiveTunnel()
+                return START_STICKY
+            }
+            ACTION_BEST_SERVER_FROM_NOTIF -> {
+                val eng = AlanAutoPilotEngine.getInstance(applicationContext)
+                eng.connectBestUserConfig(eng.settings.value.applyDpiOnUserAuto, "ALL")
+                return START_STICKY
+            }
             ACTION_STOP_TUN -> {
                 stopImmediatelyFromEngine()
                 return START_NOT_STICKY
             }
             ACTION_START_TUN -> {
                 val socksPort = intent?.getIntExtra(EXTRA_SOCKS_PORT, 10808) ?: 10808
-                val mtu = (intent?.getIntExtra(EXTRA_TUN_MTU, 1400) ?: 1400).coerceIn(1280, 1500)
+                val mtu = (intent?.getIntExtra(EXTRA_TUN_MTU, 1360) ?: 1360).coerceIn(1280, 1500)
                 val dns = intent?.getStringExtra(EXTRA_TUN_DNS)?.ifBlank { "1.1.1.1" } ?: "1.1.1.1"
                 val title = intent?.getStringExtra(EXTRA_PROFILE_TITLE).orEmpty().ifBlank { APP_NAME }
                 val vecLabel = intent?.getStringExtra(EXTRA_VECTOR_LABEL).orEmpty()
@@ -270,9 +282,38 @@ class AlanVpnService : VpnService() {
                         }
                     }
 
-                    try {
-                        builder.addDisallowedApplication(packageName)
-                    } catch (_: Throwable) {
+                    val prefs = getSharedPreferences("alan_rip_dpi_prefs", Context.MODE_PRIVATE)
+                    val effMode = splitTunnelMode.ifBlank { prefs.getString("splitTunnelMode", "ALL") ?: "ALL" }.uppercase()
+                    val effPkgs = if (splitTunnelPackages.isNotEmpty()) {
+                        splitTunnelPackages
+                    } else {
+                        (prefs.getString("splitTunnelPackagesCsv", "") ?: "")
+                            .split(",")
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .toSet()
+                    }
+
+                    if (effMode == "INCLUDE" && effPkgs.isNotEmpty()) {
+                        var addedAny = false
+                        for (pkg in effPkgs) {
+                            if (pkg != packageName) {
+                                try {
+                                    builder.addAllowedApplication(pkg)
+                                    addedAny = true
+                                } catch (_: Throwable) {}
+                            }
+                        }
+                        if (!addedAny) {
+                            try { builder.addDisallowedApplication(packageName) } catch (_: Throwable) {}
+                        }
+                    } else {
+                        try { builder.addDisallowedApplication(packageName) } catch (_: Throwable) {}
+                        if (effMode == "EXCLUDE") {
+                            for (pkg in effPkgs) {
+                                try { builder.addDisallowedApplication(pkg) } catch (_: Throwable) {}
+                            }
+                        }
                     }
 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -373,42 +414,56 @@ class AlanVpnService : VpnService() {
         }
     }
 
+    fun updateNotificationLive(profileTitle: String, vectorLabel: String, speedLine: String) {
+        lastNotifSpeedLine = speedLine
+        updateNotificationSummary(profileTitle, vectorLabel)
+    }
+
     private fun buildForegroundNotification(profileTitle: String, vectorLabel: String): Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val openPending = PendingIntent.getActivity(
-            this,
-            100,
-            openIntent,
+            this, 100, openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val stopIntent = Intent(this, AlanVpnService::class.java).apply {
-            action = ACTION_DISCONNECT_FROM_NOTIF
-        }
         val stopPending = PendingIntent.getService(
-            this,
-            101,
-            stopIntent,
+            this, 101,
+            Intent(this, AlanVpnService::class.java).apply { action = ACTION_DISCONNECT_FROM_NOTIF },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val reconnectPending = PendingIntent.getService(
+            this, 102,
+            Intent(this, AlanVpnService::class.java).apply { action = ACTION_RECONNECT_FROM_NOTIF },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val bestPending = PendingIntent.getService(
+            this, 103,
+            Intent(this, AlanVpnService::class.java).apply { action = ACTION_BEST_SERVER_FROM_NOTIF },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val contentText = if (vectorLabel.isNotBlank()) {
-            "$profileTitle  •  $vectorLabel"
+        val safeTitle = profileTitle.trim().ifBlank { APP_NAME }
+        val detailLine = if (vectorLabel.isNotBlank()) {
+            "$lastNotifSpeedLine  •  $vectorLabel"
         } else {
-            profileTitle
+            lastNotifSpeedLine
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle(APP_NAME)
-            .setContentText(contentText)
+            .setContentTitle(safeTitle)
+            .setContentText(detailLine)
+            .setSubText(APP_NAME)
+            .setStyle(NotificationCompat.BigTextStyle().bigText("$detailLine\n$APP_NAME • AlanTUN Active"))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setContentIntent(openPending)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "قطع اتصال", stopPending)
+            .addAction(android.R.drawable.ic_popup_sync, "اتصال مجدد", reconnectPending)
+            .addAction(android.R.drawable.ic_menu_compass, "بهترین سرور", bestPending)
             .build()
     }
 }

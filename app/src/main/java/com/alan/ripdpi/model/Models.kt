@@ -3,7 +3,7 @@ package com.alan.ripdpi.model
 import java.util.Locale
 
 const val APP_NAME = "Alan-RIP-Dpi"
-const val APP_VERSION = "1.6.0"
+const val APP_VERSION = "1.7.0"
 
 enum class EngineState {
     CONNECTED,
@@ -67,43 +67,18 @@ data class BypassVector(
 object VectorCatalog {
 
     val AUTOPILOT_PRIORITY_IDS: List<String> = listOf(
-        "VEC-21",
-        "VEC-22",
-        "VEC-01",
-        "VEC-18",
-        "VEC-17",
-        "VEC-19",
-        "VEC-20",
-        "VEC-23",
-        "VEC-04",
-        "VEC-02",
-        "VEC-03",
-        "VEC-05",
-        "VEC-06",
-        "VEC-07",
-        "VEC-08",
-        "VEC-09",
-        "VEC-10",
-        "VEC-15",
-        "VEC-16",
-        "VEC-11",
-        "VEC-13",
-        "VEC-14",
-        "VEC-12",
-        "VEC-00"
+        "VEC-27", "VEC-28", "VEC-24", "VEC-25", "VEC-26",
+        "VEC-19", "VEC-20", "VEC-21", "VEC-22", "VEC-01",
+        "VEC-18", "VEC-17", "VEC-23", "VEC-04", "VEC-02",
+        "VEC-03", "VEC-05", "VEC-06", "VEC-07", "VEC-08",
+        "VEC-09", "VEC-10", "VEC-15", "VEC-16", "VEC-11",
+        "VEC-13", "VEC-14", "VEC-12", "VEC-00"
     )
 
     val FAST_LAB_VECTOR_IDS: List<String> = listOf(
-        "VEC-21",
-        "VEC-22",
-        "VEC-23",
-        "VEC-01",
-        "VEC-18",
-        "VEC-17",
-        "VEC-19",
-        "VEC-20",
-        "VEC-04",
-        "VEC-00"
+        "VEC-27", "VEC-28", "VEC-24", "VEC-25", "VEC-26",
+        "VEC-21", "VEC-22", "VEC-23", "VEC-01", "VEC-18",
+        "VEC-17", "VEC-19", "VEC-20", "VEC-04", "VEC-00"
     )
 
     private val RAW_REGISTRY: List<BypassVector> = listOf(
@@ -370,6 +345,63 @@ object VectorCatalog {
             outerVersion = 0x0301,
             hybridMode = "chameleon_interleave",
             uplinkMssClamp = 1380,
+            coalesceFlight2 = false
+        ),
+        BypassVector(
+            vectorId = "VEC-27",
+            codeName = "Regional PMTU Guard (1180B)",
+            family = "COALESCE",
+            summary = "RFC 4-record framing + strict <=1180B segment ceiling against provincial PMTU blackholes",
+            outerVersion = 0x0303,
+            recordEnvelope = "rfc_dot_keyshare_4rec",
+            uplinkMssClamp = 1180,
+            hybridMode = "regional_pmtu_1180",
+            coalesceFlight2 = false
+        ),
+        BypassVector(
+            vectorId = "VEC-28",
+            codeName = "Anti-16KB Flow-Stall",
+            family = "PROPRIETARY",
+            summary = "Flights 1-6 asymmetric 0x17 slicing + 920B sustained pacing against regional 16KB drops",
+            preamble = "2xzero",
+            outerVersion = 0x0304,
+            fragFlights = 6,
+            uplinkMssClamp = 920,
+            hybridMode = "anti_16kb_flow_stall",
+            coalesceFlight2 = true
+        ),
+        BypassVector(
+            vectorId = "VEC-24",
+            codeName = "Record-Boundary CWND Pacer",
+            family = "COALESCE",
+            summary = "RFC 4-record dot/KeyShare framing with Token-Bucket CWND upload pacing (No OOB)",
+            outerVersion = 0x0303,
+            recordEnvelope = "rfc_dot_keyshare_4rec",
+            uplinkMssClamp = 980,
+            hybridMode = "cwnd_token_bucket",
+            coalesceFlight2 = false
+        ),
+        BypassVector(
+            vectorId = "VEC-25",
+            codeName = "Multi-Flight Asymmetric Desync",
+            family = "PROPRIETARY",
+            summary = "Flights 1-4 asymmetric 0x17 frame slicing with 4MB RX / 96KB TX anti-stall buffer",
+            preamble = "2xzero",
+            outerVersion = 0x0304,
+            fragFlights = 4,
+            uplinkMssClamp = 1160,
+            hybridMode = "multiflight_asymmetric_0x17",
+            coalesceFlight2 = true
+        ),
+        BypassVector(
+            vectorId = "VEC-26",
+            codeName = "Fast-Path Offload Bypass",
+            family = "PROPRIETARY",
+            summary = "NIC TSO/LSO offload bypass on handshake + Zero-Copy Bulk relay after 16KB",
+            outerVersion = 0x0303,
+            fragFlights = 3,
+            uplinkMssClamp = 1240,
+            hybridMode = "fastpath_nic_offload_bypass",
             coalesceFlight2 = false
         ),
         BypassVector(

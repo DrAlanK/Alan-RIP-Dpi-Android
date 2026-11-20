@@ -132,7 +132,7 @@ data class EngineSettings(
     val manualVectorId: String = "VEC-01",
     val forwardStrideBytes: Int = 400,
     val strideJitterBytes: Int = 32,
-    val tunMtu: Int = 1400,
+    val tunMtu: Int = 1360,
     val tunDns: String = "1.1.1.1",
     val socksPort: Int = 10808,
     val httpPort: Int = 10809,
@@ -171,7 +171,8 @@ data class ScanResultRow(
     val score: Float = 0f,
     val detail: String = "",
     val countryCode: String = "UN",
-    val flagEmoji: String = ""
+    val flagEmoji: String = "",
+    val uploadKbps: Float = 0f
 )
 
 data class ScanUiState(
@@ -269,6 +270,7 @@ interface AlanEngineController {
         get() = MutableStateFlow(emptyList())
 
     fun toggleConnection()
+    fun reconnectActiveTunnel() {}
     fun huntBestAndConnect()
     fun startScanner(
         mode: String,
@@ -334,7 +336,8 @@ interface AlanEngineController {
         scopeMode: String,
         selectedIndices: List<Int>,
         autoConnect: Boolean,
-        useCleanIp: Boolean = false
+        useCleanIp: Boolean = false,
+        selectedVectorIds: List<String> = emptyList()
     ) {}
 
     fun startCleanIpScan(

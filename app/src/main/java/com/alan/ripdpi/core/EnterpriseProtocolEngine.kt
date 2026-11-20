@@ -403,7 +403,7 @@ object EnterpriseProtocolEngine {
         bridgePort: Int = settings.bridgePort
     ): String {
         val root = JSONObject()
-        root.put("log", JSONObject().put("loglevel", "warning"))
+        root.put("log", JSONObject().put("loglevel", "debug"))
 
         val dnsObj = JSONObject()
         val serversArr = JSONArray()

@@ -4,6 +4,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -79,16 +80,8 @@ private fun sanitizePersianStatusLine(raw: String, progress: Int): String {
 }
 
 private fun sanitizeCleanServerTitle(rawName: String, fallbackProto: String): String {
-    var s = rawName.trim()
-    // Remove bracketed prefixes like [NL-01] or [⚡120ms] and mixed Persian country prefixes when followed by Latin hostnames
-    s = Regex("""\[[^\]]*\]""").replace(s, "").trim()
-    s = s.replace("VLESS · ", "").replace("VMESS · ", "").replace("TROJAN · ", "")
-    // Strip leading flags and Persian words if the rest of the name is Latin/ASCII
-    val asciiPart = Regex("""[A-Za-z0-9._-]{4,}.*$""").find(s)?.value?.trim()
-    if (!asciiPart.isNullOrBlank()) {
-        return asciiPart.trimStart('•', '-', '|', '·', ' ')
-    }
-    return s.trimStart('•', '-', '|', '·', ' ').ifBlank { fallbackProto }
+    val clean = rawName.trim()
+    return if (clean.isNotBlank()) clean else fallbackProto
 }
 
 @Composable
@@ -113,7 +106,8 @@ fun HomeTabScreen(
     onSelectProfile: (Int) -> Unit,
     onSetTunnelMode: (String) -> Unit = {},
     onOpenSplitTunnelDialog: () -> Unit = {},
-    onOpenDohScanner: () -> Unit = {}
+    onOpenDohScanner: () -> Unit = {},
+    onReconnect: () -> Unit = onToggleConnection
 ) {
     val p = LocalAlanPalette.current
     var showAutoLocationSheet by remember { mutableStateOf(false) }
@@ -273,7 +267,7 @@ fun HomeTabScreen(
                                 .height(34.dp)
                                 .alanGlassCard(cornerRadius = 11.dp)
                                 .clickable {
-                                    if (isPureAutoMode) onActivateAutoMode(true) else onToggleConnection()
+                                    if (isPureAutoMode) onActivateAutoMode(true) else onReconnect()
                                 }
                                 .padding(horizontal = 11.dp)
                         ) {
@@ -1082,11 +1076,12 @@ private fun LiveRouteTimelineDialog(
 @Composable
 fun ScannerTabScreen(
     profiles: List<ProfileItem>,
+    vectors: List<VectorSpec> = emptyList(),
     scanRows: List<ScanResultRow>,
     scanState: ScanUiState,
     forcedTargetIndex: Int?,
     onConsumedForcedTarget: () -> Unit,
-    onStartMultiMethodScan: (scopeMode: String, selectedIndices: List<Int>, autoConnect: Boolean, useCleanIp: Boolean) -> Unit,
+    onStartMultiMethodScan: (scopeMode: String, selectedIndices: List<Int>, autoConnect: Boolean, useCleanIp: Boolean, selectedVectorIds: List<String>) -> Unit,
     onStopScan: () -> Unit,
     onImportFromClipboard: () -> Unit,
     onApplyVectorSingle: (vectorId: String, targetIndex: Int, endpoint: String) -> Unit,
@@ -1095,9 +1090,12 @@ fun ScannerTabScreen(
     val p = LocalAlanPalette.current
     var scopeMode by rememberSaveable { mutableStateOf("single") }
     var autoConnectFirst by rememberSaveable { mutableStateOf(true) }
-    var useCleanIpInScan by rememberSaveable { mutableStateOf(true) }
+    var useCleanIpInScan by rememberSaveable { mutableStateOf(false) }
     var showMultiPicker by remember { mutableStateOf(false) }
+    var showVectorPicker by remember { mutableStateOf(false) }
+    var localConnectLock by remember { mutableStateOf(false) }
     val selectedMultiIndices = remember { mutableStateListOf<Int>() }
+    val selectedVectorIds = remember { mutableStateListOf<String>() }
 
     val defaultSelectedIdx = remember(profiles) {
         profiles.indexOfFirst { it.isSelected }.let { if (it >= 0) it else 0 }
@@ -1111,6 +1109,15 @@ fun ScannerTabScreen(
             onConsumedForcedTarget()
         }
     }
+
+    LaunchedEffect(scanState.isRunning, scanState.mode) {
+        if (scanState.isRunning) {
+            localConnectLock = false
+        }
+    }
+
+    val isAutoConnecting = scanState.mode == "auto_connecting" || localConnectLock
+    val cardsLocked = scanState.isRunning || isAutoConnecting
 
     val profileOptions = remember(profiles) {
         profiles.mapIndexed { idx, prof ->
@@ -1129,17 +1136,18 @@ fun ScannerTabScreen(
     )
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
+        // Compact Scope Switcher
         Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .alanNeuInset(cornerRadius = 15.dp)
-                .padding(5.dp)
+                .alanNeuInset(cornerRadius = 13.dp)
+                .padding(4.dp)
         ) {
             listOf(
                 "single" to "یک کانفیگ",
@@ -1151,12 +1159,12 @@ fun ScannerTabScreen(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .weight(1f)
-                        .height(36.dp)
+                        .height(32.dp)
                         .then(
                             if (sel) {
-                                Modifier.alanGlassCard(highlighted = true, cornerRadius = 11.dp)
+                                Modifier.alanGlassCard(highlighted = true, cornerRadius = 10.dp)
                             } else {
-                                Modifier.clip(RoundedCornerShape(11.dp))
+                                Modifier.clip(RoundedCornerShape(10.dp))
                             }
                         )
                         .clickable { scopeMode = key }
@@ -1165,18 +1173,19 @@ fun ScannerTabScreen(
                         text = label,
                         color = if (sel) p.accentGold else p.textSecondary,
                         fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold,
-                        fontSize = 11.5.sp
+                        fontSize = 11.sp
                     )
                 }
             }
         }
 
+        // Compact Controls Card
         Column(
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .alanGlassCard(cornerRadius = 18.dp)
-                .padding(14.dp)
+                .alanGlassCard(cornerRadius = 16.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             when (scopeMode) {
                 "single" -> {
@@ -1186,21 +1195,21 @@ fun ScannerTabScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("کانفیگی در لیست نیست؛ از کلیپ‌بورد وارد کنید:", color = p.textSecondary, fontSize = 11.5.sp, modifier = Modifier.weight(1f))
+                            Text("کانفیگی نیست؛ از کلیپ‌بورد وارد کنید:", color = p.textSecondary, fontSize = 11.sp, modifier = Modifier.weight(1f))
                             Box(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
-                                    .height(36.dp)
-                                    .alanGlassCard(cornerRadius = 10.dp)
+                                    .height(32.dp)
+                                    .alanGlassCard(cornerRadius = 9.dp)
                                     .clickable { onImportFromClipboard() }
-                                    .padding(horizontal = 12.dp)
+                                    .padding(horizontal = 10.dp)
                             ) {
-                                Text("افزودن کلیپ‌بورد", color = p.accentGold, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                Text("افزودن کلیپ‌بورد", color = p.accentGold, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
                             }
                         }
                     } else {
                         AlanCustomSelectBox(
-                            label = "انتخاب کانفیگ هدف",
+                            label = "کانفیگ هدف",
                             selectedValue = singleTargetIdx.coerceIn(profiles.indices).toString(),
                             options = profileOptions,
                             onSelect = { singleTargetIdx = it.toIntOrNull() ?: 0 }
@@ -1213,97 +1222,201 @@ fun ScannerTabScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .alanNeuInset(cornerRadius = 13.dp)
+                            .alanNeuInset(cornerRadius = 11.dp)
                             .clickable { showMultiPicker = true }
-                            .padding(horizontal = 13.dp, vertical = 12.dp)
+                            .padding(horizontal = 11.dp, vertical = 9.dp)
                     ) {
                         Text(
-                            text = if (selectedMultiIndices.isEmpty()) "انتخاب چند کانفیگ از لیست (${profiles.size} موجود)..." else "${selectedMultiIndices.size} کانفیگ برای تست انتخاب شد",
+                            text = if (selectedMultiIndices.isEmpty()) "انتخاب چند کانفیگ (${profiles.size} موجود)..." else "${selectedMultiIndices.size} کانفیگ انتخاب شد",
                             color = p.textPrimary,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
+                            fontSize = 11.5.sp
                         )
-                        Text("انتخاب", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp)
+                        Text("انتخاب", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp)
                     }
                 }
                 else -> {
                     Text(
-                        text = "اسکن هوشمند متدها روی تمام ${profiles.size} کانفیگ موجود در مخزن",
+                        text = "اسکن موازی متدها روی کل مخزن (${profiles.size} کانفیگ)",
                         color = p.textSecondary,
-                        fontSize = 11.5.sp
+                        fontSize = 11.sp
                     )
                 }
             }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+            // Custom Vector Selector Accordion
+            Column(
+                verticalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .alanNeuInset(cornerRadius = 12.dp)
-                    .clickable { autoConnectFirst = !autoConnectFirst }
-                    .padding(horizontal = 12.dp, vertical = 9.dp)
+                    .alanNeuInset(cornerRadius = 11.dp)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
-                Text("اتصال خودکار به سریع‌ترین متد تاییدشده", color = p.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 11.5.sp, modifier = Modifier.weight(1f))
-                AlanPillSwitch(checked = autoConnectFirst, onCheckedChange = { autoConnectFirst = it })
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showVectorPicker = !showVectorPicker }
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (selectedVectorIds.isEmpty()) "متدهای اسکن: همه متدها (${vectors.size})" else "متدهای انتخابی (${selectedVectorIds.size} متد)",
+                            color = p.textPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = if (selectedVectorIds.isEmpty()) "اولویت با ۵ متد جدید (VEC-27, 28, 24, 25, 26)" else selectedVectorIds.joinToString(", "),
+                            color = p.accentGold,
+                            fontSize = 9.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = if (showVectorPicker) "بستن ▲" else "انتخاب متدها ▼",
+                        color = p.emerald,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 10.5.sp
+                    )
+                }
+
+                if (showVectorPicker && vectors.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(28.dp)
+                                .alanGlassCard(highlighted = selectedVectorIds.isEmpty(), cornerRadius = 8.dp)
+                                .clickable { selectedVectorIds.clear() }
+                        ) {
+                            Text("همه متدها", color = if (selectedVectorIds.isEmpty()) p.accentGold else p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                        }
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1.3f)
+                                .height(28.dp)
+                                .alanGlassCard(cornerRadius = 8.dp)
+                                .clickable {
+                                    selectedVectorIds.clear()
+                                    selectedVectorIds.addAll(listOf("VEC-27", "VEC-28", "VEC-24", "VEC-25", "VEC-26"))
+                                }
+                        ) {
+                            Text("۵ متد جدید (v1.7)", color = p.emerald, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                        }
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                    ) {
+                        vectors.forEach { vSpec ->
+                            val picked = vSpec.id in selectedVectorIds
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .then(
+                                        if (picked) Modifier.clip(RoundedCornerShape(8.dp)).background(p.accentGold)
+                                        else Modifier.alanGlassCard(cornerRadius = 8.dp)
+                                    )
+                                    .clickable {
+                                        if (picked) selectedVectorIds.remove(vSpec.id) else selectedVectorIds.add(vSpec.id)
+                                    }
+                                    .padding(horizontal = 9.dp)
+                            ) {
+                                LtrContent {
+                                    Text(
+                                        text = vSpec.id,
+                                        color = if (picked) p.onAccent else p.textSecondary,
+                                        fontWeight = if (picked) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .alanNeuInset(cornerRadius = 12.dp)
-                    .clickable { useCleanIpInScan = !useCleanIpInScan }
-                    .padding(horizontal = 12.dp, vertical = 9.dp)
-            ) {
-                Text("تزریق خودکار IP تمیز کلادفلر حین تست", color = p.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 11.5.sp, modifier = Modifier.weight(1f))
-                AlanPillSwitch(checked = useCleanIpInScan, onCheckedChange = { useCleanIpInScan = it })
+            // Two Compact Side-by-Side Toggles
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .weight(1f)
+                        .alanNeuInset(cornerRadius = 10.dp)
+                        .clickable { autoConnectFirst = !autoConnectFirst }
+                        .padding(horizontal = 9.dp, vertical = 6.dp)
+                ) {
+                    Text("اتصال خودکار", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
+                    AlanPillSwitch(checked = autoConnectFirst, onCheckedChange = { autoConnectFirst = it })
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .weight(1f)
+                        .alanNeuInset(cornerRadius = 10.dp)
+                        .clickable { useCleanIpInScan = !useCleanIpInScan }
+                        .padding(horizontal = 9.dp, vertical = 6.dp)
+                ) {
+                    Text("IP تمیز CF", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
+                    AlanPillSwitch(checked = useCleanIpInScan, onCheckedChange = { useCleanIpInScan = it })
+                }
             }
 
             if (scanState.isRunning) {
-                Box(modifier = Modifier.fillMaxWidth().height(6.dp).alanNeuInset(cornerRadius = 3.dp)) {
-                    Box(modifier = Modifier.fillMaxWidth(animScanPct).height(6.dp).clip(RoundedCornerShape(3.dp)).background(p.accentGold))
+                Box(modifier = Modifier.fillMaxWidth().height(5.dp).alanNeuInset(cornerRadius = 3.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth(animScanPct).height(5.dp).clip(RoundedCornerShape(3.dp)).background(p.accentGold))
                 }
             }
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .height(42.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .height(38.dp)
+                        .clip(RoundedCornerShape(11.dp))
                         .background(if (scanState.isRunning) p.danger else p.accentGold)
                         .clickable {
                             if (scanState.isRunning) {
                                 onStopScan()
                             } else {
+                                localConnectLock = false
                                 val indices = when (scopeMode) {
                                     "single" -> listOf(singleTargetIdx)
                                     "selected" -> selectedMultiIndices.toList()
                                     else -> profiles.indices.toList()
                                 }
-                                onStartMultiMethodScan(scopeMode, indices, autoConnectFirst, useCleanIpInScan)
+                                onStartMultiMethodScan(scopeMode, indices, autoConnectFirst, useCleanIpInScan, selectedVectorIds.toList())
                             }
                         }
-                        .padding(horizontal = 18.dp)
+                        .padding(horizontal = 16.dp)
                 ) {
                     Text(
-                        text = if (scanState.isRunning) "توقف اسکن" else "شروع اسکن متد",
+                        text = if (scanState.isRunning) "توقف اسکن" else "شروع اسکن",
                         color = if (scanState.isRunning) Color.White else p.onAccent,
                         fontWeight = FontWeight.ExtraBold,
-                        fontSize = 12.5.sp
+                        fontSize = 12.sp
                     )
                 }
 
                 Text(
                     text = scanState.summary,
-                    color = p.textSecondary,
-                    fontSize = 11.sp,
+                    color = if (isAutoConnecting) p.accentGold else p.textSecondary,
+                    fontWeight = if (isAutoConnecting) FontWeight.Bold else FontWeight.Normal,
+                    fontSize = 10.5.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -1311,9 +1424,30 @@ fun ScannerTabScreen(
             }
         }
 
+        // Prominent UI Lock Banner when Auto-Connecting to prevent race-condition crashes
+        if (isAutoConnecting) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alanGlassCard(highlighted = true, cornerRadius = 13.dp)
+                    .padding(horizontal = 12.dp, vertical = 9.dp)
+            ) {
+                Text(
+                    text = "⚡ در حال اتصال خودکار به بهترین متد؛ لطفاً روی متدها کلیک نکنید...",
+                    color = p.accentGold,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        // Compact Verified Results List
         LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(9.dp),
-            contentPadding = PaddingValues(bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+            contentPadding = PaddingValues(bottom = 72.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
@@ -1323,57 +1457,85 @@ fun ScannerTabScreen(
                 key = { idx, row -> "$idx-${row.targetIndex}-${row.itemId}" }
             ) { _, row ->
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(9.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .alanGlassCard(highlighted = row.rank == 1, cornerRadius = 16.dp)
-                        .padding(13.dp)
+                        .alanGlassCard(highlighted = row.rank == 1, cornerRadius = 14.dp)
+                        .padding(horizontal = 12.dp, vertical = 9.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(
-                            text = "#${row.rank}  ${row.title.ifBlank { row.itemId }}",
-                            color = if (row.rank == 1) p.accentGold else p.textPrimary,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "#${row.rank}  ${row.title.ifBlank { row.itemId }}",
+                                color = if (row.rank == 1) p.accentGold else p.textPrimary,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (row.detail.isNotBlank()) {
+                                LtrContent {
+                                    Text(
+                                        text = row.detail,
+                                        color = p.textMuted,
+                                        fontSize = 9.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
                         LtrContent {
                             Text(
                                 text = "${row.tunnelMs} ms",
                                 color = p.emerald,
                                 fontWeight = FontWeight.ExtraBold,
-                                fontSize = 13.sp
+                                fontSize = 12.5.sp
                             )
                         }
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
                                 .weight(1f)
-                                .height(38.dp)
-                                .alanNeuInset(cornerRadius = 11.dp)
-                                .clickable { onApplyVectorSingle(row.itemId, row.targetIndex, row.endpoint) }
+                                .height(33.dp)
+                                .alanNeuInset(cornerRadius = 9.dp)
+                                .clickable(enabled = !cardsLocked) {
+                                    onApplyVectorSingle(row.itemId, row.targetIndex, row.endpoint)
+                                }
                         ) {
-                            Text("ثبت متد", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                            Text(
+                                text = "ثبت متد",
+                                color = if (cardsLocked) p.textMuted else p.textPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
                         }
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
                                 .weight(1.25f)
-                                .height(38.dp)
-                                .clip(RoundedCornerShape(11.dp))
-                                .background(p.accentGold)
-                                .clickable { onApplyVectorAndConnect(row.itemId, row.targetIndex, row.endpoint) }
+                                .height(33.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(if (cardsLocked) p.cardBorder else p.accentGold)
+                                .clickable(enabled = !cardsLocked) {
+                                    localConnectLock = true
+                                    onApplyVectorAndConnect(row.itemId, row.targetIndex, row.endpoint)
+                                }
                         ) {
-                            Text("ثبت و اتصال فوری", color = p.onAccent, fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp)
+                            Text(
+                                text = if (isAutoConnecting) "در حال اتصال..." else "ثبت و اتصال",
+                                color = if (cardsLocked) p.textMuted else p.onAccent,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.sp
+                            )
                         }
                     }
                 }

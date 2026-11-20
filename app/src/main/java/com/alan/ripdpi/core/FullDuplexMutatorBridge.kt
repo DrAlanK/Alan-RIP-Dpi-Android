@@ -1,6 +1,8 @@
 package com.alan.ripdpi.core
 
 import android.os.ParcelFileDescriptor
+import android.system.Os
+import android.system.OsConstants
 import com.alan.ripdpi.model.BypassVector
 import com.alan.ripdpi.model.VectorCatalog
 import com.alan.ripdpi.vpn.AlanVpnService
@@ -9,6 +11,8 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.io.OutputStream
+import java.net.BindException
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -24,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.SocketFactory
+import kotlin.random.Random
 
 class FullDuplexMutatorBridge(
     val listenPort: Int = 20809,
@@ -39,10 +44,14 @@ class FullDuplexMutatorBridge(
 ) {
 
     companion object {
-        private const val SOCKET_BUFFER_SIZE = 4 * 1024 * 1024
+        private const val RX_SOCK_BUF = 4 * 1024 * 1024
+        private const val TX_ASYMMETRIC_BUF = 98304
+        private const val TX_BULK_FASTPATH_BUF = 524288
+        private const val TCP_MAXSEG_OPT = 2
+        private const val TCP_MAXSEG_VALUE = 1220
         private const val STREAM_CHUNK_SIZE = 65536
         private const val UPLINK_SHIELD_WINDOW_BYTES = 16384
-        private const val CONNECT_TIMEOUT_MS = 6000
+        private const val CONNECT_TIMEOUT_MS = 6500
         private const val HANDSHAKE_READ_TIMEOUT_MS = 6500
 
         private val dohResolutionCache = ConcurrentHashMap<String, InetAddress>()
@@ -196,9 +205,15 @@ class FullDuplexMutatorBridge(
         AlanNativeSocket.ensureLoaded()
         val srv = ServerSocket()
         srv.reuseAddress = true
-        srv.bind(InetSocketAddress("127.0.0.1", listenPort), 256)
+        try {
+            srv.bind(InetSocketAddress("127.0.0.1", listenPort), 256)
+        } catch (_: BindException) {
+            onLog?.invoke("[Bridge] Port $listenPort busy (EADDRINUSE) -> auto-allocating clean ephemeral port")
+            srv.bind(InetSocketAddress("127.0.0.1", 0), 256)
+        }
         boundPort = srv.localPort
         serverSocket = srv
+        onLog?.invoke("[Bridge] Listening 127.0.0.1:$boundPort (RX=4MB, TX=96KB, TCP_MAXSEG=$TCP_MAXSEG_VALUE, socks5Dyn=$socks5DynamicMode)")
         ioPool.execute { acceptLoop(srv) }
         return boundPort
     }
@@ -246,6 +261,7 @@ class FullDuplexMutatorBridge(
             if (picked != null) {
                 dohResolutionCache[clean] = picked
                 cachedAddressRef.set(clean to picked)
+                onLog?.invoke("[DNS] $clean -> ${picked.hostAddress} (System)")
                 return picked
             }
         } catch (_: Throwable) {
@@ -270,6 +286,7 @@ class FullDuplexMutatorBridge(
                                         val resolved = InetAddress.getByName(ipStr)
                                         dohResolutionCache[clean] = resolved
                                         cachedAddressRef.set(clean to resolved)
+                                        onLog?.invoke("[DoH] $clean -> $ipStr (Anti-Poison)")
                                         return resolved
                                     }
                                 }
@@ -399,9 +416,137 @@ class FullDuplexMutatorBridge(
         }
     }
 
+    private fun transmitUplinkStream(
+        sid: Int,
+        remoteSock: Socket,
+        remoteOut: OutputStream,
+        dataArr: ByteArray,
+        dataLen: Int,
+        vec: BypassVector,
+        flightNum: Int,
+        sessionTxBytes: Long,
+        stride: Int,
+        jitter: Int,
+        fastpathUnlocked: Boolean
+    ): Boolean {
+        if (dataLen <= 0) return fastpathUnlocked
+
+        // VEC-27 / VEC-28: Strict Regional PMTU (<=1140B) & Anti-16KB Flow-Stall (<=880B) ceiling on ALL flights
+        if (vec.hybridMode == "regional_pmtu_1180" || vec.hybridMode == "anti_16kb_flow_stall") {
+            val maxCap = if (vec.hybridMode == "regional_pmtu_1180") 1140 else 880
+            if (dataLen > maxCap) {
+                var pos = 0
+                var cIdx = 0
+                while (pos < dataLen) {
+                    val jit = Random.nextInt(-40, 21)
+                    val step = (maxCap + jit).coerceIn(360, maxCap).coerceAtMost(dataLen - pos)
+                    remoteOut.write(dataArr, pos, step)
+                    remoteOut.flush()
+                    pos += step
+                    cIdx++
+                    if (pos < dataLen && cIdx % 4 == 0) {
+                        try { Thread.sleep(0L, 400_000) } catch (_: Throwable) {}
+                    }
+                }
+            } else {
+                remoteOut.write(dataArr, 0, dataLen)
+                remoteOut.flush()
+            }
+            txBytesTotal.addAndGet(dataLen.toLong())
+            return fastpathUnlocked
+        }
+
+        // VEC-26: Unlock 512KB SO_SNDBUF & 32KB bulk relay after initial 16KB or Flight 4
+        if (vec.hybridMode == "fastpath_nic_offload_bypass") {
+            var unlocked = fastpathUnlocked
+            if (!unlocked && (sessionTxBytes >= 16384L || flightNum >= 4)) {
+                try { remoteSock.sendBufferSize = TX_BULK_FASTPATH_BUF } catch (_: Throwable) {}
+                onLog?.invoke("[S#%04d] VEC-26 Bulk Fast-Path unlocked (tx=${sessionTxBytes}B, F$flightNum -> SO_SNDBUF=512KB)".format(sid))
+                unlocked = true
+            }
+            if (unlocked) {
+                var pos = 0
+                val step = 32768
+                while (pos < dataLen) {
+                    val sz = minOf(step, dataLen - pos)
+                    remoteOut.write(dataArr, pos, sz)
+                    remoteOut.flush()
+                    pos += sz
+                }
+                txBytesTotal.addAndGet(dataLen.toLong())
+                return true
+            }
+        }
+
+        // VEC-24: Token-Bucket CWND Pacing (880..1120B, 0.5ms every 3 chunks on first 48KB)
+        if (vec.hybridMode == "cwnd_token_bucket") {
+            if (sessionTxBytes <= 49152L && dataLen > 900) {
+                var pos = 0
+                var segCnt = 0
+                while (pos < dataLen) {
+                    val step = Random.nextInt(880, 1121).coerceAtMost(dataLen - pos)
+                    remoteOut.write(dataArr, pos, step)
+                    remoteOut.flush()
+                    pos += step
+                    segCnt++
+                    if (pos < dataLen && segCnt % 3 == 0) {
+                        try { Thread.sleep(0L, 500_000) } catch (_: Throwable) {}
+                    }
+                }
+                txBytesTotal.addAndGet(dataLen.toLong())
+                return fastpathUnlocked
+            }
+        }
+
+        val clamp = vec.uplinkMssClamp
+        if (flightNum in 2..5 && dataLen > 360 && sessionTxBytes <= 32768L && clamp > 0) {
+            val baseStep = minOf(clamp, maxOf(280, stride * 2))
+            var pos = 0
+            var segIdx = 0
+            while (pos < dataLen) {
+                val jb = minOf(40, jitter)
+                val jit = if (jb > 0) Random.nextInt(-jb, jb + 1) else 0
+                val step = (baseStep + jit).coerceIn(200, 1280).coerceAtMost(dataLen - pos)
+                remoteOut.write(dataArr, pos, step)
+                remoteOut.flush()
+                pos += step
+                segIdx++
+                if (pos < dataLen && segIdx % 3 == 0) {
+                    try { Thread.sleep(0L, 600_000) } catch (_: Throwable) {}
+                }
+            }
+            txBytesTotal.addAndGet(dataLen.toLong())
+            return fastpathUnlocked
+        }
+
+        if (dataLen > 1420 && clamp > 0) {
+            val maxSeg = clamp.coerceIn(512, 1380)
+            var pos = 0
+            var burstChunks = 0
+            while (pos < dataLen) {
+                val jit = Random.nextInt(-28, 29)
+                val step = (maxSeg + jit).coerceIn(420, 1380).coerceAtMost(dataLen - pos)
+                remoteOut.write(dataArr, pos, step)
+                remoteOut.flush()
+                pos += step
+                burstChunks++
+                if (pos < dataLen && burstChunks % 8 == 0) {
+                    try { Thread.sleep(0L, 400_000) } catch (_: Throwable) {}
+                }
+            }
+            txBytesTotal.addAndGet(dataLen.toLong())
+            return fastpathUnlocked
+        }
+
+        remoteOut.write(dataArr, 0, dataLen)
+        remoteOut.flush()
+        txBytesTotal.addAndGet(dataLen.toLong())
+        return fastpathUnlocked
+    }
+
     private fun handleSession(clientSock: Socket, sid: Int) {
         val cfg = routeRef.get()
-        if (cfg.remoteHost.isBlank()) {
+        if (cfg.remoteHost.isBlank() && !socks5DynamicMode) {
             try { clientSock.close() } catch (_: Throwable) {}
             return
         }
@@ -416,6 +561,10 @@ class FullDuplexMutatorBridge(
         try {
             clientSock.tcpNoDelay = true
             clientSock.keepAlive = true
+            try {
+                clientSock.receiveBufferSize = RX_SOCK_BUF
+                clientSock.sendBufferSize = RX_SOCK_BUF
+            } catch (_: Throwable) {}
 
             val (effectiveHost, effectivePort) = if (socks5DynamicMode) {
                 negotiateSocks5Target(clientSock) ?: return
@@ -431,6 +580,11 @@ class FullDuplexMutatorBridge(
             AlanVpnService.protectRawSocket(remoteSock)
             remoteSock.tcpNoDelay = true
             remoteSock.keepAlive = true
+            // Asymmetric 4MB RX / 96KB TX anti-bufferbloat tuning (Windows v1.5.0 parity)
+            try {
+                remoteSock.receiveBufferSize = RX_SOCK_BUF
+                remoteSock.sendBufferSize = TX_ASYMMETRIC_BUF
+            } catch (_: Throwable) {}
 
             val t0 = System.nanoTime()
             remoteSock.connect(InetSocketAddress(targetAddr, effectivePort), CONNECT_TIMEOUT_MS)
@@ -442,7 +596,6 @@ class FullDuplexMutatorBridge(
                 cOut.flush()
             }
 
-            // Re-affirm fwmark protection after connect in case IPv6/dual-stack created FD during connect
             AlanVpnService.protectRawSocket(remoteSock)
 
             clientPfd = try { ParcelFileDescriptor.fromSocket(clientSock) } catch (_: Throwable) { null }
@@ -450,10 +603,18 @@ class FullDuplexMutatorBridge(
             val clientFd = clientPfd?.fd ?: -1
             val remoteFd = remotePfd?.fd ?: -1
 
-            AlanNativeSocket.tuneTcpSocket(clientFd, SOCKET_BUFFER_SIZE)
-            AlanNativeSocket.tuneTcpSocket(remoteFd, SOCKET_BUFFER_SIZE)
+            // Set TCP_MAXSEG = 1220 to defeat regional PMTU blackholes
+            try {
+                remotePfd?.fileDescriptor?.let { fdesc ->
+                    Os.setsockoptInt(fdesc, OsConstants.IPPROTO_TCP, TCP_MAXSEG_OPT, TCP_MAXSEG_VALUE)
+                }
+            } catch (_: Throwable) {}
+
+            AlanNativeSocket.tuneTcpSocket(clientFd, RX_SOCK_BUF)
+            AlanNativeSocket.tuneTcpSocket(remoteFd, TX_ASYMMETRIC_BUF)
 
             val remoteOut = remoteSock.getOutputStream()
+            var sessionTxBytes = 0L
 
             if (!cfg.rawPassthrough) {
                 val firstData = readExactInitialFlight(clientSock, timeoutMs = HANDSHAKE_READ_TIMEOUT_MS)
@@ -483,7 +644,7 @@ class FullDuplexMutatorBridge(
                             customStride = cfg.customStride,
                             jitterBytes = cfg.jitterBytes
                         )
-                        onLog?.invoke("[S#%04d] TCP=%dms | %s: %s".format(sid, tcpMs, cfg.vector.vectorId, trace))
+                        onLog?.invoke("[S#%04d] %s:%d TCP=%dms | %s: %s".format(sid, targetAddr.hostAddress, effectivePort, tcpMs, cfg.vector.vectorId, trace))
                         sent
                     }
                     isHttpReq -> {
@@ -496,16 +657,20 @@ class FullDuplexMutatorBridge(
                             customStride = cfg.customStride,
                             jitterBytes = cfg.jitterBytes
                         )
-                        onLog?.invoke("[S#%04d] TCP=%dms | %s: %s".format(sid, tcpMs, cfg.vector.vectorId, trace))
+                        onLog?.invoke("[S#%04d] %s:%d TCP=%dms | %s: %s".format(sid, targetAddr.hostAddress, effectivePort, tcpMs, cfg.vector.vectorId, trace))
                         sent
                     }
                     else -> {
                         remoteOut.write(firstData)
                         remoteOut.flush()
+                        onLog?.invoke("[S#%04d] %s:%d TCP=%dms | RawFlight1=%dB".format(sid, targetAddr.hostAddress, effectivePort, tcpMs, firstData.size))
                         firstData.size
                     }
                 }
                 txBytesTotal.addAndGet(sentBytes.toLong())
+                sessionTxBytes += sentBytes.toLong()
+            } else {
+                onLog?.invoke("[S#%04d] %s:%d TCP=%dms | Direct Passthrough".format(sid, targetAddr.hostAddress, effectivePort, tcpMs))
             }
 
             remoteSock.soTimeout = 0
@@ -534,6 +699,7 @@ class FullDuplexMutatorBridge(
             var flightNum = if (cfg.rawPassthrough) 0 else 1
             var uplinkAppBytes = 0
             var oobShieldDone = false
+            var fastpathUnlocked = false
             val upBuf = ByteArray(STREAM_CHUNK_SIZE)
             val cIn: InputStream = clientSock.getInputStream()
 
@@ -542,6 +708,7 @@ class FullDuplexMutatorBridge(
                     val n = cIn.read(upBuf)
                     if (n <= 0) break
                     flightNum++
+                    sessionTxBytes += n.toLong()
 
                     var dataArr = upBuf
                     var dataLen = n
@@ -561,6 +728,10 @@ class FullDuplexMutatorBridge(
                     }
 
                     val vec = cfg.vector
+                    val isAsymMultiFlight = !cfg.rawPassthrough &&
+                        flightNum <= vec.fragFlights &&
+                        (vec.hybridMode == "multiflight_asymmetric_0x17" || vec.hybridMode == "anti_16kb_flow_stall")
+
                     val isMultiFrag = !cfg.rawPassthrough &&
                         vec.family == "FRAGMENT" &&
                         vec.fragFlights > 1 &&
@@ -568,40 +739,72 @@ class FullDuplexMutatorBridge(
                         vec.fragSliceMax > 0
 
                     val useShield = !cfg.rawPassthrough &&
-                        ((vec.uplinkOobShield && !oobShieldDone) || vec.uplinkMssClamp > 0) &&
+                        ((vec.uplinkOobShield && !oobShieldDone) || (vec.uplinkMssClamp > 0 && vec.hybridMode == "none")) &&
                         uplinkAppBytes < UPLINK_SHIELD_WINDOW_BYTES
 
-                    if (isMultiFrag) {
-                        val sentFrag = TlsByteMutator.transmitFragmentedBuffer(
-                            out = remoteOut,
-                            payload = dataArr,
-                            payloadLen = dataLen,
-                            minLen = vec.fragSliceMin,
-                            maxLen = vec.fragSliceMax,
-                            minDelayMs = vec.fragDelayMinMs,
-                            maxDelayMs = vec.fragDelayMaxMs
-                        )
-                        txBytesTotal.addAndGet(sentFrag.toLong())
-                        uplinkAppBytes += dataLen
-                    } else if (useShield) {
-                        val wantOob = vec.uplinkOobShield && !oobShieldDone && (dataArr[0].toInt() and 0xFF) == 0x17
-                        if (wantOob) oobShieldDone = true
-                        val sentSh = TlsByteMutator.transmitUplinkShieldFrame(
-                            sock = remoteSock,
-                            out = remoteOut,
-                            nativeFd = remoteFd,
-                            payload = dataArr,
-                            payloadLen = dataLen,
-                            injectOob = wantOob,
-                            mssClamp = vec.uplinkMssClamp
-                        )
-                        txBytesTotal.addAndGet(sentSh.toLong())
-                        uplinkAppBytes += dataLen
-                    } else {
-                        remoteOut.write(dataArr, 0, dataLen)
-                        remoteOut.flush()
-                        txBytesTotal.addAndGet(dataLen.toLong())
-                        uplinkAppBytes += dataLen
+                    when {
+                        cfg.rawPassthrough || vec.family == "DIRECT" -> {
+                            remoteOut.write(dataArr, 0, dataLen)
+                            remoteOut.flush()
+                            txBytesTotal.addAndGet(dataLen.toLong())
+                            uplinkAppBytes += dataLen
+                        }
+                        isAsymMultiFlight -> {
+                            val sentAsym = TlsByteMutator.transmitAsymmetricAppFlight(
+                                out = remoteOut,
+                                payload = dataArr,
+                                payloadLen = dataLen,
+                                flightIndex = flightNum,
+                                stride = cfg.customStride,
+                                jitter = cfg.jitterBytes
+                            )
+                            txBytesTotal.addAndGet(sentAsym.toLong())
+                            uplinkAppBytes += dataLen
+                        }
+                        isMultiFrag -> {
+                            val sentFrag = TlsByteMutator.transmitFragmentedBuffer(
+                                out = remoteOut,
+                                payload = dataArr,
+                                payloadLen = dataLen,
+                                minLen = vec.fragSliceMin,
+                                maxLen = vec.fragSliceMax,
+                                minDelayMs = vec.fragDelayMinMs,
+                                maxDelayMs = vec.fragDelayMaxMs
+                            )
+                            txBytesTotal.addAndGet(sentFrag.toLong())
+                            uplinkAppBytes += dataLen
+                        }
+                        useShield -> {
+                            val wantOob = vec.uplinkOobShield && !oobShieldDone && (dataArr[0].toInt() and 0xFF) == 0x17
+                            if (wantOob) oobShieldDone = true
+                            val sentSh = TlsByteMutator.transmitUplinkShieldFrame(
+                                sock = remoteSock,
+                                out = remoteOut,
+                                nativeFd = remoteFd,
+                                payload = dataArr,
+                                payloadLen = dataLen,
+                                injectOob = wantOob,
+                                mssClamp = vec.uplinkMssClamp
+                            )
+                            txBytesTotal.addAndGet(sentSh.toLong())
+                            uplinkAppBytes += dataLen
+                        }
+                        else -> {
+                            fastpathUnlocked = transmitUplinkStream(
+                                sid = sid,
+                                remoteSock = remoteSock,
+                                remoteOut = remoteOut,
+                                dataArr = dataArr,
+                                dataLen = dataLen,
+                                vec = vec,
+                                flightNum = flightNum,
+                                sessionTxBytes = sessionTxBytes,
+                                stride = cfg.customStride,
+                                jitter = cfg.jitterBytes,
+                                fastpathUnlocked = fastpathUnlocked
+                            )
+                            uplinkAppBytes += dataLen
+                        }
                     }
                 }
             } catch (_: Throwable) {
@@ -614,7 +817,8 @@ class FullDuplexMutatorBridge(
                 try { Thread.sleep(50L) } catch (_: InterruptedException) { break }
                 waitedMs += 50
             }
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            onLog?.invoke("[S#%04d] ERR ${cfg.remoteHost}:${cfg.remotePort} -> ${t.javaClass.simpleName}: ${t.message}".format(sid))
         } finally {
             liveSockets.remove(clientSock)
             liveSockets.remove(remoteSock)

@@ -554,7 +554,7 @@ fun ProfilesTabScreen(
                 "وارد کردن متنی / لینک گروهی" to {
                     showBatchImportDialog = true
                 },
-                "ساخت کانفیگ دستی (v2ray / AnyConnect / IKEv2 / L2TP)" to {
+                "ساخت کانفیگ دستی (v2ray / SOCKS5 / AnyConnect / IKEv2 / L2TP)" to {
                     editingIndex = -1
                 },
                 "مدیریت لینک‌های اشتراک (Subscriptions)" to {
@@ -759,6 +759,7 @@ private fun V2ServerRowCard(
             "ANYCONNECT", "OPENCONNECT" -> "ssl-vpn • tls"
             "IKEV2" -> "ipsec • udp"
             "L2TP" -> "l2tp • udp"
+            "SOCKS", "SOCKS5", "SOCKS4" -> "socks5 • tcp"
             else -> {
                 val net = when {
                     uriLow.contains("type=ws") || uriLow.contains("\"net\":\"ws\"") -> "ws"
@@ -791,12 +792,7 @@ private fun V2ServerRowCard(
     val isEntProto = protoUp in setOf("ANYCONNECT", "OPENCONNECT", "IKEV2", "L2TP")
     val vectorTag = if (isEntProto) "NATIVE" else item.cachedVectorId.ifBlank { item.preferredVectorId.ifBlank { "AUTO" } }
     val cleanTitle = remember(item.name, item.protocol, item.host) {
-        val noBrackets = Regex("""\[[^\]]*\]""").replace(item.name, "").trim()
-            .replace("VLESS · ", "")
-            .replace("VMESS · ", "")
-            .replace("TROJAN · ", "")
-            .trim()
-        noBrackets.ifBlank { "${item.protocol} (${item.host})" }
+        item.name.trim().ifBlank { "${item.protocol} (${item.host})" }
     }
 
     Row(
@@ -1306,6 +1302,7 @@ fun ConfigEditorSheet(
                                 SelectOptionItem("vmess", "VMess"),
                                 SelectOptionItem("trojan", "Trojan"),
                                 SelectOptionItem("ss", "Shadowsocks"),
+                                SelectOptionItem("socks", "SOCKS5 / SOCKS4"),
                                 SelectOptionItem("anyconnect", "Cisco AnyConnect (SSL)"),
                                 SelectOptionItem("ikev2", "IKEv2 / IPsec"),
                                 SelectOptionItem("l2tp", "L2TP / IPsec")
@@ -1314,6 +1311,7 @@ fun ConfigEditorSheet(
                                 protocol = it
                                 if (it == "ikev2" && portText == "443") portText = "500"
                                 else if (it == "l2tp" && portText == "443") portText = "1701"
+                                else if (it == "socks" && portText == "443") portText = "1080"
                                 else if (it == "anyconnect" && (portText == "500" || portText == "1701")) portText = "443"
                             },
                             modifier = Modifier.weight(1.1f)

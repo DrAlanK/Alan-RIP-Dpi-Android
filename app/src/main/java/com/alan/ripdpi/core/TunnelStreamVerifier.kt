@@ -3,7 +3,9 @@ package com.alan.ripdpi.core
 import kotlinx.coroutines.delay
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -579,4 +581,110 @@ object TunnelStreamVerifier {
 
         return LaneGeoPingResult(ok = true, latencyMs = pingMs, detail = "OK")
     }
+
+    data class DownloadCheckResult(
+        val ok: Boolean,
+        val bytesRead: Int,
+        val kbps: Float,
+        val reason: String
+    )
+
+    data class UploadCheckResult(
+        val ok: Boolean,
+        val bytesSent: Int,
+        val kbps: Float,
+        val reason: String
+    )
+
+    fun measureSustainedDownloadKbps(httpPort: Int, timeoutMs: Long = 5200L): DownloadCheckResult {
+        val urls = listOf(
+            "https://speed.cloudflare.com/__down?bytes=163840",
+            "https://www.gstatic.com/webp/gallery/4.webp"
+        )
+        val client = buildIsolatedProxyClient(httpPort, timeoutMs, keepAliveConnections = 1)
+        try {
+            var lastReason = "Download Stalled (PMTU/16KB Drop)"
+            for (u in urls) {
+                var hit: DownloadCheckResult? = null
+                try {
+                    val req = Request.Builder()
+                        .url(u)
+                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 14)")
+                        .header("Cache-Control", "no-cache")
+                        .get()
+                        .build()
+                    val t0 = System.nanoTime()
+                    client.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) {
+                            lastReason = "HTTP ${resp.code}"
+                            return@use
+                        }
+                        val bodyStream = resp.body?.byteStream() ?: return@use
+                        val buf = ByteArray(16384)
+                        var total = 0
+                        while (total < 163840) {
+                            val n = bodyStream.read(buf)
+                            if (n <= 0) break
+                            total += n
+                        }
+                        val elapsedSec = ((System.nanoTime() - t0) / 1_000_000_000.0).coerceAtLeast(0.05)
+                        val kbps = ((total / 1024.0) / elapsedSec).toFloat()
+                        if (total >= 65536) {
+                            hit = DownloadCheckResult(true, total, kbps, "DL ${total / 1024}KB @ ${"%.1f".format(kbps)}KB/s")
+                        } else {
+                            lastReason = "Download Stalled (PMTU/16KB Drop: ${total / 1024}KB)"
+                        }
+                    }
+                } catch (t: Throwable) {
+                    lastReason = "Download Stalled (${t.javaClass.simpleName})"
+                }
+                if (hit != null) return hit!!
+            }
+            return DownloadCheckResult(false, 0, 0f, lastReason)
+        } finally {
+            shutdownClient(client)
+        }
+    }
+
+    fun measureAccurateUploadKbps(httpPort: Int, timeoutMs: Long = 5600L): UploadCheckResult {
+        val urls = listOf(
+            "https://speed.cloudflare.com/__up",
+            "https://postman-echo.com/post"
+        )
+        val payload = ByteArray(196608)
+        Random.nextBytes(payload)
+        val mediaType = "application/octet-stream".toMediaType()
+        val client = buildIsolatedProxyClient(httpPort, timeoutMs, keepAliveConnections = 1)
+        try {
+            var lastReason = "Upload timeout"
+            for (u in urls) {
+                var hit: UploadCheckResult? = null
+                try {
+                    val reqBody = payload.toRequestBody(mediaType)
+                    val req = Request.Builder()
+                        .url(u)
+                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 14)")
+                        .post(reqBody)
+                        .build()
+                    val t0 = System.nanoTime()
+                    client.newCall(req).execute().use { resp ->
+                        if (resp.code in 200..399) {
+                            val elapsedSec = ((System.nanoTime() - t0) / 1_000_000_000.0).coerceAtLeast(0.05)
+                            val kbps = ((payload.size / 1024.0) / elapsedSec).toFloat()
+                            hit = UploadCheckResult(true, payload.size, kbps, "UL 192KB @ ${"%.1f".format(kbps)}KB/s")
+                        } else {
+                            lastReason = "Upload HTTP ${resp.code}"
+                        }
+                    }
+                } catch (t: Throwable) {
+                    lastReason = "Upload failed (${t.javaClass.simpleName})"
+                }
+                if (hit != null) return hit!!
+            }
+            return UploadCheckResult(false, 0, 0f, lastReason)
+        } finally {
+            shutdownClient(client)
+        }
+    }
+
 }

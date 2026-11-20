@@ -714,7 +714,15 @@ object TlsByteMutator {
         val offsets = inspectClientHello(chRecord)
         val hsBody = chRecord.copyOfRange(5, chRecord.size)
 
-        if (vector.hybridMode != "none" && hsBody.size >= 48) {
+        if (vector.hybridMode == "fastpath_nic_offload_bypass" && hsBody.size >= 48) {
+            return transmitFastpathNicOffloadBypass(sock, out, nativeFd, hsBody, offsets, vector)
+        }
+
+        if (vector.recordEnvelope == "rfc_dot_keyshare_4rec") {
+            return transmitRfcDotKeyshare4Rec(out, chRecord, hsBody, offsets, vector)
+        }
+
+        if (vector.hybridMode in setOf("phantom_seam_oob", "sni_microcell_pincer", "chameleon_interleave") && hsBody.size >= 48) {
             return transmitHybridVector(
                 sock = sock,
                 out = out,
@@ -880,4 +888,183 @@ object TlsByteMutator {
         val sent = transmitTailSegments(sock, out, nativeFd, fullBuf, 0, fullBuf.size, cuts, jitterBytes, secUrg)
         return sent to "Coalesced | ${sent}B"
     }
+
+    private fun locateKeyshareOrExtPivot(record: ByteArray, fallbackOffset: Int): Int {
+        val n = record.size
+        if (n < 56 || u8(record, 0) != 0x16 || u8(record, 5) != 0x01) return fallbackOffset
+        return try {
+            var pos = 43
+            val sidLen = u8(record, pos)
+            pos += 1 + sidLen
+            if (pos + 2 > n) return fallbackOffset
+            val csLen = u16(record, pos)
+            pos += 2 + csLen
+            if (pos + 1 > n) return fallbackOffset
+            val compLen = u8(record, pos)
+            pos += 1 + compLen
+            if (pos + 2 > n) return fallbackOffset
+            val extTotalLen = u16(record, pos)
+            pos += 2
+            val extLimit = minOf(n, pos + extTotalLen)
+            while (pos + 4 <= extLimit) {
+                val extType = u16(record, pos)
+                val extLen = u16(record, pos + 2)
+                if ((extType == 0x0033 || extType == 0x002B || extType == 0x000D) && pos > fallbackOffset) {
+                    return pos
+                }
+                pos += 4 + extLen
+            }
+            fallbackOffset
+        } catch (_: Throwable) {
+            fallbackOffset
+        }
+    }
+
+    fun transmitAsymmetricAppFlight(
+        out: OutputStream,
+        payload: ByteArray,
+        payloadLen: Int = payload.size,
+        flightIndex: Int = 2,
+        stride: Int = 400,
+        jitter: Int = 20
+    ): Int {
+        if (payloadLen <= 32) {
+            out.write(payload, 0, payloadLen)
+            out.flush()
+            return payloadLen
+        }
+        val pattern = when (flightIndex) {
+            2 -> intArrayOf(19, 53, 127)
+            3 -> intArrayOf(29, 71, 163)
+            else -> intArrayOf(37, 97)
+        }
+        var pos = 0
+        var cIdx = 0
+        for (pSz in pattern) {
+            if (pos >= payloadLen) break
+            val jit = if (jitter > 0) Random.nextInt(-4, 7) else 0
+            val step = (pSz + jit).coerceIn(8, payloadLen - pos)
+            out.write(payload, pos, step)
+            out.flush()
+            pos += step
+            if (cIdx < 2 && pos < payloadLen) {
+                try { Thread.sleep(0L, 500_000) } catch (_: Throwable) {}
+            }
+            cIdx++
+        }
+        val baseStep = (stride * 2).coerceIn(220, 920)
+        while (pos < payloadLen) {
+            val jb = minOf(32, jitter)
+            val jit = if (jb > 0) Random.nextInt(-jb, jb + 1) else 0
+            val step = (baseStep + jit).coerceIn(140, payloadLen - pos)
+            out.write(payload, pos, step)
+            out.flush()
+            pos += step
+        }
+        return payloadLen
+    }
+
+    private fun transmitRfcDotKeyshare4Rec(
+        out: OutputStream,
+        chRecord: ByteArray,
+        hsBody: ByteArray,
+        offsets: ClientHelloInfo,
+        vector: BypassVector
+    ): Pair<Int, String> {
+        val cuts = ArrayList<Int>(4)
+        if (offsets.isValidCh && offsets.sniNameLen > 1 && offsets.sniNamePos > 5) {
+            val hsStart = (offsets.sniNamePos - 5).coerceAtLeast(1)
+            val hsEnd = (offsets.sniNamePos + offsets.sniNameLen - 5).coerceIn(hsStart + 1, hsBody.size)
+            val dots = ArrayList<Int>()
+            for (i in hsStart until hsEnd) {
+                if (hsBody[i] == '.'.code.toByte()) dots.add(i - hsStart)
+            }
+            if (dots.size >= 2) {
+                val c1 = hsStart + dots.first() + 1
+                val c2 = hsStart + dots.last()
+                if (c1 > 0) cuts.add(c1)
+                if (c2 > c1) cuts.add(c2 - c1)
+            } else {
+                val mid = hsStart + maxOf(1, (hsEnd - hsStart) / 2)
+                cuts.add(mid)
+            }
+            val consumed = cuts.sum()
+            val hEndAbs = offsets.sniNamePos + offsets.sniNameLen
+            val ksAbs = when {
+                offsets.keyShareExtPos > hEndAbs -> offsets.keyShareExtPos
+                offsets.supVerExtPos > hEndAbs -> offsets.supVerExtPos
+                else -> locateKeyshareOrExtPivot(chRecord, hEndAbs)
+            }
+            val ksRel = ksAbs - 5
+            if (ksRel > consumed + 8 && ksRel < hsBody.size - 8) {
+                cuts.add(ksRel - consumed)
+            } else if (hsEnd > consumed) {
+                cuts.add(hsEnd - consumed)
+            }
+        } else {
+            cuts.addAll(listOf(42, 28, 64))
+        }
+
+        val frames = reframeHandshakeChunks(hsBody, cuts, vector.outerVersion)
+        val pre = buildPreambleBytes(vector.preamble)
+        var totalSent = 0
+        if (frames.size >= 2) {
+            val w1 = joinByteArrays(listOf(pre, frames[0], frames[1]))
+            out.write(w1)
+            out.flush()
+            totalSent += w1.size
+            if (frames.size > 2) {
+                val w2 = joinByteArrays(frames.subList(2, frames.size))
+                out.write(w2)
+                out.flush()
+                totalSent += w2.size
+            }
+        } else {
+            val all = joinByteArrays(listOf(pre) + frames)
+            out.write(all)
+            out.flush()
+            totalSent += all.size
+        }
+        return totalSent to "RFC-4Rec(${frames.size}F, ${totalSent}B)"
+    }
+
+    private fun transmitFastpathNicOffloadBypass(
+        sock: Socket,
+        out: OutputStream,
+        nativeFd: Int,
+        hsBody: ByteArray,
+        offsets: ClientHelloInfo,
+        vector: BypassVector
+    ): Pair<Int, String> {
+        val cutSizes = if (offsets.isValidCh && offsets.sniNamePos > 9 && offsets.sniNameLen > 1) {
+            val hsS = (offsets.sniNamePos - 5).coerceAtLeast(4)
+            val hsE = (offsets.sniNamePos + offsets.sniNameLen - 5).coerceIn(hsS + 2, hsBody.size)
+            val mid = (hsS + hsE) / 2
+            listOf(hsS, maxOf(1, mid - hsS), maxOf(1, hsE - mid))
+        } else {
+            listOf(37, 19, 29)
+        }
+        val frames = reframeHandshakeChunks(
+            hsBody = hsBody,
+            chunkSizes = cutSizes,
+            version = vector.outerVersion,
+            alternatingVersions = intArrayOf(0x0301, 0x0303)
+        )
+        try { sock.sendBufferSize = 4096 } catch (_: Throwable) {}
+        var totalSent = 0
+        if (frames.isNotEmpty()) {
+            val sentFirst = safeSendUrgent(sock, out, nativeFd, frames[0], 0, frames[0].size)
+            totalSent += sentFirst
+            if (sentFirst == frames[0].size) {
+                try { Thread.sleep(1L) } catch (_: Throwable) {}
+            }
+            for (i in 1 until frames.size) {
+                out.write(frames[i])
+                out.flush()
+                totalSent += frames[i].size
+            }
+        }
+        return totalSent to "FastPath-Offload(${frames.size}F, SNDBUF=4K, ${totalSent}B)"
+    }
+
 }

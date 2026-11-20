@@ -97,7 +97,10 @@ object UriConfigCodec {
                 line.startsWith("vless://", ignoreCase = true) ||
                     line.startsWith("vmess://", ignoreCase = true) ||
                     line.startsWith("trojan://", ignoreCase = true) ||
-                    line.startsWith("ss://", ignoreCase = true)
+                    line.startsWith("ss://", ignoreCase = true) ||
+                    line.startsWith("socks://", ignoreCase = true) ||
+                    line.startsWith("socks5://", ignoreCase = true) ||
+                    line.startsWith("socks4://", ignoreCase = true)
             }
             .distinct()
             .toList()
@@ -150,6 +153,7 @@ object UriConfigCodec {
             clean.startsWith("trojan://", ignoreCase = true) -> parseVlessOrTrojan(clean, "TROJAN")
             clean.startsWith("vmess://", ignoreCase = true) -> parseVmess(clean)
             clean.startsWith("ss://", ignoreCase = true) -> parseShadowsocks(clean)
+            clean.startsWith("socks://", ignoreCase = true) || clean.startsWith("socks5://", ignoreCase = true) || clean.startsWith("socks4://", ignoreCase = true) -> parseSocks(clean)
             else -> null
         }
     }
@@ -307,6 +311,64 @@ object UriConfigCodec {
         }
     }
 
+    private fun parseSocks(rawUri: String): FullParsedConfig? {
+        return try {
+            val withoutScheme = rawUri.substringAfter("://")
+            val remark = if (withoutScheme.contains("#")) {
+                urlDecode(withoutScheme.substringAfter("#"))
+            } else {
+                ""
+            }
+            val mainPart = withoutScheme.substringBefore("#").substringBefore("?").trimEnd('/')
+            var userPass = ""
+            val hostPortStr: String
+            if (mainPart.contains("@")) {
+                val rawAuth = mainPart.substringBeforeLast("@")
+                hostPortStr = mainPart.substringAfterLast("@")
+                userPass = if (rawAuth.contains(":")) {
+                    urlDecode(rawAuth)
+                } else {
+                    decodeBase64Flexible(rawAuth)?.takeIf { it.contains(":") } ?: urlDecode(rawAuth)
+                }
+            } else {
+                val maybeDecoded = decodeBase64Flexible(mainPart)
+                if (maybeDecoded != null && maybeDecoded.contains("@")) {
+                    userPass = maybeDecoded.substringBeforeLast("@")
+                    hostPortStr = maybeDecoded.substringAfterLast("@")
+                } else {
+                    hostPortStr = mainPart
+                }
+            }
+            val hp = splitHostPort(hostPortStr) ?: return null
+            val host = hp.first.trim()
+            val port = hp.second.toIntOrNull()?.coerceIn(1, 65535) ?: 1080
+            if (host.isEmpty()) return null
+
+            FullParsedConfig(
+                name = remark.ifBlank { "SOCKS5-$host" },
+                protocol = "SOCKS",
+                address = host,
+                port = port,
+                uuidOrPassword = userPass,
+                cipherOrEncryption = "",
+                flow = "",
+                network = "tcp",
+                headerType = "none",
+                hostHeader = "",
+                path = "",
+                earlyData = 0,
+                security = "none",
+                sni = "",
+                fingerprint = "",
+                alpn = "",
+                publicKey = "",
+                shortId = ""
+            )
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     fun toEditableFields(profile: ProfileItem): EditableConfigFields {
         val spec = parseFullConfig(profile.uri)
         if (spec == null) {
@@ -322,6 +384,7 @@ object UriConfigCodec {
 
         val protoLower = when (spec.protocol.uppercase()) {
             "SHADOWSOCKS" -> "ss"
+            "SOCKS", "SOCKS5", "SOCKS4" -> "socks"
             else -> spec.protocol.lowercase()
         }
         val credentialValue = if (spec.protocol.uppercase() == "SHADOWSOCKS") {
@@ -360,6 +423,7 @@ object UriConfigCodec {
         val prevSpec = fallbackRawUri.takeIf { it.isNotBlank() }?.let { parseFullConfig(it) }
         val normalizedProto = when (fields.protocol.trim().uppercase()) {
             "SS", "SHADOWSOCKS" -> "SHADOWSOCKS"
+            "SOCKS", "SOCKS5", "SOCKS4" -> "SOCKS"
             "VMESS" -> "VMESS"
             "TROJAN" -> "TROJAN"
             else -> "VLESS"
@@ -487,6 +551,16 @@ object UriConfigCodec {
                 val b64 = Base64.encodeToString(obj.toString().toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
                 "vmess://$b64"
             }
+            "SOCKS", "SOCKS5", "SOCKS4" -> {
+                val auth = if (spec.uuidOrPassword.isNotBlank()) {
+                    val b64 = Base64.encodeToString(
+                        spec.uuidOrPassword.toByteArray(Charsets.UTF_8),
+                        Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING
+                    )
+                    "$b64@"
+                } else ""
+                "socks://$auth$hostFormatted:$portNum#$encodedRemark"
+            }
             "SHADOWSOCKS" -> {
                 val method = spec.cipherOrEncryption.ifBlank { "chacha20-ietf-poly1305" }
                 val userCred = "$method:${spec.uuidOrPassword}"
@@ -579,13 +653,13 @@ object UriConfigCodec {
         val remotePort = (if (profile.port > 0) profile.port else spec.port).coerceIn(1, 65535)
 
         val useNativeXrayFragment = !settings.autoPilot && settings.fragmentEnabled &&
-            spec.protocol.uppercase() != "SHADOWSOCKS"
+            spec.protocol.uppercase() !in setOf("SHADOWSOCKS", "SOCKS")
 
         val root = JSONObject()
         root.put(
             "log",
             JSONObject().apply {
-                put("loglevel", if (forceLogSilent) "none" else "warning")
+                put("loglevel", if (forceLogSilent) "none" else "debug")
             }
         )
         root.put("stats", JSONObject())
@@ -766,6 +840,21 @@ object UriConfigCodec {
                 }
                 outbound.put("settings", JSONObject().put("servers", JSONArray().put(srvObj)))
             }
+            "SOCKS", "SOCKS5", "SOCKS4" -> {
+                outbound.put("protocol", "socks")
+                val srvObj = JSONObject().apply {
+                    put("address", "127.0.0.1")
+                    put("port", bridgePort)
+                    if (spec.uuidOrPassword.contains(":")) {
+                        val u = spec.uuidOrPassword.substringBefore(":")
+                        val pw = spec.uuidOrPassword.substringAfter(":")
+                        if (u.isNotEmpty()) {
+                            put("users", JSONArray().put(JSONObject().put("user", u).put("pass", pw)))
+                        }
+                    }
+                }
+                outbound.put("settings", JSONObject().put("servers", JSONArray().put(srvObj)))
+            }
             "SHADOWSOCKS" -> {
                 outbound.put("protocol", "shadowsocks")
                 val srvObj = JSONObject().apply {
@@ -781,7 +870,7 @@ object UriConfigCodec {
 
         outbound.put("streamSettings", buildStreamSettings(spec, settings, useNativeXrayFragment))
 
-        if (settings.muxEnabled && proto != "SHADOWSOCKS" && spec.flow.isBlank()) {
+        if (settings.muxEnabled && proto !in setOf("SHADOWSOCKS", "SOCKS") && spec.flow.isBlank()) {
             outbound.put(
                 "mux",
                 JSONObject().apply {
@@ -1103,6 +1192,11 @@ object UriConfigCodec {
 
         // Wave 1 mixes 3 Zero-OOB framing/fragment vectors (VEC-17, VEC-11, VEC-23) + 3 OOB vectors (VEC-21, VEC-01, VEC-18)!
         val wavePriorityIds = listOf(
+            "VEC-27", // Regional PMTU Guard (1180B) - Zero-OOB RFC 4-Record
+            "VEC-28", // Anti-16KB Flow-Stall - Multi-Flight Asymmetric 0x17
+            "VEC-24", // Record-Boundary CWND Pacer - Zero-OOB
+            "VEC-25", // Multi-Flight Asymmetric Desync (4MB RX / 96KB TX)
+            "VEC-26", // Fast-Path NIC Offload Bypass
             "VEC-21", // Hybrid OOB (Top on Cloudflare Edge)
             "VEC-17", // Zero-OOB 3-Record DotSplit (Top on Railway / Envoy / TLS 1.3)
             "VEC-11", // Zero-OOB Micro-Fragment 5-16B (Universal DPI SNI bypass)
@@ -1245,7 +1339,7 @@ object UriConfigCodec {
 
         val results = LinkedHashSet<String>()
         val schemeRegex = Regex(
-            """(?i)\b(?:vless|vmess|trojan|ss|socks|anyconnect|openconnect|oc|cisco|ikev2|ipsec|l2tp|hy2|hysteria2|tuic)://[^\r\n"'<>]+"""
+            """(?i)\b(?:vless|vmess|trojan|ss|socks|socks5|socks4|anyconnect|openconnect|oc|cisco|ikev2|ipsec|l2tp|hy2|hysteria2|tuic)://[^\r\n"'<>]+"""
         )
 
         fun scanChunk(chunk: String) {
