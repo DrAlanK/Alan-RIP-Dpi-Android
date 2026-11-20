@@ -21,7 +21,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material3.Icon
@@ -89,7 +93,7 @@ fun AboutTabScreen() {
     fun checkLatestVersion() {
         if (checkingUpdate) return
         checkingUpdate = true
-        updateStatus = "در حال بررسی آخرین نسخه از گیت‌هاب..."
+        updateStatus = "در حال بررسی آخرین نسخه اندروید از گیت‌هاب..."
         updateAvailable = false
         releaseNotes = ""
         scope.launch {
@@ -121,7 +125,7 @@ fun AboutTabScreen() {
                         if (isRemoteVersionNewer(tag, APP_VERSION)) {
                             Triple(true, "نسخه جدید $tag در دسترس است!", body.take(360))
                         } else {
-                            Triple(false, "شما از جدیدترین نسخه (v$APP_VERSION • آخرین ریلیز: $tag) استفاده می‌کنید.", body.take(220))
+                            Triple(false, "شما روی جدیدترین نسخه (v$APP_VERSION • آخرین ریلیز: $tag) هستید.", body.take(220))
                         }
                     }
                 } catch (t: Throwable) {
@@ -142,7 +146,7 @@ fun AboutTabScreen() {
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
-        // Brand Hero Card
+        // 1. Brand Hero Card
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -194,7 +198,7 @@ fun AboutTabScreen() {
             )
         }
 
-        // Update Checker Card
+        // 2. Android Update Checker Card
         Column(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier
@@ -208,7 +212,7 @@ fun AboutTabScreen() {
             ) {
                 Icon(Icons.Outlined.SystemUpdate, null, tint = p.emerald, modifier = Modifier.size(20.dp))
                 Text(
-                    text = "بروزرسانی برنامه",
+                    text = "بروزرسانی نسخه اندروید",
                     color = p.textPrimary,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 13.5.sp
@@ -251,7 +255,7 @@ fun AboutTabScreen() {
                         .clickable { checkLatestVersion() }
                 ) {
                     Text(
-                        text = if (checkingUpdate) "در حال بررسی..." else "بررسی نسخه جدید",
+                        text = if (checkingUpdate) "در حال بررسی..." else "بررسی بروزرسانی جدید",
                         color = p.onAccent,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 12.sp
@@ -278,35 +282,87 @@ fun AboutTabScreen() {
             }
         }
 
-        // Links
+        // 3. Official Channel & Repositories
         AboutLinkRowCard(
-            icon = Icons.Outlined.Code,
-            title = "ریپازیتوری گیت‌هاب (Android)",
+            icon = Icons.Outlined.Send,
+            title = "کانال تلگرام (@LabAlan)",
+            subtitle = "t.me/LabAlan",
+            tint = p.cyan,
+            onClick = { openExternalUrl("https://t.me/LabAlan") }
+        )
+        AboutLinkRowCard(
+            icon = Icons.Outlined.PhoneAndroid,
+            title = "ریپازیتوری اندروید (GitHub)",
             subtitle = "github.com/DrAlanK/Alan-RIP-Dpi-Android",
-            tint = p.accentGold,
+            tint = p.emerald,
             onClick = { openExternalUrl("https://github.com/DrAlanK/Alan-RIP-Dpi-Android") }
         )
         AboutLinkRowCard(
-            icon = Icons.Outlined.Send,
-            title = "کانال تلگرام اصلی (@DRA_NET_FREE)",
-            subtitle = "t.me/DRA_NET_FREE",
+            icon = Icons.Outlined.DesktopWindows,
+            title = "ریپازیتوری ویندوز (GitHub)",
+            subtitle = "github.com/DrAlanK/Alan-RIP-Dpi-Windows",
+            tint = p.accentGold,
+            onClick = { openExternalUrl("https://github.com/DrAlanK/Alan-RIP-Dpi-Windows") }
+        )
+        AboutLinkRowCard(
+            icon = Icons.Outlined.Download,
+            title = "دانلود آخرین نسخه ویندوز",
+            subtitle = "github.com/DrAlanK/Alan-RIP-Dpi-Windows/releases/latest",
             tint = p.emerald,
-            onClick = { openExternalUrl("https://t.me/DRA_NET_FREE") }
+            onClick = { openExternalUrl("https://github.com/DrAlanK/Alan-RIP-Dpi-Windows/releases/latest") }
         )
-        AboutLinkRowCard(
-            icon = Icons.Outlined.Send,
-            title = "کانال اسکریپت و ابزار (@DrA_Scripts)",
-            subtitle = "t.me/DrA_Scripts",
-            tint = p.textPrimary,
-            onClick = { openExternalUrl("https://t.me/DrA_Scripts") }
-        )
-        AboutLinkRowCard(
-            icon = Icons.Outlined.Send,
-            title = "کانال آموزش و اخبار (@DrAlanCH)",
-            subtitle = "t.me/DrAlanCH",
-            tint = p.cyan,
-            onClick = { openExternalUrl("https://t.me/DrAlanCH") }
-        )
+
+        // 4. Special Thanks / Credits Card (Floxu1 — OOB Method)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .alanGlassCard(highlighted = true, cornerRadius = 18.dp)
+                .clickable { openExternalUrl("https://github.com/Floxu1") }
+                .padding(horizontal = 14.dp, vertical = 13.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(11.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .alanNeuInset(cornerRadius = 13.dp, accented = true)
+                ) {
+                    Icon(Icons.Outlined.FavoriteBorder, null, tint = p.accentGold, modifier = Modifier.size(20.dp))
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "قدردانی ویژه از Floxu1",
+                        color = p.accentGold,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 12.5.sp
+                    )
+                    Text(
+                        text = "تشکر ویژه بابت ایده و متد ضد فیلترینگ OOB",
+                        color = p.textPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp
+                    )
+                    LtrContent {
+                        Text(
+                            text = "github.com/Floxu1",
+                            color = p.textMuted,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Icon(Icons.Outlined.OpenInNew, null, tint = p.accentGold, modifier = Modifier.size(16.dp))
+        }
+
         Spacer(Modifier.height(64.dp))
     }
 }
