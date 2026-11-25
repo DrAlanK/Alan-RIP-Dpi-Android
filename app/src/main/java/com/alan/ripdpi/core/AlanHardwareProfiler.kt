@@ -24,8 +24,7 @@ data class HardwareHealthSnapshot(
     val peakHeapMb: Float = 0f,
     val peakPssMb: Float = 0f,
     val peakThreads: Int = 0,
-    val peakFds: Int = 0,
-    val caAudit: CaAuditSummary = CaAuditSummary()
+    val peakFds: Int = 0
 )
 
 object AlanHardwareProfiler {
@@ -148,8 +147,7 @@ object AlanHardwareProfiler {
             peakHeapMb = peakHeapMb,
             peakPssMb = peakPssMb,
             peakThreads = peakThreads,
-            peakFds = peakFds,
-            caAudit = AlanCaSanitizer.auditSummary
+            peakFds = peakFds
         )
     }
 }

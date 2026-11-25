@@ -21,6 +21,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadFactory
@@ -55,6 +56,13 @@ class FullDuplexMutatorBridge(
         private const val TCP_MAXSEG_OPT = 2
         private const val TCP_MAXSEG_VALUE = 1220
         private const val STREAM_CHUNK_SIZE = 32768
+        private val bufferPool = ConcurrentLinkedQueue<ByteArray>()
+        private fun borrowBuffer(): ByteArray = bufferPool.poll() ?: ByteArray(STREAM_CHUNK_SIZE)
+        private fun recycleBuffer(b: ByteArray) {
+            if (b.size == STREAM_CHUNK_SIZE && bufferPool.size < 32) {
+                bufferPool.offer(b)
+            }
+        }
         private const val UPLINK_SHIELD_WINDOW_BYTES = 16384
         private const val CONNECT_TIMEOUT_MS = 6500
         private const val HANDSHAKE_READ_TIMEOUT_MS = 6500
@@ -74,13 +82,12 @@ class FullDuplexMutatorBridge(
         }
 
         private val dohClient: OkHttpClient by lazy {
-            AlanCaSanitizer.applyTo(
-                OkHttpClient.Builder()
+            OkHttpClient.Builder()
                     .socketFactory(dohSocketFactory)
                     .connectTimeout(2000, TimeUnit.MILLISECONDS)
                     .readTimeout(2000, TimeUnit.MILLISECONDS)
                     .retryOnConnectionFailure(false)
-            ).build()
+                .build()
         }
 
         fun isPoisonedIp(ip: String): Boolean {
@@ -448,7 +455,7 @@ class FullDuplexMutatorBridge(
     ): Boolean {
         if (dataLen <= 0) return fastpathUnlocked
 
-        if (vec.hybridMode == "regional_pmtu_1180" || vec.hybridMode == "anti_16kb_flow_stall") {
+        if ((vec.hybridMode == "regional_pmtu_1180" || vec.hybridMode == "anti_16kb_flow_stall") && sessionTxBytes <= 65536L) {
             val maxCap = if (vec.hybridMode == "regional_pmtu_1180") 1140 else 880
             if (dataLen > maxCap) {
                 var pos = 0
@@ -532,7 +539,7 @@ class FullDuplexMutatorBridge(
             return fastpathUnlocked
         }
 
-        if (dataLen > 1420 && clamp > 0) {
+        if (dataLen > 1420 && clamp > 0 && sessionTxBytes <= 65536L) {
             val maxSeg = clamp.coerceIn(512, 1380)
             var pos = 0
             var burstChunks = 0
@@ -705,7 +712,7 @@ class FullDuplexMutatorBridge(
 
             val downLatch = CountDownLatch(1)
             ioPool.execute {
-                val buf = ByteArray(STREAM_CHUNK_SIZE)
+                val buf = borrowBuffer()
                 try {
                     val rIn = remoteSock.getInputStream()
                     val cOut = clientSock.getOutputStream()
@@ -713,11 +720,11 @@ class FullDuplexMutatorBridge(
                         val n = rIn.read(buf)
                         if (n <= 0) break
                         cOut.write(buf, 0, n)
-                        cOut.flush()
                         rxBytesTotal.addAndGet(n.toLong())
                     }
                 } catch (_: Throwable) {
                 } finally {
+                    recycleBuffer(buf)
                     try { clientSock.shutdownOutput() } catch (_: Throwable) {}
                     downLatch.countDown()
                 }
@@ -727,7 +734,7 @@ class FullDuplexMutatorBridge(
             var uplinkAppBytes = 0
             var oobShieldDone = false
             var fastpathUnlocked = false
-            val upBuf = ByteArray(STREAM_CHUNK_SIZE)
+            val upBuf = borrowBuffer()
             val cIn: InputStream = clientSock.getInputStream()
 
             try {
@@ -774,7 +781,6 @@ class FullDuplexMutatorBridge(
                     when {
                         cfg.rawPassthrough || vec.family == "DIRECT" -> {
                             remoteOut.write(dataArr, 0, dataLen)
-                            remoteOut.flush()
                             txBytesTotal.addAndGet(dataLen.toLong())
                             uplinkAppBytes += dataLen
                         }
@@ -841,12 +847,13 @@ class FullDuplexMutatorBridge(
                 }
             } catch (_: Throwable) {
             } finally {
+                recycleBuffer(upBuf)
                 try { remoteSock.shutdownOutput() } catch (_: Throwable) {}
             }
 
             // Zero-CPU wait for remote downlink shutdown (replaces 50ms busy-polling loop!)
             try {
-                downLatch.await(8L, TimeUnit.SECONDS)
+                downLatch.await(2L, TimeUnit.SECONDS)
             } catch (_: InterruptedException) {
             }
         } catch (_: Throwable) {

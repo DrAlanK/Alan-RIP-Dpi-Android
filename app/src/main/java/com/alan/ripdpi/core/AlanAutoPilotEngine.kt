@@ -212,7 +212,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
 
     init {
-        AlanCaSanitizer.initAndExportCleanCaBundle(appContext) { msg -> appendLog(msg) }
         loadPersistentData()
         if (_settings.value.autoPilot) selectConfig(-1)
         loadScanCacheFromDisk()
@@ -220,7 +219,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         startTelemetryTicker()
         startSelfHealingWatchdog()
         triggerInstantGeoLocationProbes(_profiles.value.filter { it.countryCode == "UN" }, allowMicroTunnelForCdn = false)
-        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.8.0] Core Ready (${xrayCoreManager.getXrayVersion()})") }
+        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.8.1-beta] Core Ready (${xrayCoreManager.getXrayVersion()})") }
     }
 
     fun bindVpnPermissionRequester(requester: ((() -> Unit) -> Unit)?) {
@@ -759,7 +758,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 try {
                     val host = try { java.net.URI(sub.url).host.orEmpty() } catch (_: Throwable) { "" }
                     val resolvedIp = if (host.isNotEmpty()) cleanIpEngine.resolveUnpoisonedIpv4Blocking(host, 1800) else ""
-                    val clientBuilder = AlanCaSanitizer.applyTo(OkHttpClient.Builder())
+                    val clientBuilder = OkHttpClient.Builder()
                         .connectTimeout(10, TimeUnit.SECONDS)
                         .readTimeout(12, TimeUnit.SECONDS)
                         .followRedirects(true)
@@ -875,7 +874,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
     private suspend fun syncSingleSubscriptionSuspend(subId: String): Int = withContext(Dispatchers.IO) {
         val sub = _subscriptions.value.firstOrNull { it.id == subId } ?: return@withContext 0
-        val client = AlanCaSanitizer.applyTo(OkHttpClient.Builder())
+        val client = OkHttpClient.Builder()
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .followRedirects(true)
@@ -4477,7 +4476,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         scope.launch {
             var notifTickMod = 0
             while (isActive) {
-                delay(if (_engineState.value == EngineState.CONNECTED) 1200L else 2500L)
+                delay(if (_engineState.value == EngineState.CONNECTED) 1500L else 4000L)
                 if (_engineState.value != EngineState.CONNECTED) continue
                 val bridge = liveBridge ?: continue
 
@@ -4517,7 +4516,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                         pingHistory = pingHist
                     )
                 }
-                notifTickMod = (notifTickMod + 1) % 2
+                notifTickMod = (notifTickMod + 1) % 3
                 if (_engineState.value == EngineState.CONNECTED && notifTickMod == 0 && !_settings.value.tunnelMode.equals("PROXY", true)) {
                     val tNow = _telemetry.value
                     val remarkTitle = tNow.activeProfileName.trim().ifBlank { APP_NAME }
@@ -4534,14 +4533,25 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
     private fun startSelfHealingWatchdog() {
         scope.launch {
+            var lastCheckedRx = 0L
             while (isActive) {
-                delay(18_000L)
+                delay(45_000L)
                 val cfg = _settings.value
                 if (_engineState.value != EngineState.CONNECTED || !cfg.autoPilot || !cfg.selfHealingWatchdog) {
                     watchdogFailureStreak = 0
+                    lastCheckedRx = 0L
                     continue
                 }
                 if (pipelineMutex.isLocked) continue
+
+                // Passive activity check: if real user traffic (e.g. Telegram) flowed, tunnel is alive -> zero probe CPU!
+                val curRx = liveBridge?.rxBytesTotal?.get() ?: 0L
+                if (curRx - lastCheckedRx >= 2048L) {
+                    lastCheckedRx = curRx
+                    watchdogFailureStreak = 0
+                    continue
+                }
+                lastCheckedRx = curRx
 
                 val session = liveSession ?: continue
                 val probe = TunnelStreamVerifier.fastProbe(session.httpPort, 3000L)
@@ -5061,7 +5071,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val cacheFile = java.io.File(ctx.filesDir, ".pool_cache.dat")
         val reportCacheFile = java.io.File(ctx.filesDir, ".pool_report.json")
 
-        val clientBuilder = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
+        val clientBuilder = okhttp3.OkHttpClient.Builder()
             .connectTimeout(6500L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(7500L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .followRedirects(true)
@@ -5227,7 +5237,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                         customDirectDomains = j.optString("customDirectDomains", ""),
                         customProxyDomains = j.optString("customProxyDomains", ""),
                         customBlockedDomains = j.optString("customBlockedDomains", ""),
-                        deepLogEnabled = j.optBoolean("deepLogEnabled", true),
+                        deepLogEnabled = j.optBoolean("deepLogEnabled", false),
                         preferredAutoCountry = j.optString("preferredAutoCountry", "AUTO"),
                         autoRenameOnScan = j.optBoolean("autoRenameOnScan", true)
                     )
@@ -5532,7 +5542,6 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             appendLine("TunnelMode: ${_settings.value.tunnelMode} | Routing: ${_settings.value.routingMode} | DNS: ${_settings.value.remoteDns} / ${_settings.value.domesticDns}")
             val hw = AlanHardwareProfiler.captureSnapshot(appContext, liveBridge?.activeSessionCount ?: 0)
             appendLine("Hardware: CPU=${"%.1f".format(hw.cpuUsagePercent)}% | Heap=${"%.1f".format(hw.javaHeapUsedMb)}MB | PSS=${"%.1f".format(hw.totalPssMb)}MB | Threads=${hw.activeThreads} | FDs=${hw.openFds}")
-            appendLine("CA-Shield: kept=${hw.caAudit.trustedCleanCas}/${hw.caAudit.totalSystemCas} | blocked=${hw.caAudit.blockedCasCount}")
             appendLine("=======================================================")
         }
         val body = synchronized(fullLogExportBuffer) {
@@ -5572,8 +5581,10 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     override fun refreshHardwareHealth() {
-        val sessions = liveBridge?.activeSessionCount ?: 0
-        _hardwareHealth.value = AlanHardwareProfiler.captureSnapshot(appContext, sessions)
+        scope.launch(Dispatchers.IO) {
+            val sessions = liveBridge?.activeSessionCount ?: 0
+            _hardwareHealth.value = AlanHardwareProfiler.captureSnapshot(appContext, sessions)
+        }
     }
 
     override fun forceGcAndRefreshHardware() {

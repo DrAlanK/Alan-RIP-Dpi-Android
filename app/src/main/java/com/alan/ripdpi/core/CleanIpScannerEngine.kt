@@ -28,7 +28,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.security.SecureRandom
-import java.security.cert.X509Certificate
 import java.util.Collections
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -38,8 +37,6 @@ import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLEngineResult
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 import kotlin.math.abs
 import kotlin.random.Random
 
@@ -157,19 +154,8 @@ class CleanIpScannerEngine(context: Context) {
             return sock
         }
 
-        private val trustAllManagers: Array<TrustManager> = arrayOf(
-            @SuppressLint("CustomX509TrustManager")
-            object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-            }
-        )
-
         private val sharedTlsContext: SSLContext by lazy {
-            SSLContext.getInstance("TLS").apply {
-                init(null, trustAllManagers, SecureRandom())
-            }
+            SSLContext.getDefault()
         }
     }
 
@@ -191,7 +177,7 @@ class CleanIpScannerEngine(context: Context) {
             createProtectedRawSocket().apply { connect(InetSocketAddress(a, p), 2500) }
     }
 
-    private val httpClient = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(OkHttpClient.Builder())
+    private val httpClient = OkHttpClient.Builder()
         .socketFactory(protectedSocketFactory)
         .connectTimeout(2600, TimeUnit.MILLISECONDS)
         .readTimeout(2800, TimeUnit.MILLISECONDS)

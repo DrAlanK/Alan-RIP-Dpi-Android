@@ -101,7 +101,7 @@ object TunnelStreamVerifier {
         keepAliveConnections: Int = 2
     ): OkHttpClient {
         val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", httpPort))
-        return com.alan.ripdpi.core.AlanCaSanitizer.applyTo(OkHttpClient.Builder())
+        return OkHttpClient.Builder()
             .proxy(proxy)
             .connectTimeout(timeoutMs, TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
@@ -118,34 +118,35 @@ object TunnelStreamVerifier {
         try {
             client.dispatcher.cancelAll()
             client.connectionPool.evictAll()
+            client.dispatcher.executorService.shutdown()
         } catch (_: Throwable) {
         }
     }
 
     fun fastProbe(httpPort: Int, timeoutMs: Long = 3400L): ProbeVerdict {
-        val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
-            .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
-            .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .callTimeout(timeoutMs + 600L, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
-        for (u in listOf("http://cp.cloudflare.com/generate_204", "http://connectivitycheck.gstatic.com/generate_204", "https://www.gstatic.com/generate_204")) {
-            val t0 = System.nanoTime()
-            try {
-                val req = okhttp3.Request.Builder().url(u).header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0").get().build()
-                client.newCall(req).execute().use { resp ->
-                    if (resp.code == 204 || resp.code == 200) {
-                        return ProbeVerdict(true, ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L), resp.code)
+        val client = buildIsolatedProxyClient(httpPort, timeoutMs, keepAliveConnections = 1)
+        try {
+            for (u in listOf("http://cp.cloudflare.com/generate_204", "http://connectivitycheck.gstatic.com/generate_204", "https://www.gstatic.com/generate_204")) {
+                val t0 = System.nanoTime()
+                try {
+                    val req = Request.Builder().url(u).header("User-Agent", "Mozilla/5.0 Chrome/131.0.0.0").get().build()
+                    client.newCall(req).execute().use { resp ->
+                        if (resp.code == 204 || resp.code == 200) {
+                            return ProbeVerdict(true, ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L), resp.code)
+                        }
                     }
-                }
-            } catch (_: Throwable) {}
+                } catch (_: Throwable) {}
+            }
+            return ProbeVerdict(false, -1L, 0)
+        } finally {
+            shutdownClient(client)
+            try { client.dispatcher.executorService.shutdown() } catch (_: Throwable) {}
         }
-        return ProbeVerdict(false, -1L, 0)
     }
 
 
     fun checkGeminiAccess(httpPort: Int, timeoutMs: Long = 4500L): Pair<Boolean, String> {
-        val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
+        val client = okhttp3.OkHttpClient.Builder()
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -302,7 +303,7 @@ object TunnelStreamVerifier {
     }
 
     fun resolveEgressEndpoint(httpPort: Int): EgressGeoInfo {
-        val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
+        val client = okhttp3.OkHttpClient.Builder()
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(4000L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(4000L, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -470,7 +471,7 @@ object TunnelStreamVerifier {
     }
 
     fun quickUploadCheck(httpPort: Int, timeoutMs: Long = 1800L): Pair<Boolean, Double> {
-        val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
+        val client = okhttp3.OkHttpClient.Builder()
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -499,7 +500,7 @@ object TunnelStreamVerifier {
     }
 
     fun probeTunnelAndGeo(httpPort: Int, timeoutMs: Long = 3200L, fetchGeo: Boolean = true): LaneGeoPingResult {
-        val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
+        val client = okhttp3.OkHttpClient.Builder()
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)

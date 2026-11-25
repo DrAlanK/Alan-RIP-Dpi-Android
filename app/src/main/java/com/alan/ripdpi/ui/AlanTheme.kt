@@ -699,52 +699,47 @@ fun Modifier.alanGlassCard(
     } else {
         Color.Transparent
     }
-    val shape = RoundedCornerShape(cornerRadius)
+    val shape = remember(cornerRadius) { RoundedCornerShape(cornerRadius) }
+    val bgBrush = remember(isDark) { Brush.linearGradient(listOf(surfaceTop, p.cardBg, surfaceBottom)) }
+    val blurRad = if (highlighted) 16f else 13f
+    val darkPaint = remember(darkShadow, blurRad) {
+        Paint().asFrameworkPaint().apply {
+            isAntiAlias = true
+            color = darkShadow.toArgb()
+            maskFilter = BlurMaskFilter(blurRad, BlurMaskFilter.Blur.NORMAL)
+        }
+    }
+    val lightPaint = remember(lightShadow, blurRad) {
+        Paint().asFrameworkPaint().apply {
+            isAntiAlias = true
+            color = lightShadow.toArgb()
+            maskFilter = BlurMaskFilter(blurRad, BlurMaskFilter.Blur.NORMAL)
+        }
+    }
 
     this
         .graphicsLayer { clip = false }
         .drawBehind {
             if (size.width > 4f && size.height > 4f) {
                 val cr = cornerRadius.toPx()
-                val off = (if (highlighted) 4.5.dp else 3.5.dp).toPx()
-                val blurRad = if (highlighted) 17f else 14f
+                val off = (if (highlighted) 4.2.dp else 3.4.dp).toPx()
                 val inset = 1.dp.toPx()
-
                 drawIntoCanvas { canvas ->
-                    val darkPaint = Paint().asFrameworkPaint().apply {
-                        isAntiAlias = true
-                        color = darkShadow.toArgb()
-                        maskFilter = BlurMaskFilter(blurRad, BlurMaskFilter.Blur.NORMAL)
-                    }
                     canvas.nativeCanvas.drawRoundRect(
-                        inset + off,
-                        inset + off,
-                        size.width - inset + off,
-                        size.height - inset + off,
-                        cr,
-                        cr,
-                        darkPaint
+                        inset + off, inset + off,
+                        size.width - inset + off, size.height - inset + off,
+                        cr, cr, darkPaint
                     )
-
-                    val lightPaint = Paint().asFrameworkPaint().apply {
-                        isAntiAlias = true
-                        color = lightShadow.toArgb()
-                        maskFilter = BlurMaskFilter(blurRad, BlurMaskFilter.Blur.NORMAL)
-                    }
                     canvas.nativeCanvas.drawRoundRect(
-                        inset - off,
-                        inset - off,
-                        size.width - inset - off,
-                        size.height - inset - off,
-                        cr,
-                        cr,
-                        lightPaint
+                        inset - off, inset - off,
+                        size.width - inset - off, size.height - inset - off,
+                        cr, cr, lightPaint
                     )
                 }
             }
         }
         .clip(shape)
-        .background(Brush.linearGradient(listOf(surfaceTop, p.cardBg, surfaceBottom)))
+        .background(bgBrush)
         .background(tintOverlay)
 }
 
@@ -756,12 +751,29 @@ fun Modifier.alanNeuInset(
     val isDark = p.isDark
     val darkInner = if (isDark) Color(0xFF0C0F14).copy(alpha = 0.92f) else Color(0xFFB5C2D6).copy(alpha = 0.88f)
     val lightInner = if (isDark) Color(0xFF2C3444).copy(alpha = 0.58f) else Color(0xFFFFFFFF).copy(alpha = 0.96f)
-    val shape = RoundedCornerShape(cornerRadius)
+    val shape = remember(cornerRadius) { RoundedCornerShape(cornerRadius) }
     val bgCol = if (accented) {
         if (isDark) Color(0xFF131720) else Color(0xFFD0DBEC)
     } else {
         p.subtleBg
     }
+    val darkPaint = remember(darkInner) {
+        Paint().asFrameworkPaint().apply {
+            isAntiAlias = true
+            style = android.graphics.Paint.Style.STROKE
+            color = darkInner.toArgb()
+            maskFilter = BlurMaskFilter(10f, BlurMaskFilter.Blur.NORMAL)
+        }
+    }
+    val lightPaint = remember(lightInner) {
+        Paint().asFrameworkPaint().apply {
+            isAntiAlias = true
+            style = android.graphics.Paint.Style.STROKE
+            color = lightInner.toArgb()
+            maskFilter = BlurMaskFilter(10f, BlurMaskFilter.Blur.NORMAL)
+        }
+    }
+    val clipPath = remember { android.graphics.Path() }
 
     this
         .clip(shape)
@@ -769,48 +781,23 @@ fun Modifier.alanNeuInset(
         .drawBehind {
             if (size.width > 4f && size.height > 4f) {
                 val cr = cornerRadius.toPx()
-                val strokeW = (if (accented) 3.8.dp else 3.2.dp).toPx()
-                val shift = 1.9.dp.toPx()
+                val strokeW = (if (accented) 3.6.dp else 3.0.dp).toPx()
+                val shift = 1.8.dp.toPx()
+                darkPaint.strokeWidth = strokeW
+                lightPaint.strokeWidth = strokeW
+                clipPath.reset()
+                clipPath.addRoundRect(0f, 0f, size.width, size.height, cr, cr, android.graphics.Path.Direction.CW)
 
                 drawIntoCanvas { canvas ->
                     canvas.save()
-                    val clipPath = android.graphics.Path().apply {
-                        addRoundRect(0f, 0f, size.width, size.height, cr, cr, android.graphics.Path.Direction.CW)
-                    }
                     canvas.nativeCanvas.clipPath(clipPath)
-
-                    val darkPaint = Paint().asFrameworkPaint().apply {
-                        isAntiAlias = true
-                        style = android.graphics.Paint.Style.STROKE
-                        strokeWidth = strokeW
-                        color = darkInner.toArgb()
-                        maskFilter = BlurMaskFilter(11f, BlurMaskFilter.Blur.NORMAL)
-                    }
                     canvas.nativeCanvas.drawRoundRect(
-                        -shift,
-                        -shift,
-                        size.width + strokeW,
-                        size.height + strokeW,
-                        cr,
-                        cr,
-                        darkPaint
+                        -shift, -shift, size.width + strokeW, size.height + strokeW,
+                        cr, cr, darkPaint
                     )
-
-                    val lightPaint = Paint().asFrameworkPaint().apply {
-                        isAntiAlias = true
-                        style = android.graphics.Paint.Style.STROKE
-                        strokeWidth = strokeW
-                        color = lightInner.toArgb()
-                        maskFilter = BlurMaskFilter(11f, BlurMaskFilter.Blur.NORMAL)
-                    }
                     canvas.nativeCanvas.drawRoundRect(
-                        -strokeW,
-                        -strokeW,
-                        size.width + shift,
-                        size.height + shift,
-                        cr,
-                        cr,
-                        lightPaint
+                        -strokeW, -strokeW, size.width + shift, size.height + shift,
+                        cr, cr, lightPaint
                     )
                     canvas.restore()
                 }

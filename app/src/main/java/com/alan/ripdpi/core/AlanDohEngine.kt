@@ -184,7 +184,7 @@ object AlanDohEngine {
     }
 
     private fun buildBootstrapClient(bootstrapIp: String, timeoutMs: Int): OkHttpClient {
-        val builder = AlanCaSanitizer.applyTo(OkHttpClient.Builder())
+        val builder = OkHttpClient.Builder()
             .connectTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
             .callTimeout((timeoutMs + 700).toLong(), TimeUnit.MILLISECONDS)

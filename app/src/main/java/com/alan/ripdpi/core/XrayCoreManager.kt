@@ -1,6 +1,7 @@
 package com.alan.ripdpi.core
 
 import android.content.Context
+import android.system.Os
 import go.Seq
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
@@ -34,7 +35,10 @@ class XrayCoreManager(
                 File(appContext.filesDir, ".xray_env_key").delete()
             } catch (_: Throwable) {
             }
-            AlanCaSanitizer.initAndExportCleanCaBundle(appContext) { msg -> statusLogger?.invoke(msg) }
+            try {
+                Os.setenv("GOMAXPROCS", "2", true)
+                Os.setenv("GOGC", "150", true)
+            } catch (_: Throwable) {}
             Seq.setContext(appContext)
             Libv2ray.initCoreEnv(appContext.filesDir.absolutePath, "")
             envInitialized.set(true)

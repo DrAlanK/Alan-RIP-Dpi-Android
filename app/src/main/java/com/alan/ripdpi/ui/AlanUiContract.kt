@@ -163,7 +163,7 @@ data class EngineSettings(
     val customDirectDomains: String = "",
     val customProxyDomains: String = "",
     val customBlockedDomains: String = "",
-    val deepLogEnabled: Boolean = true
+    val deepLogEnabled: Boolean = false
 )
 
 data class VectorSpec(

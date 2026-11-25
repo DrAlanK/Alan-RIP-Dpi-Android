@@ -432,49 +432,18 @@ fun ProfilesTabScreen(
             }
         }
 
-        // 4. Search Bar + Quick QR Scan + Quick Clipboard Paste
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        // 4. Clean Single-Line v2rayNG Search Field
+        AlanSheetTextField(
+            label = "جستجو در کانفیگ‌ها...",
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            ltr = false,
             modifier = Modifier.fillMaxWidth()
-        ) {
-            AlanSheetTextField(
-                label = "جستجوی نام، آدرس، SNI یا پروتکل...",
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                ltr = false,
-                modifier = Modifier.weight(1f)
-            )
-
-            AlanNeuIconButton(
-                icon = Icons.Outlined.QrCodeScanner,
-                tint = p.accentGold,
-                size = 48.dp,
-                onClick = {
-                    val options = ScanOptions().apply {
-                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                        setPrompt("اسکن QR کانفیگ یا لینک اشتراک")
-                        setBeepEnabled(false)
-                        setOrientationLocked(true)
-                    }
-                    qrCameraLauncher.launch(options)
-                }
-            )
-
-            AlanNeuIconButton(
-                icon = Icons.Outlined.ContentPaste,
-                tint = p.textPrimary,
-                size = 48.dp,
-                onClick = {
-                    onImportFromClipboard()
-                    feedback = "محتوای کلیپ‌بورد بررسی و وارد شد."
-                }
-            )
-        }
+        )
 
         // 5. Profiles List
         LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(bottom = 76.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -786,35 +755,38 @@ private fun V2ServerRowCard(
     }
     val pingText = when {
         item.status.equals("DEAD", true) || item.pingMs < 0 -> "timeout"
-        item.pingMs > 0 -> "${item.pingMs}ms"
+        item.pingMs > 0 -> "${item.pingMs} ms"
         else -> "تست"
     }
     val vectorTag = item.cachedVectorId.ifBlank { item.preferredVectorId.takeIf { it != "AUTO" }.orEmpty() }
     val cleanTitle = remember(item.name, item.protocol, item.host) {
         item.name.trim().ifBlank { "${item.protocol} (${item.host})" }
     }
+    val isActiveRow = item.isSelected || isChecked
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
-            .clip(RoundedCornerShape(13.dp))
-            .background(
-                if (item.isSelected || isChecked) p.accentSoftBg
-                else p.surfaceBg
+            .then(
+                if (isActiveRow) {
+                    Modifier.alanNeuInset(cornerRadius = 15.dp, accented = true)
+                } else {
+                    Modifier.alanGlassCard(cornerRadius = 15.dp)
+                }
             )
             .clickable(onClick = onSelect)
     ) {
-        // v2rayNG Left/Right Selection Indicator Strip
+        // v2rayNG Active Accent Strip
         Box(
             modifier = Modifier
-                .width(if (item.isSelected || isChecked) 4.dp else 2.dp)
+                .width(if (isActiveRow) 4.5.dp else 2.5.dp)
                 .fillMaxHeight()
                 .background(
                     when {
-                        item.isSelected || isChecked -> p.emerald
-                        item.pingMs > 0 -> p.accentGold.copy(alpha = 0.45f)
+                        isActiveRow -> p.emerald
+                        item.pingMs > 0 -> p.accentGold.copy(alpha = 0.55f)
                         else -> Color.Transparent
                     }
                 )
@@ -827,10 +799,9 @@ private fun V2ServerRowCard(
                 .weight(1f)
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            // Left: Checkbox (only in multi-select) + Clean 2-line v2rayNG text info
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.weight(1f)
             ) {
                 if (multiSelectMode) {
@@ -852,14 +823,14 @@ private fun V2ServerRowCard(
                         Text(
                             text = cleanTitle,
                             color = if (item.isSelected) p.emerald else p.textPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 12.8.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                     LtrContent {
-                        val metaLine = buildString {
+                        val subLine = buildString {
                             append(protoUp)
                             append(" • ")
                             append(transportShort)
@@ -867,13 +838,13 @@ private fun V2ServerRowCard(
                                 append(" • ")
                                 append(vectorTag)
                             }
-                            append("  ")
+                            append("  |  ")
                             append("${item.host}:${item.port}")
                         }
                         Text(
-                            text = metaLine,
+                            text = subLine,
                             color = p.textMuted,
-                            fontSize = 10.5.sp,
+                            fontSize = 10.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -883,15 +854,14 @@ private fun V2ServerRowCard(
 
             Spacer(Modifier.width(8.dp))
 
-            // Right: Clean v2rayNG Ping Text (tap to ping!) + Single Minimal More Icon
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(7.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .clickable(onClick = onPingSingle)
                         .padding(horizontal = 7.dp, vertical = 5.dp)
                 ) {
@@ -900,14 +870,14 @@ private fun V2ServerRowCard(
                             text = pingText,
                             color = pingColor,
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 11.5.sp
+                            fontSize = 11.sp
                         )
                     }
                 }
 
                 Icon(
                     imageVector = Icons.Outlined.MoreVert,
-                    contentDescription = "گزینه‌ها",
+                    contentDescription = "منو",
                     tint = p.textSecondary,
                     modifier = Modifier
                         .size(28.dp)

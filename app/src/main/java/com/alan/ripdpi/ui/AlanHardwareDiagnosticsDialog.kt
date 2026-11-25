@@ -19,7 +19,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Memory
-import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -55,7 +54,7 @@ fun AlanHardwareDiagnosticsDialog(
     LaunchedEffect(Unit) {
         while (true) {
             onRefresh()
-            delay(1800L)
+            delay(3000L)
         }
     }
 
@@ -93,7 +92,7 @@ fun AlanHardwareDiagnosticsDialog(
                                 Text("پنل مخفی سخت‌افزار و نشتی حافظه", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
                                 LtrContent {
                                     Text(
-                                        text = "Mode: $tunnelMode • ${if (isConnected) "ACTIVE" else "IDLE"} • Auto 1.8s",
+                                        text = "Mode: $tunnelMode • ${if (isConnected) "ACTIVE" else "IDLE"} • Auto 3s",
                                         color = p.textMuted,
                                         fontSize = 9.5.sp
                                     )
@@ -153,43 +152,6 @@ fun AlanHardwareDiagnosticsDialog(
                             healthy = health.batteryTempC < 41f,
                             modifier = Modifier.weight(1f)
                         )
-                    }
-
-                    // CA-Shield Sanitizer Audit Card
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(5.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .alanNeuInset(cornerRadius = 14.dp, accented = true)
-                            .padding(11.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(Icons.Outlined.Security, null, tint = p.emerald, modifier = Modifier.size(16.dp))
-                            Text("سپر پاک‌سازی گواهی‌های ریشه (CA-Shield)", color = p.emerald, fontWeight = FontWeight.ExtraBold, fontSize = 11.5.sp)
-                        }
-                        Text(
-                            text = "گواهی‌های سالم مجاز: ${health.caAudit.trustedCleanCas} از ${health.caAudit.totalSystemCas}  •  مسدودشده (مشکوک/دولتی چین): ${health.caAudit.blockedCasCount}",
-                            color = p.textPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 10.5.sp
-                        )
-                        if (health.caAudit.blockedCaNames.isNotEmpty()) {
-                            LtrContent {
-                                Text(
-                                    text = "Blocked: " + health.caAudit.blockedCaNames.joinToString(", "),
-                                    color = p.accentGold,
-                                    fontSize = 9.5.sp,
-                                    maxLines = 3,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        } else {
-                            Text(
-                                text = "هیچ CA آلوده چینی روی این دستگاه فعال نماند (باندل تمیز برای Xray و OkHttp ست شد).",
-                                color = p.textMuted,
-                                fontSize = 9.5.sp
-                            )
-                        }
                     }
 
                     // Reference Thresholds Guide for Proving Zero Leaks

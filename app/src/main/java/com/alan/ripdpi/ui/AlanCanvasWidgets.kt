@@ -1,7 +1,6 @@
 package com.alan.ripdpi.ui
 
 import android.graphics.BlurMaskFilter
-import androidx.compose.animation.core.withInfiniteAnimationFrameMillis
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -25,7 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -48,29 +47,33 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.alan.ripdpi.model.CountryPaletteRegistry
+import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
+private val cachedOrbBlur24 = BlurMaskFilter(24f, BlurMaskFilter.Blur.NORMAL)
+private val cachedOrbBlur22 = BlurMaskFilter(22f, BlurMaskFilter.Blur.NORMAL)
+
 private class LiveBubbleParticle(
     var angleRad: Float = 0f,
     var angularVel: Float = 0f,
-    var startFrac: Float = 0.35f,
-    var endFrac: Float = 0.92f,
+    var startFrac: Float = 0.36f,
+    var endFrac: Float = 0.90f,
     var sizeDp: Float = 5f,
     var life: Float = 0f,
-    var lifeSpeed: Float = 0.18f,
+    var lifeSpeed: Float = 0.20f,
     var colorVariant: Int = 0
 ) {
     fun respawn(rng: Random, initialRandomLife: Boolean = false) {
         angleRad = rng.nextFloat() * (2.0 * PI).toFloat()
-        angularVel = (rng.nextFloat() - 0.5f) * 0.55f
-        startFrac = 0.33f + rng.nextFloat() * 0.16f
-        endFrac = 0.68f + rng.nextFloat() * 0.30f
-        sizeDp = 3.0f + rng.nextFloat() * 6.8f
-        lifeSpeed = 0.13f + rng.nextFloat() * 0.22f
+        angularVel = (rng.nextFloat() - 0.5f) * 0.45f
+        startFrac = 0.36f + rng.nextFloat() * 0.14f
+        endFrac = 0.72f + rng.nextFloat() * 0.24f
+        sizeDp = 3.2f + rng.nextFloat() * 5.8f
+        lifeSpeed = 0.16f + rng.nextFloat() * 0.20f
         life = if (initialRandomLife) rng.nextFloat() else 0f
         colorVariant = rng.nextInt(4)
     }
@@ -94,7 +97,7 @@ fun FlagStripeBadge(
         if (base.size >= 3) base else listOf(Color(0xFF1E293B), Color(0xFFF5C451), Color(0xFF10B981))
     }
 
-    val flagShape = RoundedCornerShape(4.dp)
+    val flagShape = remember { RoundedCornerShape(4.dp) }
     Canvas(
         modifier = Modifier
             .width(width)
@@ -150,52 +153,59 @@ fun CenterPowerOrbButton(
     val isDark = p.isDark
     val isError = uiPhase.equals("ERROR", ignoreCase = true)
     val isDisconnecting = uiPhase.equals("DISCONNECTING", ignoreCase = true)
+    val isAnimating = isConnecting || isDisconnecting
 
-    // Continuous, non-looping, never-resetting physics state
-    val rng = remember { Random(System.nanoTime()) }
+    val rng = remember { Random(4207L) }
     val particles = remember {
-        List(34) {
+        List(14) {
             LiveBubbleParticle().apply { respawn(rng, initialRandomLife = true) }
         }
     }
 
-    var phase1 by remember { mutableFloatStateOf(0f) }
-    var phase2 by remember { mutableFloatStateOf(1.7f) }
-    var phase3 by remember { mutableFloatStateOf(3.4f) }
+    var phase1 by remember { mutableFloatStateOf(0.4f) }
+    var phase2 by remember { mutableFloatStateOf(1.9f) }
     var breathPhase by remember { mutableFloatStateOf(0f) }
-    var frameTick by remember { mutableLongStateOf(0L) }
+    var animTick by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(isConnected, isConnecting, isDisconnecting) {
-        var lastMs = -1L
+    // ZERO-CPU when Idle or Connected! Only animates smoothly (~28fps) while connecting/disconnecting!
+    LaunchedEffect(isAnimating) {
+        if (!isAnimating) return@LaunchedEffect
+        val dt = 0.036f
         while (true) {
-            withInfiniteAnimationFrameMillis { nowMs ->
-                val dt = if (lastMs < 0L) 0.016f else ((nowMs - lastMs).coerceIn(1L, 64L) / 1000f)
-                lastMs = nowMs
-
-                val speedMul = when {
-                    isConnecting || isDisconnecting -> 1.85f
-                    isConnected -> 1.25f
-                    else -> 0.85f
+            phase1 += dt * 1.9f
+            phase2 += dt * 1.35f
+            breathPhase += dt * 2.1f
+            for (b in particles) {
+                b.life += dt * b.lifeSpeed * 1.6f
+                b.angleRad += dt * b.angularVel * 1.6f
+                if (b.life >= 1.0f) {
+                    b.respawn(rng, initialRandomLife = false)
                 }
-
-                // Incommensurable irrational frequencies so the orb shape NEVER loops or jumps!
-                phase1 += dt * 1.17f * speedMul
-                phase2 += dt * 0.83f * speedMul
-                phase3 += dt * 1.51f * speedMul
-                breathPhase += dt * 1.45f
-
-                for (b in particles) {
-                    b.life += dt * b.lifeSpeed * speedMul
-                    b.angleRad += dt * b.angularVel * speedMul
-                    if (b.life >= 1.0f) {
-                        // Respawn this single bubble at a brand-new random angle, speed & radius!
-                        b.respawn(rng, initialRandomLife = false)
-                    }
-                }
-                frameTick = nowMs
             }
+            animTick++
+            delay(36L)
         }
     }
+
+    val lightShadowCol = if (isDark) Color(0xFF30394D).copy(alpha = 0.84f) else Color.White.copy(alpha = 0.96f)
+    val darkShadowCol = if (isDark) Color(0xFF0A0D12).copy(alpha = 0.94f) else Color(0xFFB0BED4).copy(alpha = 0.86f)
+    val lightGlowCol = if (isConnected) p.emerald.copy(alpha = 0.34f) else lightShadowCol
+
+    val darkShadowPaint = remember(darkShadowCol) {
+        Paint().asFrameworkPaint().apply {
+            isAntiAlias = true
+            color = darkShadowCol.toArgb()
+            maskFilter = cachedOrbBlur24
+        }
+    }
+    val lightShadowPaint = remember(lightGlowCol) {
+        Paint().asFrameworkPaint().apply {
+            isAntiAlias = true
+            color = lightGlowCol.toArgb()
+            maskFilter = cachedOrbBlur22
+        }
+    }
+    val blobPath = remember { Path() }
 
     val centerLabel = when {
         isDisconnecting -> "در حال قطع..."
@@ -222,21 +232,17 @@ fun CenterPowerOrbButton(
         )
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            // Read frameTick so Canvas redraws smoothly every frame without any reset
-            val unusedTick = frameTick
-            if (size.minDimension <= 12f && unusedTick >= 0L) return@Canvas
+            val tickRead = animTick
+            if (size.minDimension <= 12f && tickRead >= 0) return@Canvas
 
             val cx = size.width / 2f
             val cy = size.height / 2f
             val minDim = size.minDimension
+            val maxReachX = (size.width * 0.48f).coerceAtLeast(minDim * 0.62f)
+            val maxReachY = (size.height * 0.46f).coerceAtLeast(minDim * 0.46f)
+            val specCol = if (isDark) Color(0xFF4B5B78) else Color.White
 
-            val maxReachX = (size.width * 0.49f).coerceAtLeast(minDim * 0.65f)
-            val maxReachY = (size.height * 0.48f).coerceAtLeast(minDim * 0.48f)
-
-            val lightShadowCol = if (isDark) Color(0xFF30394D).copy(alpha = 0.86f) else Color.White.copy(alpha = 0.98f)
-            val darkShadowCol = if (isDark) Color(0xFF0A0D12).copy(alpha = 0.95f) else Color(0xFFB0BED4).copy(alpha = 0.88f)
-
-            // 1. 34 Independent Random Floating & Popping 3D Neumorphic Bubbles
+            // 1. 14 Lightweight Neumorphic Decorative Bubbles (zero per-frame gradient shaders!)
             for (b in particles) {
                 val rawLife = b.life.coerceIn(0f, 1f)
                 val radialProg = b.startFrac + (b.endFrac - b.startFrac) * rawLife
@@ -248,109 +254,38 @@ fun CenterPowerOrbButton(
                     isConnected -> if (b.colorVariant == 0) p.emerald else if (b.colorVariant == 1) Color(0xFF34D399) else p.cardBg
                     isConnecting -> if (b.colorVariant % 2 == 0) p.accentGold else p.emerald
                     isError -> if (b.colorVariant % 2 == 0) p.danger else p.cardBg
-                    else -> if (b.colorVariant == 0) p.accentGold.copy(alpha = 0.80f) else p.cardBg
+                    else -> if (b.colorVariant == 0) p.accentGold.copy(alpha = 0.78f) else p.cardBg
                 }
 
-                if (rawLife < 0.82f) {
-                    val norm = (rawLife / 0.82f).coerceIn(0f, 1f)
-                    val rPx = (b.sizeDp.dp.toPx() * (0.40f + 0.76f * sin(norm * (PI / 2.0)).toFloat())).coerceAtLeast(2.2f)
-                    val alpha = (0.25f + 0.75f * sin(norm * PI).toFloat()).coerceIn(0f, 1f)
+                val norm = (rawLife / 0.85f).coerceIn(0f, 1f)
+                val rPx = (b.sizeDp.dp.toPx() * (0.48f + 0.62f * sin(norm * (PI / 2.0)).toFloat())).coerceAtLeast(2.4f)
+                val alpha = (0.35f + 0.65f * sin(norm * PI).toFloat()).coerceIn(0.25f, 1f)
 
-                    drawCircle(
-                        color = darkShadowCol.copy(alpha = 0.58f * alpha),
-                        radius = rPx,
-                        center = Offset(bx + 2.2.dp.toPx(), by + 2.2.dp.toPx())
-                    )
-                    drawCircle(
-                        color = lightShadowCol.copy(alpha = 0.68f * alpha),
-                        radius = rPx,
-                        center = Offset(bx - 1.5.dp.toPx(), by - 1.5.dp.toPx())
-                    )
-
-                    val specCol = if (isDark) Color(0xFF465470) else Color.White
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                specCol.copy(alpha = alpha),
-                                bubbleTint.copy(alpha = alpha),
-                                (if (isDark) Color(0xFF141821) else Color(0xFFCFD9E8)).copy(alpha = alpha)
-                            ),
-                            center = Offset(bx - rPx * 0.35f, by - rPx * 0.35f),
-                            radius = rPx * 1.6f
-                        ),
-                        radius = rPx,
-                        center = Offset(bx, by)
-                    )
-                } else {
-                    val popFrac = ((rawLife - 0.82f) / 0.18f).coerceIn(0f, 1f)
-                    val fade = (1f - popFrac).coerceIn(0f, 1f)
-                    val baseR = b.sizeDp.dp.toPx() * 1.18f
-                    val popCol = when {
-                        isDisconnecting || isError -> p.danger
-                        isConnected -> p.emerald
-                        else -> p.accentGold
-                    }
-
-                    drawCircle(
-                        color = popCol.copy(alpha = 0.70f * fade),
-                        radius = baseR * (1.0f + 1.15f * popFrac),
-                        center = Offset(bx, by),
-                        style = Stroke(width = (1.6f * fade).dp.toPx().coerceAtLeast(0.5f))
-                    )
-                    for (d in 0 until 6) {
-                        val dropAng = (d * (PI / 3.0)) + b.angleRad
-                        val dropDist = baseR * (0.75f + 1.65f * popFrac)
-                        drawCircle(
-                            color = popCol.copy(alpha = 0.85f * fade),
-                            radius = (1.9f * fade).dp.toPx().coerceAtLeast(0.5f),
-                            center = Offset(
-                                bx + (cos(dropAng) * dropDist).toFloat(),
-                                by + (sin(dropAng) * dropDist).toFloat()
-                            )
-                        )
-                    }
-                }
+                drawCircle(
+                    color = darkShadowCol.copy(alpha = 0.48f * alpha),
+                    radius = rPx,
+                    center = Offset(bx + 1.8.dp.toPx(), by + 1.8.dp.toPx())
+                )
+                drawCircle(
+                    color = bubbleTint.copy(alpha = alpha),
+                    radius = rPx,
+                    center = Offset(bx, by)
+                )
+                drawCircle(
+                    color = specCol.copy(alpha = 0.55f * alpha),
+                    radius = rPx * 0.36f,
+                    center = Offset(bx - rPx * 0.30f, by - rPx * 0.30f)
+                )
             }
 
-            // 2. Seamless One-Piece Morphing Neumorphic Center Orb (Continuous non-looping harmonics!)
-            val breathScale = 1.0f + 0.032f * sin(breathPhase)
-            val baseBlobR = (minDim * 0.32f).coerceIn(58.dp.toPx(), 78.dp.toPx()) * breathScale
-            val morphAmp = when {
-                isConnecting || isDisconnecting -> baseBlobR * 0.11f
-                isConnected -> baseBlobR * 0.082f
-                else -> baseBlobR * 0.065f
-            }
+            // 2. Center Neumorphic Orb (Crisp circle when resting/connected, organic morph while connecting!)
+            val baseBlobR = (minDim * 0.32f).coerceIn(58.dp.toPx(), 78.dp.toPx()) *
+                (if (isAnimating) (1.0f + 0.028f * sin(breathPhase)) else 1.0f)
 
-            val blobPath = Path()
-            val steps = 90
-            for (s in 0..steps) {
-                val theta = (s.toFloat() / steps.toFloat()) * (2.0 * PI).toFloat()
-                val harmonic =
-                    0.46f * sin(3f * theta + phase1) +
-                    0.35f * cos(2f * theta - phase2) +
-                    0.19f * sin(4f * theta + phase3)
-                val r = baseBlobR + morphAmp * harmonic
-                val x = cx + r * cos(theta)
-                val y = cy + r * sin(theta)
-                if (s == 0) blobPath.moveTo(x, y) else blobPath.lineTo(x, y)
-            }
-            blobPath.close()
-
-            val shadowOff = 7.5.dp.toPx()
+            val shadowOff = 7.dp.toPx()
             drawIntoCanvas { canvas ->
-                val dp = Paint().asFrameworkPaint().apply {
-                    isAntiAlias = true
-                    color = darkShadowCol.toArgb()
-                    maskFilter = BlurMaskFilter(28f, BlurMaskFilter.Blur.NORMAL)
-                }
-                canvas.nativeCanvas.drawCircle(cx + shadowOff, cy + shadowOff, baseBlobR * 0.96f, dp)
-
-                val lp = Paint().asFrameworkPaint().apply {
-                    isAntiAlias = true
-                    color = (if (isConnected) p.emerald.copy(alpha = 0.36f) else lightShadowCol).toArgb()
-                    maskFilter = BlurMaskFilter(26f, BlurMaskFilter.Blur.NORMAL)
-                }
-                canvas.nativeCanvas.drawCircle(cx - shadowOff, cy - shadowOff, baseBlobR * 0.96f, lp)
+                canvas.nativeCanvas.drawCircle(cx + shadowOff, cy + shadowOff, baseBlobR * 0.96f, darkShadowPaint)
+                canvas.nativeCanvas.drawCircle(cx - shadowOff, cy - shadowOff, baseBlobR * 0.96f, lightShadowPaint)
             }
 
             val unifiedBrush = when {
@@ -385,7 +320,24 @@ fun CenterPowerOrbButton(
                     end = Offset(cx + baseBlobR, cy + baseBlobR)
                 )
             }
-            drawPath(path = blobPath, brush = unifiedBrush)
+
+            if (isAnimating) {
+                blobPath.reset()
+                val morphAmp = baseBlobR * 0.095f
+                val steps = 48
+                for (s in 0..steps) {
+                    val theta = (s.toFloat() / steps.toFloat()) * (2.0 * PI).toFloat()
+                    val harmonic = 0.55f * sin(3f * theta + phase1) + 0.45f * cos(2f * theta - phase2)
+                    val r = baseBlobR + morphAmp * harmonic
+                    val x = cx + r * cos(theta)
+                    val y = cy + r * sin(theta)
+                    if (s == 0) blobPath.moveTo(x, y) else blobPath.lineTo(x, y)
+                }
+                blobPath.close()
+                drawPath(path = blobPath, brush = unifiedBrush)
+            } else {
+                drawCircle(brush = unifiedBrush, radius = baseBlobR, center = Offset(cx, cy))
+            }
         }
 
         val contentColor = when {
@@ -480,12 +432,13 @@ fun LiveSparklineCanvas(
     lineColor: Color,
     modifier: Modifier = Modifier
 ) {
+    val path = remember { Path() }
     Canvas(modifier = modifier.fillMaxWidth().height(20.dp)) {
         val w = size.width
         val h = size.height
-        val path = Path()
-        for (i in 0..28) {
-            val f = i / 28f
+        path.reset()
+        for (i in 0..24) {
+            val f = i / 24f
             val x = f * w
             val y = (h * 0.55f) + sin(f * 4f * PI.toFloat()) * (if (isConnected) 3.dp.toPx() else 1.5.dp.toPx())
             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)

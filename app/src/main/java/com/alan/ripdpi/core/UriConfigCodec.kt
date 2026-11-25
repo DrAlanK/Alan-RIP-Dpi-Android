@@ -859,20 +859,10 @@ object UriConfigCodec {
         root.put(
             "log",
             JSONObject().apply {
-                put("loglevel", if (forceLogSilent) "none" else if (settings.deepLogEnabled) "debug" else "warning")
+                put("loglevel", if (forceLogSilent) "none" else if (settings.deepLogEnabled) "debug" else "error")
             }
         )
-        root.put("stats", JSONObject())
-        root.put(
-            "policy",
-            JSONObject().put(
-                "system",
-                JSONObject().apply {
-                    put("statsOutboundUplink", true)
-                    put("statsOutboundDownlink", true)
-                }
-            )
-        )
+        // Unused Xray stats/policy hooks disabled to cut per-packet Go CPU overhead
 
         val inbounds = JSONArray()
         inbounds.put(

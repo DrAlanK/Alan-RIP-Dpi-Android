@@ -99,7 +99,7 @@ fun AboutTabScreen() {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 try {
-                    val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(OkHttpClient.Builder())
+                    val client = OkHttpClient.Builder()
                         .connectTimeout(8, TimeUnit.SECONDS)
                         .readTimeout(8, TimeUnit.SECONDS)
                         .build()

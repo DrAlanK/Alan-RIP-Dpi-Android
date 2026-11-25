@@ -926,7 +926,7 @@ fun LogsTabScreen(
                 "ALL" to "همه",
                 "NET" to "شبکه/سوکت",
                 "XRAY" to "Xray",
-                "DNS" to "DNS/CA",
+                "DNS" to "DNS/مسیر",
                 "LAB" to "متد/تست",
                 "ERR" to "خطاها"
             ).forEach { (key, title) ->

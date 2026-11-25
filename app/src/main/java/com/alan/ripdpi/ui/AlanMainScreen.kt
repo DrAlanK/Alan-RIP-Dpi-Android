@@ -46,7 +46,6 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.UnfoldLess
 import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -99,15 +98,20 @@ fun AlanMainScreen(
     var forcedScannerTarget by remember { mutableStateOf<Int?>(null) }
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
 
-    // Secret 5-tap trigger on top ALAN-RIP-DPI pill to open Hardware / Leak / CA Diagnostics
+    // Secret 5-tap trigger on ALAN-RIP-DPI pill for Hardware / Memory-Leak / CA Diagnostics
     var secretTapCount by remember { mutableIntStateOf(0) }
     var lastSecretTapMs by remember { mutableLongStateOf(0L) }
     var showHardwarePanel by remember { mutableStateOf(false) }
 
-    // Floating Glass Sidebar state: stays open until user clicks X; height is freely resizable!
-    var glassDockExpanded by rememberSaveable { mutableStateOf(true) }
+    // Glass menu state: starts neatly docked in the top-bar corner next to ALAN-RIP-DPI!
+    // Once opened, stays open until user explicitly clicks X; freely draggable & height-resizable!
+    var glassDockExpanded by rememberSaveable { mutableStateOf(false) }
     var glassDockCompact by rememberSaveable { mutableStateOf(false) }
-    var dockHeightFraction by rememberSaveable { mutableFloatStateOf(0.58f) }
+    var dockHeightFraction by rememberSaveable { mutableFloatStateOf(0.56f) }
+    var isOrbDockedInHeader by rememberSaveable { mutableStateOf(true) }
+    var freePosX by rememberSaveable { mutableFloatStateOf(-1f) }
+    var freePosY by rememberSaveable { mutableFloatStateOf(-1f) }
+    var isDraggingOrb by remember { mutableStateOf(false) }
 
     val telemetry by controller.telemetry.collectAsState()
     val connectionStages by controller.connectionStages.collectAsState()
@@ -141,6 +145,7 @@ fun AlanMainScreen(
 
     AlanCyberTheme(darkTheme = darkTheme) {
         val p = LocalAlanPalette.current
+        val isRtl = AlanI18n.lang != "en"
 
         val navItems = remember {
             listOf(
@@ -154,70 +159,138 @@ fun AlanMainScreen(
                 GlassNavSpec(7, "درباره", Icons.Outlined.Info)
             )
         }
-
         val activeNav = navItems.firstOrNull { it.index == currentTab } ?: navItems.first()
 
         CompositionLocalProvider(
-            LocalLayoutDirection provides if (AlanI18n.lang == "en") LayoutDirection.Ltr else LayoutDirection.Rtl
+            LocalLayoutDirection provides if (isRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
         ) {
-            Scaffold(
-                containerColor = p.rootBg,
-                topBar = {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(p.rootBg)
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+            ) {
+                val density = LocalDensity.current
+                val rootWidthDp = maxWidth
+                val rootHeightDp = maxHeight
+                val containerWidthPx = with(density) { rootWidthDp.toPx() }
+                val containerHeightPx = with(density) { rootHeightDp.toPx() }
+                val topBarHPadPx = with(density) { 14.dp.toPx() }
+                val topBarVPadPx = with(density) { 9.dp.toPx() }
+                val marginPx = with(density) { 8.dp.toPx() }
+                val orbSizeDp = 42.dp
+                val orbSizePx = with(density) { orbSizeDp.toPx() }
+                val snapRadiusPx = with(density) { 58.dp.toPx() }
+
+                // Exact physical coordinates of the Header Corner Magnetic Slot (where the old Hamburger button sat!)
+                val headerSlotX = if (isRtl) {
+                    (containerWidthPx - topBarHPadPx - orbSizePx).coerceAtLeast(marginPx)
+                } else {
+                    topBarHPadPx
+                }
+                val headerSlotY = topBarVPadPx
+
+                val maxOrbX = (containerWidthPx - orbSizePx - marginPx).coerceAtLeast(marginPx)
+                val maxOrbY = (containerHeightPx - orbSizePx - marginPx).coerceAtLeast(marginPx)
+
+                val curOrbX = if (isOrbDockedInHeader || freePosX < 0f) headerSlotX else freePosX.coerceIn(marginPx, maxOrbX)
+                val curOrbY = if (isOrbDockedInHeader || freePosY < 0f) headerSlotY else freePosY.coerceIn(marginPx, maxOrbY)
+                val distToSlot = hypot((curOrbX - headerSlotX).toDouble(), (curOrbY - headerSlotY).toDouble()).toFloat()
+                val nearHeaderSlot = distToSlot <= snapRadiusPx
+
+                // 1. Main Layout (Top Bar with Magnetic Slot next to ALAN-RIP-DPI + Full Content)
+                Column(modifier = Modifier.fillMaxSize()) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(p.rootBg)
-                            .statusBarsPadding()
                             .padding(horizontal = 14.dp, vertical = 9.dp)
                     ) {
-                        // Brand Pill — 5 quick taps opens Hidden Hardware / Memory-Leak / CA Diagnostics!
+                        // Start Group: Magnetic Corner Cradle (Old Hamburger Spot) + ALAN-RIP-DPI Pill
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier
-                                .alanNeuInset(cornerRadius = 16.dp)
-                                .clickable {
-                                    val now = SystemClock.elapsedRealtime()
-                                    if (now - lastSecretTapMs > 1600L) {
-                                        secretTapCount = 1
-                                    } else {
-                                        secretTapCount += 1
-                                    }
-                                    lastSecretTapMs = now
-                                    if (secretTapCount >= 5) {
-                                        secretTapCount = 0
-                                        controller.refreshHardwareHealth()
-                                        showHardwarePanel = true
-                                    }
-                                }
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(9.dp)
                         ) {
+                            // Magnetic Resting Socket in the Top Bar Corner
                             Box(
+                                contentAlignment = Alignment.Center,
                                 modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        when {
-                                            telemetry.isConnected -> p.emerald
-                                            telemetry.isConnecting -> p.accentGold
-                                            telemetry.uiPhase.equals("ERROR", true) -> p.danger
-                                            else -> p.textMuted.copy(alpha = 0.5f)
-                                        }
+                                    .size(orbSizeDp)
+                                    .alanNeuInset(cornerRadius = 21.dp, accented = isDraggingOrb && nearHeaderSlot)
+                                    .border(
+                                        width = if (isDraggingOrb && nearHeaderSlot) 1.8.dp else 1.dp,
+                                        color = if (isDraggingOrb && nearHeaderSlot) p.accentGold else p.accentGold.copy(alpha = 0.25f),
+                                        shape = CircleShape
                                     )
-                            )
-                            LtrContent {
-                                Text(
-                                    text = APP_NAME.uppercase(),
-                                    color = p.textPrimary,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 14.5.sp,
-                                    letterSpacing = 0.9.sp
+                                    .clickable {
+                                        isOrbDockedInHeader = true
+                                        glassDockExpanded = !glassDockExpanded
+                                    }
+                            ) {
+                                if (!isOrbDockedInHeader || glassDockExpanded) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (isDraggingOrb && nearHeaderSlot) p.accentGold
+                                                else p.textMuted.copy(alpha = 0.35f)
+                                            )
+                                    )
+                                }
+                            }
+
+                            // ALAN-RIP-DPI Pill (5 quick taps opens Hidden Hardware / Leak / CA Diagnostics!)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .height(40.dp)
+                                    .alanNeuInset(cornerRadius = 15.dp)
+                                    .clickable {
+                                        val now = SystemClock.elapsedRealtime()
+                                        if (now - lastSecretTapMs > 1600L) {
+                                            secretTapCount = 1
+                                        } else {
+                                            secretTapCount += 1
+                                        }
+                                        lastSecretTapMs = now
+                                        if (secretTapCount >= 5) {
+                                            secretTapCount = 0
+                                            controller.refreshHardwareHealth()
+                                            showHardwarePanel = true
+                                        }
+                                    }
+                                    .padding(horizontal = 13.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            when {
+                                                telemetry.isConnected -> p.emerald
+                                                telemetry.isConnecting -> p.accentGold
+                                                telemetry.uiPhase.equals("ERROR", true) -> p.danger
+                                                else -> p.textMuted.copy(alpha = 0.5f)
+                                            }
+                                        )
                                 )
+                                LtrContent {
+                                    Text(
+                                        text = APP_NAME.uppercase(),
+                                        color = p.textPrimary,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 14.sp,
+                                        letterSpacing = 0.8.sp
+                                    )
+                                }
                             }
                         }
 
+                        // End Group: EN/FA + Theme Switch
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -226,7 +299,7 @@ fun AlanMainScreen(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
                                     .height(40.dp)
-                                    .width(44.dp)
+                                    .width(42.dp)
                                     .alanGlassCard(cornerRadius = 13.dp)
                                     .clickable {
                                         AlanI18n.lang = if (AlanI18n.lang == "fa") "en" else "fa"
@@ -250,34 +323,13 @@ fun AlanMainScreen(
                             )
                         }
                     }
-                }
-            ) { innerPadding ->
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(p.rootBg)
-                        .padding(innerPadding)
-                        .navigationBarsPadding()
-                ) {
-                    val density = LocalDensity.current
-                    val rootWidthDp = maxWidth
-                    val rootHeightDp = maxHeight
-                    val containerWidthPx = with(density) { rootWidthDp.toPx() }
-                    val containerHeightPx = with(density) { rootHeightDp.toPx() }
-                    val marginPx = with(density) { 8.dp.toPx() }
-                    val orbSizePx = with(density) { 52.dp.toPx() }
-                    val snapRadiusPx = with(density) { 54.dp.toPx() }
 
-                    // Corner Dock Cradle position (top-left corner resting home for the glass orb!)
-                    val cornerHomeX = marginPx
-                    val cornerHomeY = marginPx
-
-                    var posX by rememberSaveable { mutableFloatStateOf(-1f) }
-                    var posY by rememberSaveable { mutableFloatStateOf(-1f) }
-                    var isDraggingOrb by remember { mutableStateOf(false) }
-
-                    // 1. Main Full-Width Content
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    // Active Screen Body
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    ) {
                         when (currentTab) {
                             0 -> HomeTabScreen(
                                 telemetry = telemetry,
@@ -447,347 +499,319 @@ fun AlanMainScreen(
                             else -> AboutTabScreen()
                         }
                     }
+                }
 
-                    // 2. Physical-LTR Floating Glass Overlay:
-                    //    - Magnetic Corner Dock Cradle (top-left) where the orb rests neatly if dropped nearby
-                    //    - Draggable Glass Orb (when minimized via X)
-                    //    - Draggable & Height-Resizable Floating Glass Sidebar (stays open until X is tapped)
-                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                        Box(
-                            contentAlignment = Alignment.TopStart,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .zIndex(50f)
-                        ) {
-                            val dockWidthDp by animateDpAsState(
-                                targetValue = if (glassDockCompact) 54.dp else 68.dp,
-                                animationSpec = tween(180),
-                                label = "glassDockW"
-                            )
-                            val dockWidthPx = with(density) { dockWidthDp.toPx() }
-                            val minDockHeightDp = 210.dp
-                            val maxDockHeightDp = (rootHeightDp * 0.84f).coerceAtLeast(320.dp)
-                            val currentDockHeightDp = (rootHeightDp * dockHeightFraction).coerceIn(minDockHeightDp, maxDockHeightDp)
-                            val currentDockHeightPx = with(density) { currentDockHeightDp.toPx() }
+                // 2. Floating Glass Assistive Orb + Draggable & Height-Resizable Glass Sidebar (Physical LTR overlay over full screen)
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    Box(
+                        contentAlignment = Alignment.TopStart,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .zIndex(50f)
+                    ) {
+                        val dockWidthDp by animateDpAsState(
+                            targetValue = if (glassDockCompact) 54.dp else 68.dp,
+                            animationSpec = tween(180),
+                            label = "glassDockW"
+                        )
+                        val dockWidthPx = with(density) { dockWidthDp.toPx() }
+                        val minDockHeightDp = 210.dp
+                        val maxDockHeightDp = (rootHeightDp * 0.80f).coerceAtLeast(300.dp)
+                        val currentDockHeightDp = (rootHeightDp * dockHeightFraction).coerceIn(minDockHeightDp, maxDockHeightDp)
+                        val currentDockHeightPx = with(density) { currentDockHeightDp.toPx() }
 
-                            val maxOrbX = (containerWidthPx - orbSizePx - marginPx).coerceAtLeast(marginPx)
-                            val maxOrbY = (containerHeightPx - orbSizePx - marginPx).coerceAtLeast(marginPx)
-                            val maxDockX = (containerWidthPx - dockWidthPx - marginPx).coerceAtLeast(marginPx)
-                            val maxDockY = (containerHeightPx - currentDockHeightPx - marginPx).coerceAtLeast(marginPx)
+                        val maxDockX = (containerWidthPx - dockWidthPx - marginPx).coerceAtLeast(marginPx)
+                        val maxDockY = (containerHeightPx - currentDockHeightPx - marginPx).coerceAtLeast(marginPx)
 
-                            val effX = if (posX < 0f) cornerHomeX else posX
-                            val effY = if (posY < 0f) cornerHomeY else posY
+                        val dockStartY = if (isOrbDockedInHeader) {
+                            (headerSlotY + orbSizePx + marginPx).coerceIn(marginPx, maxDockY)
+                        } else {
+                            curOrbY.coerceIn(marginPx, maxDockY)
+                        }
+                        val clampedDockX = curOrbX.coerceIn(marginPx, maxDockX)
+                        val clampedDockY = dockStartY
 
-                            val clampedOrbX = effX.coerceIn(marginPx, maxOrbX)
-                            val clampedOrbY = effY.coerceIn(marginPx, maxOrbY)
-                            val clampedDockX = effX.coerceIn(marginPx, maxDockX)
-                            val clampedDockY = effY.coerceIn(marginPx, maxDockY)
+                        val glassBg = if (darkTheme) {
+                            Brush.verticalGradient(listOf(Color(0xE02A3346), Color(0xD61A202D)))
+                        } else {
+                            Brush.verticalGradient(listOf(Color(0xF2FFFFFF), Color(0xE4DCE6F5)))
+                        }
+                        val glassBorderCol = if (darkTheme) p.accentGold.copy(alpha = 0.44f) else p.accentGold.copy(alpha = 0.56f)
 
-                            val distToCradle = hypot((clampedOrbX - cornerHomeX).toDouble(), (clampedOrbY - cornerHomeY).toDouble()).toFloat()
-                            val orbIsDockedInCorner = !glassDockExpanded && distToCradle < 8f
-
-                            val glassBg = if (darkTheme) {
-                                Brush.verticalGradient(listOf(Color(0xDC2A3346), Color(0xD41A202D)))
-                            } else {
-                                Brush.verticalGradient(listOf(Color(0xECFFFFFF), Color(0xE0DCE6F5)))
+                        // Collapsed State: iPhone-style Glass Orb (Rests magnetically in Top Bar Corner next to ALAN-RIP-DPI OR floats anywhere!)
+                        AnimatedVisibility(
+                            visible = !glassDockExpanded,
+                            enter = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.8f),
+                            exit = fadeOut(tween(110)) + scaleOut(tween(110), targetScale = 0.8f),
+                            modifier = Modifier.absoluteOffset {
+                                IntOffset(curOrbX.roundToInt(), curOrbY.roundToInt())
                             }
-                            val glassBorderCol = if (darkTheme) p.accentGold.copy(alpha = 0.42f) else p.accentGold.copy(alpha = 0.52f)
-
-                            // Corner Magnetic Resting Slot (Subtle home cradle in the corner when orb is collapsed or dragged)
-                            if (!glassDockExpanded && (!orbIsDockedInCorner || isDraggingOrb)) {
-                                val nearSlot = distToCradle <= snapRadiusPx
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(orbSizeDp)
+                                    .shadow(elevation = if (isOrbDockedInHeader) 4.dp else 12.dp, shape = CircleShape, clip = false)
+                                    .clip(CircleShape)
+                                    .background(glassBg)
+                                    .border(1.4.dp, glassBorderCol, CircleShape)
+                                    .pointerInput(containerWidthPx, containerHeightPx, headerSlotX, headerSlotY) {
+                                        detectDragGestures(
+                                            onDragStart = {
+                                                isDraggingOrb = true
+                                                if (isOrbDockedInHeader) {
+                                                    freePosX = headerSlotX
+                                                    freePosY = headerSlotY
+                                                    isOrbDockedInHeader = false
+                                                }
+                                            },
+                                            onDragEnd = {
+                                                isDraggingOrb = false
+                                                val d = hypot((freePosX - headerSlotX).toDouble(), (freePosY - headerSlotY).toDouble()).toFloat()
+                                                if (d <= snapRadiusPx) {
+                                                    isOrbDockedInHeader = true
+                                                    freePosX = headerSlotX
+                                                    freePosY = headerSlotY
+                                                }
+                                            },
+                                            onDragCancel = { isDraggingOrb = false }
+                                        ) { change, dragAmount ->
+                                            change.consume()
+                                            freePosX = (freePosX + dragAmount.x).coerceIn(marginPx, maxOrbX)
+                                            freePosY = (freePosY + dragAmount.y).coerceIn(marginPx, maxOrbY)
+                                        }
+                                    }
+                                    .clickable { glassDockExpanded = true }
+                            ) {
                                 Box(
                                     contentAlignment = Alignment.Center,
                                     modifier = Modifier
-                                        .absoluteOffset { IntOffset(cornerHomeX.roundToInt(), cornerHomeY.roundToInt()) }
-                                        .size(52.dp)
+                                        .size(30.dp)
                                         .clip(CircleShape)
                                         .background(
-                                            if (nearSlot) p.accentGold.copy(alpha = 0.22f)
-                                            else p.textMuted.copy(alpha = 0.08f)
+                                            if (darkTheme) Color.White.copy(alpha = 0.13f)
+                                            else p.accentGold.copy(alpha = 0.16f)
                                         )
                                         .border(
-                                            width = if (nearSlot) 2.dp else 1.2.dp,
-                                            color = if (nearSlot) p.accentGold else p.textMuted.copy(alpha = 0.35f),
-                                            shape = CircleShape
+                                            0.9.dp,
+                                            if (darkTheme) Color.White.copy(alpha = 0.34f) else p.accentGold.copy(alpha = 0.45f),
+                                            CircleShape
                                         )
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(10.dp)
-                                            .clip(CircleShape)
-                                            .background(if (nearSlot) p.accentGold else p.textMuted.copy(alpha = 0.3f))
+                                    Icon(
+                                        imageVector = activeNav.icon,
+                                        contentDescription = activeNav.title,
+                                        tint = if (telemetry.isConnected) p.emerald else p.accentGold,
+                                        modifier = Modifier.size(17.dp)
                                     )
                                 }
                             }
+                        }
 
-                            // Collapsed State: iPhone-style Translucent Glass Orb (Snaps into corner cradle OR floats anywhere!)
-                            AnimatedVisibility(
-                                visible = !glassDockExpanded,
-                                enter = fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.78f),
-                                exit = fadeOut(tween(120)) + scaleOut(tween(120), targetScale = 0.78f),
-                                modifier = Modifier.absoluteOffset {
-                                    IntOffset(clampedOrbX.roundToInt(), clampedOrbY.roundToInt())
-                                }
+                        // Expanded State: Detached Draggable & Height-Resizable Frosted Glass Sidebar
+                        // Stays open across tab switches; collapses to small orb ONLY when tapping X!
+                        AnimatedVisibility(
+                            visible = glassDockExpanded,
+                            enter = fadeIn(tween(170)) + scaleIn(tween(170), initialScale = 0.86f),
+                            exit = fadeOut(tween(130)) + scaleOut(tween(130), targetScale = 0.86f),
+                            modifier = Modifier.absoluteOffset {
+                                IntOffset(clampedDockX.roundToInt(), clampedDockY.roundToInt())
+                            }
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(5.dp),
+                                modifier = Modifier
+                                    .width(dockWidthDp)
+                                    .height(currentDockHeightDp)
+                                    .shadow(elevation = 16.dp, shape = RoundedCornerShape(26.dp), clip = false)
+                                    .clip(RoundedCornerShape(26.dp))
+                                    .background(glassBg)
+                                    .border(1.3.dp, glassBorderCol, RoundedCornerShape(26.dp))
+                                    .pointerInput(containerWidthPx, containerHeightPx, dockWidthPx, currentDockHeightPx) {
+                                        detectDragGestures(
+                                            onDragStart = {
+                                                if (isOrbDockedInHeader) {
+                                                    freePosX = clampedDockX
+                                                    freePosY = clampedDockY
+                                                    isOrbDockedInHeader = false
+                                                }
+                                            }
+                                        ) { change, dragAmount ->
+                                            change.consume()
+                                            freePosX = (freePosX + dragAmount.x).coerceIn(marginPx, maxDockX)
+                                            freePosY = (freePosY + dragAmount.y).coerceIn(marginPx, maxDockY)
+                                        }
+                                    }
+                                    .padding(top = 8.dp, bottom = 6.dp, start = 5.dp, end = 5.dp)
                             ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(22.dp)
+                                        .height(3.5.dp)
+                                        .clip(CircleShape)
+                                        .background(p.textMuted.copy(alpha = 0.55f))
+                                )
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(22.dp)
+                                            .clip(CircleShape)
+                                            .background(if (darkTheme) Color.White.copy(alpha = 0.14f) else p.accentGold.copy(alpha = 0.16f))
+                                            .clickable { glassDockCompact = !glassDockCompact }
+                                    ) {
+                                        Icon(
+                                            imageVector = if (glassDockCompact) Icons.Outlined.UnfoldMore else Icons.Outlined.UnfoldLess,
+                                            contentDescription = "عرض",
+                                            tint = p.accentGold,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                    }
+
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(22.dp)
+                                            .clip(CircleShape)
+                                            .background(if (darkTheme) Color.White.copy(alpha = 0.14f) else p.textMuted.copy(alpha = 0.16f))
+                                            .clickable { glassDockExpanded = false }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Close,
+                                            contentDescription = "کوچک کردن",
+                                            tint = p.textPrimary,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                    }
+                                }
+
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(if (glassDockCompact) 6.dp else 8.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                        .verticalScroll(rememberScrollState())
+                                        .padding(vertical = 2.dp)
+                                ) {
+                                    navItems.forEach { nav ->
+                                        val selected = currentTab == nav.index
+                                        val circleSize = if (glassDockCompact) 34.dp else 38.dp
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(13.dp))
+                                                .clickable { selectTab(nav.index) }
+                                                .padding(vertical = 1.dp)
+                                        ) {
+                                            Box(
+                                                contentAlignment = Alignment.Center,
+                                                modifier = Modifier
+                                                    .size(circleSize)
+                                                    .clip(CircleShape)
+                                                    .background(
+                                                        if (selected) p.accentGold
+                                                        else if (darkTheme) Color.White.copy(alpha = 0.12f)
+                                                        else p.surfaceBg.copy(alpha = 0.92f)
+                                                    )
+                                                    .border(
+                                                        width = if (selected) 0.dp else 0.9.dp,
+                                                        color = if (selected) Color.Transparent else glassBorderCol.copy(alpha = 0.65f),
+                                                        shape = CircleShape
+                                                    )
+                                            ) {
+                                                Icon(
+                                                    imageVector = nav.icon,
+                                                    contentDescription = nav.title,
+                                                    tint = if (selected) p.onAccent else p.textPrimary,
+                                                    modifier = Modifier.size(if (glassDockCompact) 17.dp else 18.dp)
+                                                )
+                                            }
+                                            if (!glassDockCompact) {
+                                                Text(
+                                                    text = nav.title,
+                                                    color = if (selected) p.accentGold else p.textPrimary,
+                                                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                                    fontSize = 9.sp,
+                                                    textAlign = TextAlign.Center,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Bottom Vertical Height Resize Grip
                                 Box(
                                     contentAlignment = Alignment.Center,
                                     modifier = Modifier
-                                        .size(52.dp)
-                                        .shadow(elevation = if (orbIsDockedInCorner) 6.dp else 12.dp, shape = CircleShape, clip = false)
-                                        .clip(CircleShape)
-                                        .background(glassBg)
-                                        .border(1.5.dp, glassBorderCol, CircleShape)
-                                        .pointerInput(containerWidthPx, containerHeightPx) {
-                                            detectDragGestures(
-                                                onDragStart = { isDraggingOrb = true },
-                                                onDragEnd = {
-                                                    isDraggingOrb = false
-                                                    val curX = if (posX < 0f) cornerHomeX else posX
-                                                    val curY = if (posY < 0f) cornerHomeY else posY
-                                                    val d = hypot((curX - cornerHomeX).toDouble(), (curY - cornerHomeY).toDouble()).toFloat()
-                                                    if (d <= snapRadiusPx) {
-                                                        posX = cornerHomeX
-                                                        posY = cornerHomeY
-                                                    }
-                                                },
-                                                onDragCancel = { isDraggingOrb = false }
-                                            ) { change, dragAmount ->
-                                                change.consume()
-                                                val baseX = if (posX < 0f) cornerHomeX else posX
-                                                val baseY = if (posY < 0f) cornerHomeY else posY
-                                                posX = (baseX + dragAmount.x).coerceIn(marginPx, maxOrbX)
-                                                posY = (baseY + dragAmount.y).coerceIn(marginPx, maxOrbY)
-                                            }
-                                        }
-                                        .clickable { glassDockExpanded = true }
-                                ) {
-                                    Box(
-                                        contentAlignment = Alignment.Center,
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .clip(CircleShape)
-                                            .background(
-                                                if (darkTheme) Color.White.copy(alpha = 0.13f)
-                                                else p.accentGold.copy(alpha = 0.16f)
-                                            )
-                                            .border(
-                                                1.dp,
-                                                if (darkTheme) Color.White.copy(alpha = 0.34f) else p.accentGold.copy(alpha = 0.45f),
-                                                CircleShape
-                                            )
-                                    ) {
-                                        Icon(
-                                            imageVector = activeNav.icon,
-                                            contentDescription = activeNav.title,
-                                            tint = if (telemetry.isConnected) p.emerald else p.accentGold,
-                                            modifier = Modifier.size(19.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Expanded State: Detached Draggable & Height-Resizable Floating Glass Sidebar
-                            AnimatedVisibility(
-                                visible = glassDockExpanded,
-                                enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.85f),
-                                exit = fadeOut(tween(140)) + scaleOut(tween(140), targetScale = 0.85f),
-                                modifier = Modifier.absoluteOffset {
-                                    IntOffset(clampedDockX.roundToInt(), clampedDockY.roundToInt())
-                                }
-                            ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(5.dp),
-                                    modifier = Modifier
-                                        .width(dockWidthDp)
-                                        .height(currentDockHeightDp)
-                                        .shadow(elevation = 16.dp, shape = RoundedCornerShape(26.dp), clip = false)
-                                        .clip(RoundedCornerShape(26.dp))
-                                        .background(glassBg)
-                                        .border(1.3.dp, glassBorderCol, RoundedCornerShape(26.dp))
-                                        .pointerInput(containerWidthPx, containerHeightPx, dockWidthPx, currentDockHeightPx) {
+                                        .fillMaxWidth()
+                                        .height(18.dp)
+                                        .pointerInput(containerHeightPx) {
                                             detectDragGestures { change, dragAmount ->
                                                 change.consume()
-                                                val baseX = if (posX < 0f) cornerHomeX else posX
-                                                val baseY = if (posY < 0f) cornerHomeY else posY
-                                                posX = (baseX + dragAmount.x).coerceIn(marginPx, maxDockX)
-                                                posY = (baseY + dragAmount.y).coerceIn(marginPx, maxDockY)
+                                                val deltaFrac = dragAmount.y / containerHeightPx.coerceAtLeast(1f)
+                                                dockHeightFraction = (dockHeightFraction + deltaFrac).coerceIn(0.30f, 0.80f)
                                             }
                                         }
-                                        .padding(top = 8.dp, bottom = 6.dp, start = 5.dp, end = 5.dp)
                                 ) {
-                                    // Top Move Handle
-                                    Box(
-                                        modifier = Modifier
-                                            .width(22.dp)
-                                            .height(3.5.dp)
-                                            .clip(CircleShape)
-                                            .background(p.textMuted.copy(alpha = 0.55f))
-                                    )
-
-                                    // Compact/Full Width & Minimize-to-Orb (X) Controls
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            contentAlignment = Alignment.Center,
-                                            modifier = Modifier
-                                                .size(22.dp)
-                                                .clip(CircleShape)
-                                                .background(if (darkTheme) Color.White.copy(alpha = 0.14f) else p.accentGold.copy(alpha = 0.16f))
-                                                .clickable { glassDockCompact = !glassDockCompact }
-                                        ) {
-                                            Icon(
-                                                imageVector = if (glassDockCompact) Icons.Outlined.UnfoldMore else Icons.Outlined.UnfoldLess,
-                                                contentDescription = "عرض",
-                                                tint = p.accentGold,
-                                                modifier = Modifier.size(13.dp)
-                                            )
-                                        }
-
-                                        Box(
-                                            contentAlignment = Alignment.Center,
-                                            modifier = Modifier
-                                                .size(22.dp)
-                                                .clip(CircleShape)
-                                                .background(if (darkTheme) Color.White.copy(alpha = 0.14f) else p.textMuted.copy(alpha = 0.16f))
-                                                .clickable { glassDockExpanded = false }
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Outlined.Close,
-                                                contentDescription = "کوچک کردن",
-                                                tint = p.textPrimary,
-                                                modifier = Modifier.size(13.dp)
-                                            )
-                                        }
-                                    }
-
-                                    // Scrollable Circular Nav Options (stays open across tab switches!)
                                     Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(if (glassDockCompact) 6.dp else 8.dp),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxWidth()
-                                            .verticalScroll(rememberScrollState())
-                                            .padding(vertical = 2.dp)
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
-                                        navItems.forEach { nav ->
-                                            val selected = currentTab == nav.index
-                                            val circleSize = if (glassDockCompact) 34.dp else 38.dp
-                                            Column(
-                                                horizontalAlignment = Alignment.CenterHorizontally,
-                                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clip(RoundedCornerShape(13.dp))
-                                                    .clickable { selectTab(nav.index) }
-                                                    .padding(vertical = 1.dp)
-                                            ) {
-                                                Box(
-                                                    contentAlignment = Alignment.Center,
-                                                    modifier = Modifier
-                                                        .size(circleSize)
-                                                        .clip(CircleShape)
-                                                        .background(
-                                                            if (selected) p.accentGold
-                                                            else if (darkTheme) Color.White.copy(alpha = 0.12f)
-                                                            else p.surfaceBg.copy(alpha = 0.92f)
-                                                        )
-                                                        .border(
-                                                            width = if (selected) 0.dp else 0.9.dp,
-                                                            color = if (selected) Color.Transparent else glassBorderCol.copy(alpha = 0.65f),
-                                                            shape = CircleShape
-                                                        )
-                                                ) {
-                                                    Icon(
-                                                        imageVector = nav.icon,
-                                                        contentDescription = nav.title,
-                                                        tint = if (selected) p.onAccent else p.textPrimary,
-                                                        modifier = Modifier.size(if (glassDockCompact) 17.dp else 18.dp)
-                                                    )
-                                                }
-                                                if (!glassDockCompact) {
-                                                    Text(
-                                                        text = nav.title,
-                                                        color = if (selected) p.accentGold else p.textPrimary,
-                                                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                                                        fontSize = 9.sp,
-                                                        textAlign = TextAlign.Center,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Bottom Vertical Height Resize Grip (Drag up/down to freely change sidebar length!)
-                                    Box(
-                                        contentAlignment = Alignment.Center,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(18.dp)
-                                            .pointerInput(containerHeightPx) {
-                                                detectDragGestures { change, dragAmount ->
-                                                    change.consume()
-                                                    val deltaFrac = dragAmount.y / containerHeightPx.coerceAtLeast(1f)
-                                                    dockHeightFraction = (dockHeightFraction + deltaFrac).coerceIn(0.30f, 0.84f)
-                                                }
-                                            }
-                                    ) {
-                                        Column(
-                                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .width(24.dp)
-                                                    .height(2.5.dp)
-                                                    .clip(CircleShape)
-                                                    .background(p.accentGold.copy(alpha = 0.72f))
-                                            )
-                                            Box(
-                                                modifier = Modifier
-                                                    .width(16.dp)
-                                                    .height(2.dp)
-                                                    .clip(CircleShape)
-                                                    .background(p.accentGold.copy(alpha = 0.45f))
-                                            )
-                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .width(24.dp)
+                                                .height(2.5.dp)
+                                                .clip(CircleShape)
+                                                .background(p.accentGold.copy(alpha = 0.72f))
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .width(16.dp)
+                                                .height(2.dp)
+                                                .clip(CircleShape)
+                                                .background(p.accentGold.copy(alpha = 0.45f))
+                                        )
                                     }
                                 }
                             }
                         }
                     }
+                }
 
-                    if (showSplitTunnelDialog) {
-                        PerAppProxySplitTunnelDialog(
-                            currentMode = settings.splitTunnelMode,
-                            selectedPackagesCsv = settings.splitTunnelPackagesCsv,
-                            installedApps = installedApps,
-                            onRequestLoadApps = { incSys -> controller.loadInstalledAppsList(incSys) },
-                            onDismiss = { showSplitTunnelDialog = false },
-                            onSave = { mode, pkgs ->
-                                controller.updateSplitTunnelConfig(mode, pkgs)
-                                showSplitTunnelDialog = false
-                            }
-                        )
-                    }
+                if (showSplitTunnelDialog) {
+                    PerAppProxySplitTunnelDialog(
+                        currentMode = settings.splitTunnelMode,
+                        selectedPackagesCsv = settings.splitTunnelPackagesCsv,
+                        installedApps = installedApps,
+                        onRequestLoadApps = { incSys -> controller.loadInstalledAppsList(incSys) },
+                        onDismiss = { showSplitTunnelDialog = false },
+                        onSave = { mode, pkgs ->
+                            controller.updateSplitTunnelConfig(mode, pkgs)
+                            showSplitTunnelDialog = false
+                        }
+                    )
+                }
 
-                    if (showHardwarePanel) {
-                        AlanHardwareDiagnosticsDialog(
-                            health = hardwareHealth,
-                            isConnected = telemetry.isConnected,
-                            tunnelMode = settings.tunnelMode,
-                            onRefresh = { controller.refreshHardwareHealth() },
-                            onForceGc = { controller.forceGcAndRefreshHardware() },
-                            onResetPeaks = { controller.resetHardwarePeaks() },
-                            onDismiss = { showHardwarePanel = false }
-                        )
-                    }
+                if (showHardwarePanel) {
+                    AlanHardwareDiagnosticsDialog(
+                        health = hardwareHealth,
+                        isConnected = telemetry.isConnected,
+                        tunnelMode = settings.tunnelMode,
+                        onRefresh = { controller.refreshHardwareHealth() },
+                        onForceGc = { controller.forceGcAndRefreshHardware() },
+                        onResetPeaks = { controller.resetHardwarePeaks() },
+                        onDismiss = { showHardwarePanel = false }
+                    )
                 }
             }
         }
