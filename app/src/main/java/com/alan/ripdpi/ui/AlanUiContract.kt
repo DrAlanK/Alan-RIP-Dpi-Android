@@ -1,6 +1,7 @@
 package com.alan.ripdpi.ui
 
 import com.alan.ripdpi.model.CountryPaletteRegistry
+import com.alan.ripdpi.core.HardwareHealthSnapshot
 import com.alan.ripdpi.model.VectorCatalog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -148,7 +149,21 @@ data class EngineSettings(
     val autoConnectSource: String = "CLOUD_REPO",
     val applyDpiOnUserAuto: Boolean = true,
     val splitTunnelMode: String = "ALL",
-    val splitTunnelPackagesCsv: String = ""
+    val splitTunnelPackagesCsv: String = "",
+    val routingMode: String = "bypass_ir",
+    val domainStrategy: String = "IPIfNonMatch",
+    val blockAds: Boolean = true,
+    val blockQuic: Boolean = true,
+    val enableSniffing: Boolean = true,
+    val remoteDns: String = "1.1.1.1",
+    val domesticDns: String = "178.22.122.100",
+    val fallbackDns: String = "8.8.8.8",
+    val dnsQueryStrategy: String = "UseIPv4",
+    val disableDnsCache: Boolean = false,
+    val customDirectDomains: String = "",
+    val customProxyDomains: String = "",
+    val customBlockedDomains: String = "",
+    val deepLogEnabled: Boolean = true
 )
 
 data class VectorSpec(
@@ -411,6 +426,15 @@ interface AlanEngineController {
     fun updateSplitTunnelConfig(mode: String, packages: Set<String>) {}
 
     fun connectBestUserConfig(applyDpiMethods: Boolean = true, groupFilter: String = "ALL") {}
+
+    val hardwareHealth: StateFlow<HardwareHealthSnapshot>
+        get() = MutableStateFlow(HardwareHealthSnapshot())
+
+    fun refreshHardwareHealth() {}
+    fun forceGcAndRefreshHardware() {}
+    fun resetHardwarePeaks() {}
+    fun exportAllLogsText(): String = logs.value.joinToString("\n")
+    fun importBypassListFromText(targetType: String, rawText: String, replaceExisting: Boolean = false): Int = 0
 }
 
 class DemoAlanEngineController : AlanEngineController {

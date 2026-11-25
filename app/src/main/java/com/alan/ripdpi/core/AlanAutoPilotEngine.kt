@@ -149,7 +149,11 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     @Volatile
     private var vpnPermissionStarter: ((() -> Unit) -> Unit)? = null
 
-    private val logLinesBuffer = Collections.synchronizedList(ArrayList<String>(400))
+    private val logLinesBuffer = Collections.synchronizedList(ArrayList<String>(1600))
+    private val fullLogExportBuffer = Collections.synchronizedList(ArrayList<String>(4000))
+    private val lastLogEmitMs = AtomicLong(0L)
+    private val _hardwareHealth = MutableStateFlow(HardwareHealthSnapshot())
+    override val hardwareHealth: StateFlow<HardwareHealthSnapshot> = _hardwareHealth.asStateFlow()
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     override val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
@@ -208,6 +212,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
 
     init {
+        AlanCaSanitizer.initAndExportCleanCaBundle(appContext) { msg -> appendLog(msg) }
         loadPersistentData()
         if (_settings.value.autoPilot) selectConfig(-1)
         loadScanCacheFromDisk()
@@ -215,7 +220,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         startTelemetryTicker()
         startSelfHealingWatchdog()
         triggerInstantGeoLocationProbes(_profiles.value.filter { it.countryCode == "UN" }, allowMicroTunnelForCdn = false)
-        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.7.0] Core Ready (${xrayCoreManager.getXrayVersion()})") }
+        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.8.0] Core Ready (${xrayCoreManager.getXrayVersion()})") }
     }
 
     fun bindVpnPermissionRequester(requester: ((() -> Unit) -> Unit)?) {
@@ -239,6 +244,11 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     private fun runWithVpnConsent(action: () -> Unit) {
+        if (_settings.value.tunnelMode.equals("PROXY", ignoreCase = true)) {
+            appendLog("[ProxyMode] حالت پروکسی فعال است — بدون نیاز به VpnService.")
+            action()
+            return
+        }
         val prep = try {
             VpnService.prepare(appContext)
         } catch (_: Throwable) {
@@ -326,7 +336,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         scannerJob = null
         bestMethodJob?.cancel()
         bestMethodJob = null
-        _scanState.update { it.copy(isRunning = false) }
+        _scanState.update { it.copy(isRunning = false, mode = "active_profile", summary = if (it.mode == "auto_connecting" || it.mode == "connected") "اتصال قطع شد — آماده اسکن مجدد" else it.summary) }
         NativeOobBridge.stopEnterpriseRawInCCore()
 
         scope.launch(Dispatchers.IO) {
@@ -749,7 +759,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 try {
                     val host = try { java.net.URI(sub.url).host.orEmpty() } catch (_: Throwable) { "" }
                     val resolvedIp = if (host.isNotEmpty()) cleanIpEngine.resolveUnpoisonedIpv4Blocking(host, 1800) else ""
-                    val clientBuilder = OkHttpClient.Builder()
+                    val clientBuilder = AlanCaSanitizer.applyTo(OkHttpClient.Builder())
                         .connectTimeout(10, TimeUnit.SECONDS)
                         .readTimeout(12, TimeUnit.SECONDS)
                         .followRedirects(true)
@@ -865,7 +875,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
     private suspend fun syncSingleSubscriptionSuspend(subId: String): Int = withContext(Dispatchers.IO) {
         val sub = _subscriptions.value.firstOrNull { it.id == subId } ?: return@withContext 0
-        val client = OkHttpClient.Builder()
+        val client = AlanCaSanitizer.applyTo(OkHttpClient.Builder())
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .followRedirects(true)
@@ -1022,6 +1032,20 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                 "autoConnectSource" -> cur = cur.copy(autoConnectSource = v.toString())
                 "splitTunnelMode" -> cur = cur.copy(splitTunnelMode = v.toString())
                 "splitTunnelPackagesCsv" -> cur = cur.copy(splitTunnelPackagesCsv = v.toString())
+                "routingMode" -> cur = cur.copy(routingMode = v.toString())
+                "domainStrategy" -> cur = cur.copy(domainStrategy = v.toString())
+                "blockAds" -> cur = cur.copy(blockAds = v as? Boolean ?: cur.blockAds)
+                "blockQuic" -> cur = cur.copy(blockQuic = v as? Boolean ?: cur.blockQuic)
+                "enableSniffing" -> cur = cur.copy(enableSniffing = v as? Boolean ?: cur.enableSniffing)
+                "remoteDns" -> cur = cur.copy(remoteDns = v.toString())
+                "domesticDns" -> cur = cur.copy(domesticDns = v.toString())
+                "fallbackDns" -> cur = cur.copy(fallbackDns = v.toString())
+                "dnsQueryStrategy" -> cur = cur.copy(dnsQueryStrategy = v.toString())
+                "disableDnsCache" -> cur = cur.copy(disableDnsCache = v as? Boolean ?: cur.disableDnsCache)
+                "customDirectDomains" -> cur = cur.copy(customDirectDomains = v.toString())
+                "customProxyDomains" -> cur = cur.copy(customProxyDomains = v.toString())
+                "customBlockedDomains" -> cur = cur.copy(customBlockedDomains = v.toString())
+                "deepLogEnabled" -> cur = cur.copy(deepLogEnabled = v as? Boolean ?: cur.deepLogEnabled)
             }
         }
         _settings.value = cur
@@ -3140,6 +3164,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     override fun clearLogs() {
+        synchronized(fullLogExportBuffer) { fullLogExportBuffer.clear() }
         synchronized(logLinesBuffer) {
             logLinesBuffer.clear()
             _logs.value = emptyList()
@@ -3895,6 +3920,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             initialJitterBytes = cfgSettings.strideJitterBytes,
             initialRawPassthrough = isPureRaw,
             socks5DynamicMode = isEnt,
+            verboseSessionLogs = _settings.value.deepLogEnabled,
             protectSocket = { sock -> AlanVpnService.protectRawSocket(sock) },
             onLog = { m -> appendLog(m) }
         )
@@ -3957,42 +3983,48 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             explicitCode = profile.countryCode
         )
 
-        AlanVpnService.resetTunHandshakeState()
-        AlanVpnService.startTunService(
-            context = appContext,
-            socksPort = session.socksPort,
-            tunMtu = cfgSettings.tunMtu,
-            tunDns = cfgSettings.tunDns,
-            profileTitle = "${country.flagEmoji} ${profile.name}",
-            vectorLabel = vector.vectorId
-        )
+        val isProxyOnlyMode = cfgSettings.tunnelMode.equals("PROXY", ignoreCase = true)
+        if (!isProxyOnlyMode) {
+            AlanVpnService.resetTunHandshakeState()
+            AlanVpnService.startTunService(
+                context = appContext,
+                socksPort = session.socksPort,
+                tunMtu = cfgSettings.tunMtu,
+                tunDns = cfgSettings.tunDns,
+                profileTitle = profile.name.trim().ifBlank { APP_NAME },
+                vectorLabel = vector.vectorId
+            )
 
-        var waitedLoops = 0
-        while (waitedLoops < 70 && !AlanVpnService.tunEstablishedFlag && AlanVpnService.tunEstablishError == null && isGenValid(gen)) {
-            delay(50L)
-            waitedLoops++
-        }
-        if (!isGenValid(gen)) {
-            teardownActiveRuntime()
-            return
-        }
-        val tunFatal = AlanVpnService.tunEstablishError
-        if (tunFatal != null) {
-            updateStageState(7, "FAILED", tunFatal, "TUN")
-            teardownActiveRuntime()
-            _engineState.value = EngineState.ERROR
-            _taskProgress.value = TaskProgressState(active = false)
-            _telemetry.update {
-                it.copy(
-                    uiPhase = "ERROR",
-                    isConnecting = false,
-                    isConnected = false,
-                    statusHeadline = "خطا در راه‌اندازی TUN",
-                    statusDetail = tunFatal,
-                    buttonText = "تلاش مجدد"
-                )
+            var waitedLoops = 0
+            while (waitedLoops < 70 && !AlanVpnService.tunEstablishedFlag && AlanVpnService.tunEstablishError == null && isGenValid(gen)) {
+                delay(50L)
+                waitedLoops++
             }
-            return
+            if (!isGenValid(gen)) {
+                teardownActiveRuntime()
+                return
+            }
+            val tunFatal = AlanVpnService.tunEstablishError
+            if (tunFatal != null) {
+                updateStageState(7, "FAILED", tunFatal, "TUN")
+                teardownActiveRuntime()
+                _engineState.value = EngineState.ERROR
+                _taskProgress.value = TaskProgressState(active = false)
+                _telemetry.update {
+                    it.copy(
+                        uiPhase = "ERROR",
+                        isConnecting = false,
+                        isConnected = false,
+                        statusHeadline = "خطا در راه‌اندازی TUN",
+                        statusDetail = tunFatal,
+                        buttonText = "تلاش مجدد"
+                    )
+                }
+                return
+            }
+        } else {
+            try { AlanVpnService.stopTunService(appContext) } catch (_: Throwable) {}
+            appendLog("[ProxyMode] پروکسی محلی بدون VpnService فعال شد -> SOCKS5 127.0.0.1:${session.socksPort} | HTTP 127.0.0.1:${session.httpPort}")
         }
 
         val finalPing = verifiedLatencyMs.toInt().coerceAtLeast(1)
@@ -4004,6 +4036,14 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val layerHostLabel = profile.sni.ifBlank { profile.host }
         _taskProgress.value = TaskProgressState(active = false, percent = 100, message = "", stageIndex = 7)
         _engineState.value = EngineState.CONNECTED
+        if (_scanState.value.mode == "auto_connecting") {
+            _scanState.value = _scanState.value.copy(
+                isRunning = false,
+                mode = "connected",
+                percent = 100,
+                summary = "✅ اتصال روی ${vector.vectorId} (${verifiedLatencyMs}ms) با موفقیت برقرار شد."
+            )
+        }
         _telemetry.update {
             it.copy(
                 uiPhase = "CONNECTED",
@@ -4435,8 +4475,9 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
 
     private fun startTelemetryTicker() {
         scope.launch {
+            var notifTickMod = 0
             while (isActive) {
-                delay(1000L)
+                delay(if (_engineState.value == EngineState.CONNECTED) 1200L else 2500L)
                 if (_engineState.value != EngineState.CONNECTED) continue
                 val bridge = liveBridge ?: continue
 
@@ -4476,7 +4517,8 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                         pingHistory = pingHist
                     )
                 }
-                if (_engineState.value == EngineState.CONNECTED) {
+                notifTickMod = (notifTickMod + 1) % 2
+                if (_engineState.value == EngineState.CONNECTED && notifTickMod == 0 && !_settings.value.tunnelMode.equals("PROXY", true)) {
                     val tNow = _telemetry.value
                     val remarkTitle = tNow.activeProfileName.trim().ifBlank { APP_NAME }
                     val vecTag = if (tNow.pingMs > 0) "${tNow.activeVectorId} • ${tNow.pingMs}ms" else tNow.activeVectorId
@@ -5019,7 +5061,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         val cacheFile = java.io.File(ctx.filesDir, ".pool_cache.dat")
         val reportCacheFile = java.io.File(ctx.filesDir, ".pool_report.json")
 
-        val clientBuilder = okhttp3.OkHttpClient.Builder()
+        val clientBuilder = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
             .connectTimeout(6500L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(7500L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .followRedirects(true)
@@ -5172,6 +5214,20 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     applyDpiOnUserAuto = j.optBoolean("applyDpiOnUserAuto", appContext.getSharedPreferences("alan_rip_dpi_prefs", Context.MODE_PRIVATE).getBoolean("applyDpiOnUserAuto", true)),
                     splitTunnelMode = j.optString("splitTunnelMode", appContext.getSharedPreferences("alan_rip_dpi_prefs", Context.MODE_PRIVATE).getString("splitTunnelMode", "ALL") ?: "ALL"),
                     splitTunnelPackagesCsv = j.optString("splitTunnelPackagesCsv", appContext.getSharedPreferences("alan_rip_dpi_prefs", Context.MODE_PRIVATE).getString("splitTunnelPackagesCsv", "") ?: ""),
+                        routingMode = j.optString("routingMode", "bypass_ir"),
+                        domainStrategy = j.optString("domainStrategy", "IPIfNonMatch"),
+                        blockAds = j.optBoolean("blockAds", true),
+                        blockQuic = j.optBoolean("blockQuic", true),
+                        enableSniffing = j.optBoolean("enableSniffing", true),
+                        remoteDns = j.optString("remoteDns", "1.1.1.1"),
+                        domesticDns = j.optString("domesticDns", "178.22.122.100"),
+                        fallbackDns = j.optString("fallbackDns", "8.8.8.8"),
+                        dnsQueryStrategy = j.optString("dnsQueryStrategy", "UseIPv4"),
+                        disableDnsCache = j.optBoolean("disableDnsCache", false),
+                        customDirectDomains = j.optString("customDirectDomains", ""),
+                        customProxyDomains = j.optString("customProxyDomains", ""),
+                        customBlockedDomains = j.optString("customBlockedDomains", ""),
+                        deepLogEnabled = j.optBoolean("deepLogEnabled", true),
                         preferredAutoCountry = j.optString("preferredAutoCountry", "AUTO"),
                         autoRenameOnScan = j.optBoolean("autoRenameOnScan", true)
                     )
@@ -5328,6 +5384,20 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
                     put("applyDpiOnUserAuto", s.applyDpiOnUserAuto)
                     put("splitTunnelMode", s.splitTunnelMode)
                     put("splitTunnelPackagesCsv", s.splitTunnelPackagesCsv)
+                    put("routingMode", s.routingMode)
+                    put("domainStrategy", s.domainStrategy)
+                    put("blockAds", s.blockAds)
+                    put("blockQuic", s.blockQuic)
+                    put("enableSniffing", s.enableSniffing)
+                    put("remoteDns", s.remoteDns)
+                    put("domesticDns", s.domesticDns)
+                    put("fallbackDns", s.fallbackDns)
+                    put("dnsQueryStrategy", s.dnsQueryStrategy)
+                    put("disableDnsCache", s.disableDnsCache)
+                    put("customDirectDomains", s.customDirectDomains)
+                    put("customProxyDomains", s.customProxyDomains)
+                    put("customBlockedDomains", s.customBlockedDomains)
+                    put("deepLogEnabled", s.deepLogEnabled)
                     put("autoMethodStatus", _autoMethodStatus.value)
                     put("bridgePort", configuredBridgePort)
                     put("selectedProfileUid", selectedProfileUidPersist)
@@ -5428,15 +5498,93 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
     }
 
     private fun appendLog(msg: String) {
-        val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        val line = "[$stamp] $msg"
-        synchronized(logLinesBuffer) {
-            logLinesBuffer.add(line)
-            while (logLinesBuffer.size > 1500) {
-                logLinesBuffer.removeAt(0)
+        val clean = msg.trim()
+        if (clean.isEmpty()) return
+        val formatted = "[${nowTime()}] $clean"
+        synchronized(fullLogExportBuffer) {
+            fullLogExportBuffer.add(formatted)
+            if (fullLogExportBuffer.size > 4000) {
+                fullLogExportBuffer.subList(0, 400).clear()
             }
-            _logs.value = logLinesBuffer.toList()
         }
+        val snapshot: List<String>? = synchronized(logLinesBuffer) {
+            logLinesBuffer.add(formatted)
+            if (logLinesBuffer.size > 1200) {
+                logLinesBuffer.subList(0, 200).clear()
+            }
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastLogEmitMs.get() >= 180L || clean.startsWith("[") || logLinesBuffer.size <= 40) {
+                lastLogEmitMs.set(now)
+                ArrayList(logLinesBuffer)
+            } else {
+                null
+            }
+        }
+        if (snapshot != null) {
+            _logs.value = snapshot
+        }
+    }
+
+    override fun exportAllLogsText(): String {
+        val header = buildString {
+            appendLine("=== Alan-RIP-Dpi v${com.alan.ripdpi.model.APP_VERSION} Full Diagnostic Log ===")
+            appendLine("Generated: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())}")
+            appendLine("TunnelMode: ${_settings.value.tunnelMode} | Routing: ${_settings.value.routingMode} | DNS: ${_settings.value.remoteDns} / ${_settings.value.domesticDns}")
+            val hw = AlanHardwareProfiler.captureSnapshot(appContext, liveBridge?.activeSessionCount ?: 0)
+            appendLine("Hardware: CPU=${"%.1f".format(hw.cpuUsagePercent)}% | Heap=${"%.1f".format(hw.javaHeapUsedMb)}MB | PSS=${"%.1f".format(hw.totalPssMb)}MB | Threads=${hw.activeThreads} | FDs=${hw.openFds}")
+            appendLine("CA-Shield: kept=${hw.caAudit.trustedCleanCas}/${hw.caAudit.totalSystemCas} | blocked=${hw.caAudit.blockedCasCount}")
+            appendLine("=======================================================")
+        }
+        val body = synchronized(fullLogExportBuffer) {
+            fullLogExportBuffer.joinToString("\n")
+        }
+        return header + "\n" + body
+    }
+
+    override fun importBypassListFromText(targetType: String, rawText: String, replaceExisting: Boolean): Int {
+        val (domains, ips) = UriConfigCodec.parseRoutingEntries(rawText)
+        val combined = (domains + ips).distinct()
+        if (combined.isEmpty()) return 0
+
+        val cur = _settings.value
+        val normalizedTarget = targetType.trim().lowercase(Locale.US)
+        val existingRaw = when (normalizedTarget) {
+            "proxy" -> cur.customProxyDomains
+            "block" -> cur.customBlockedDomains
+            else -> cur.customDirectDomains
+        }
+        val mergedText = if (replaceExisting || existingRaw.isBlank()) {
+            combined.joinToString("\n")
+        } else {
+            val (exD, exI) = UriConfigCodec.parseRoutingEntries(existingRaw)
+            (exD + exI + combined).distinct().joinToString("\n")
+        }
+
+        val updated = when (normalizedTarget) {
+            "proxy" -> cur.copy(customProxyDomains = mergedText)
+            "block" -> cur.copy(customBlockedDomains = mergedText)
+            else -> cur.copy(customDirectDomains = mergedText)
+        }
+        _settings.value = updated
+        saveSettingsToDisk()
+        appendLog("[Routing] ${combined.size} دامنه/آی‌پی از فایل به لیست '$normalizedTarget' وارد شد.")
+        return combined.size
+    }
+
+    override fun refreshHardwareHealth() {
+        val sessions = liveBridge?.activeSessionCount ?: 0
+        _hardwareHealth.value = AlanHardwareProfiler.captureSnapshot(appContext, sessions)
+    }
+
+    override fun forceGcAndRefreshHardware() {
+        AlanHardwareProfiler.forceGc()
+        refreshHardwareHealth()
+        appendLog("[Profiler] Garbage Collection اجرا شد | Heap=${"%.1f".format(_hardwareHealth.value.javaHeapUsedMb)}MB | PSS=${"%.1f".format(_hardwareHealth.value.totalPssMb)}MB | FDs=${_hardwareHealth.value.openFds}")
+    }
+
+    override fun resetHardwarePeaks() {
+        AlanHardwareProfiler.resetPeaks()
+        refreshHardwareHealth()
     }
 
 

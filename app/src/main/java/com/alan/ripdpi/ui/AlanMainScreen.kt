@@ -1,5 +1,6 @@
 package com.alan.ripdpi.ui
 
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
@@ -17,12 +18,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -53,6 +53,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -76,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.alan.ripdpi.model.APP_NAME
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 private data class GlassNavSpec(
@@ -97,9 +99,15 @@ fun AlanMainScreen(
     var forcedScannerTarget by remember { mutableStateOf<Int?>(null) }
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
 
-    // Stays open until the user explicitly clicks the X button to collapse into the small floating glass orb
+    // Secret 5-tap trigger on top ALAN-RIP-DPI pill to open Hardware / Leak / CA Diagnostics
+    var secretTapCount by remember { mutableIntStateOf(0) }
+    var lastSecretTapMs by remember { mutableLongStateOf(0L) }
+    var showHardwarePanel by remember { mutableStateOf(false) }
+
+    // Floating Glass Sidebar state: stays open until user clicks X; height is freely resizable!
     var glassDockExpanded by rememberSaveable { mutableStateOf(true) }
     var glassDockCompact by rememberSaveable { mutableStateOf(false) }
+    var dockHeightFraction by rememberSaveable { mutableFloatStateOf(0.58f) }
 
     val telemetry by controller.telemetry.collectAsState()
     val connectionStages by controller.connectionStages.collectAsState()
@@ -118,6 +126,7 @@ fun AlanMainScreen(
     val dohServers by controller.dohServers.collectAsState()
     val dohScanState by controller.dohScanState.collectAsState()
     val installedApps by controller.installedApps.collectAsState()
+    val hardwareHealth by controller.hardwareHealth.collectAsState()
 
     val vectors = remember(controller) { controller.getVectors() }
 
@@ -163,12 +172,26 @@ fun AlanMainScreen(
                             .statusBarsPadding()
                             .padding(horizontal = 14.dp, vertical = 9.dp)
                     ) {
+                        // Brand Pill — 5 quick taps opens Hidden Hardware / Memory-Leak / CA Diagnostics!
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier
                                 .alanNeuInset(cornerRadius = 16.dp)
-                                .clickable { glassDockExpanded = !glassDockExpanded }
+                                .clickable {
+                                    val now = SystemClock.elapsedRealtime()
+                                    if (now - lastSecretTapMs > 1600L) {
+                                        secretTapCount = 1
+                                    } else {
+                                        secretTapCount += 1
+                                    }
+                                    lastSecretTapMs = now
+                                    if (secretTapCount >= 5) {
+                                        secretTapCount = 0
+                                        controller.refreshHardwareHealth()
+                                        showHardwarePanel = true
+                                    }
+                                }
                                 .padding(horizontal = 14.dp, vertical = 8.dp)
                         ) {
                             Box(
@@ -243,11 +266,17 @@ fun AlanMainScreen(
                     val containerHeightPx = with(density) { rootHeightDp.toPx() }
                     val marginPx = with(density) { 8.dp.toPx() }
                     val orbSizePx = with(density) { 52.dp.toPx() }
+                    val snapRadiusPx = with(density) { 54.dp.toPx() }
+
+                    // Corner Dock Cradle position (top-left corner resting home for the glass orb!)
+                    val cornerHomeX = marginPx
+                    val cornerHomeY = marginPx
 
                     var posX by rememberSaveable { mutableFloatStateOf(-1f) }
                     var posY by rememberSaveable { mutableFloatStateOf(-1f) }
+                    var isDraggingOrb by remember { mutableStateOf(false) }
 
-                    // 1. Main Full-Width Screen Content (Never disturbed or resized by sidebar)
+                    // 1. Main Full-Width Content
                     Box(modifier = Modifier.fillMaxSize()) {
                         when (currentTab) {
                             0 -> HomeTabScreen(
@@ -351,6 +380,10 @@ fun AlanMainScreen(
                                 vectors = vectors,
                                 scanRows = scanRows,
                                 scanState = scanState,
+                                isTunnelConnected = telemetry.isConnected,
+                                isTunnelConnecting = telemetry.isConnecting,
+                                activeVectorId = telemetry.activeVectorId,
+                                activePingMs = telemetry.pingMs,
                                 forcedTargetIndex = forcedScannerTarget,
                                 onConsumedForcedTarget = { forcedScannerTarget = null },
                                 onStartMultiMethodScan = { scopeMode, indices, autoConn, useCleanIp, selVecs ->
@@ -401,19 +434,24 @@ fun AlanMainScreen(
                             )
                             5 -> XraySettingsScreen(
                                 settings = settings,
-                                onPatchSettings = { controller.updateSettings(it) }
+                                onPatchSettings = { controller.updateSettings(it) },
+                                onImportBypassFile = { targetType, rawText, replaceExisting ->
+                                    controller.importBypassListFromText(targetType, rawText, replaceExisting)
+                                }
                             )
                             6 -> LogsTabScreen(
                                 logs = logs,
-                                onClearLogs = { controller.clearLogs() }
+                                onClearLogs = { controller.clearLogs() },
+                                onExportFullLogs = { controller.exportAllLogsText() }
                             )
                             else -> AboutTabScreen()
                         }
                     }
 
-                    // 2. Persistent Floating Frosted-Glass Sidebar & Collapsible iPhone Assistive Orb
-                    // Uses physical LTR coordinates + absoluteOffset so it stays cleanly inside bounds in both FA (RTL) & EN (LTR)
-                    // No blocking scrim: users can freely interact with the app while the sidebar remains open; only X minimizes it!
+                    // 2. Physical-LTR Floating Glass Overlay:
+                    //    - Magnetic Corner Dock Cradle (top-left) where the orb rests neatly if dropped nearby
+                    //    - Draggable Glass Orb (when minimized via X)
+                    //    - Draggable & Height-Resizable Floating Glass Sidebar (stays open until X is tapped)
                     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                         Box(
                             contentAlignment = Alignment.TopStart,
@@ -427,47 +465,63 @@ fun AlanMainScreen(
                                 label = "glassDockW"
                             )
                             val dockWidthPx = with(density) { dockWidthDp.toPx() }
-                            val maxDockHeightDp = (rootHeightDp * 0.66f).coerceIn(260.dp, 460.dp)
-                            val maxDockHeightPx = with(density) { maxDockHeightDp.toPx() }
+                            val minDockHeightDp = 210.dp
+                            val maxDockHeightDp = (rootHeightDp * 0.84f).coerceAtLeast(320.dp)
+                            val currentDockHeightDp = (rootHeightDp * dockHeightFraction).coerceIn(minDockHeightDp, maxDockHeightDp)
+                            val currentDockHeightPx = with(density) { currentDockHeightDp.toPx() }
 
                             val maxOrbX = (containerWidthPx - orbSizePx - marginPx).coerceAtLeast(marginPx)
                             val maxOrbY = (containerHeightPx - orbSizePx - marginPx).coerceAtLeast(marginPx)
                             val maxDockX = (containerWidthPx - dockWidthPx - marginPx).coerceAtLeast(marginPx)
-                            val maxDockY = (containerHeightPx - maxDockHeightPx - marginPx).coerceAtLeast(marginPx)
+                            val maxDockY = (containerHeightPx - currentDockHeightPx - marginPx).coerceAtLeast(marginPx)
 
-                            val defaultX = marginPx
-                            val defaultY = (containerHeightPx * 0.14f).coerceIn(marginPx, maxDockY)
-
-                            val effX = if (posX < 0f) defaultX else posX
-                            val effY = if (posY < 0f) defaultY else posY
+                            val effX = if (posX < 0f) cornerHomeX else posX
+                            val effY = if (posY < 0f) cornerHomeY else posY
 
                             val clampedOrbX = effX.coerceIn(marginPx, maxOrbX)
                             val clampedOrbY = effY.coerceIn(marginPx, maxOrbY)
                             val clampedDockX = effX.coerceIn(marginPx, maxDockX)
                             val clampedDockY = effY.coerceIn(marginPx, maxDockY)
 
+                            val distToCradle = hypot((clampedOrbX - cornerHomeX).toDouble(), (clampedOrbY - cornerHomeY).toDouble()).toFloat()
+                            val orbIsDockedInCorner = !glassDockExpanded && distToCradle < 8f
+
                             val glassBg = if (darkTheme) {
-                                Brush.verticalGradient(
-                                    listOf(
-                                        Color(0xDC2A3346),
-                                        Color(0xD41A202D)
-                                    )
-                                )
+                                Brush.verticalGradient(listOf(Color(0xDC2A3346), Color(0xD41A202D)))
                             } else {
-                                Brush.verticalGradient(
-                                    listOf(
-                                        Color(0xECFFFFFF),
-                                        Color(0xE0DCE6F5)
-                                    )
-                                )
+                                Brush.verticalGradient(listOf(Color(0xECFFFFFF), Color(0xE0DCE6F5)))
                             }
-                            val glassBorderCol = if (darkTheme) {
-                                p.accentGold.copy(alpha = 0.42f)
-                            } else {
-                                p.accentGold.copy(alpha = 0.52f)
+                            val glassBorderCol = if (darkTheme) p.accentGold.copy(alpha = 0.42f) else p.accentGold.copy(alpha = 0.52f)
+
+                            // Corner Magnetic Resting Slot (Subtle home cradle in the corner when orb is collapsed or dragged)
+                            if (!glassDockExpanded && (!orbIsDockedInCorner || isDraggingOrb)) {
+                                val nearSlot = distToCradle <= snapRadiusPx
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .absoluteOffset { IntOffset(cornerHomeX.roundToInt(), cornerHomeY.roundToInt()) }
+                                        .size(52.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (nearSlot) p.accentGold.copy(alpha = 0.22f)
+                                            else p.textMuted.copy(alpha = 0.08f)
+                                        )
+                                        .border(
+                                            width = if (nearSlot) 2.dp else 1.2.dp,
+                                            color = if (nearSlot) p.accentGold else p.textMuted.copy(alpha = 0.35f),
+                                            shape = CircleShape
+                                        )
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(10.dp)
+                                            .clip(CircleShape)
+                                            .background(if (nearSlot) p.accentGold else p.textMuted.copy(alpha = 0.3f))
+                                    )
+                                }
                             }
 
-                            // Collapsed State: Small Draggable iPhone-Style Frosted Glass Orb
+                            // Collapsed State: iPhone-style Translucent Glass Orb (Snaps into corner cradle OR floats anywhere!)
                             AnimatedVisibility(
                                 visible = !glassDockExpanded,
                                 enter = fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.78f),
@@ -480,15 +534,28 @@ fun AlanMainScreen(
                                     contentAlignment = Alignment.Center,
                                     modifier = Modifier
                                         .size(52.dp)
-                                        .shadow(elevation = 12.dp, shape = CircleShape, clip = false)
+                                        .shadow(elevation = if (orbIsDockedInCorner) 6.dp else 12.dp, shape = CircleShape, clip = false)
                                         .clip(CircleShape)
                                         .background(glassBg)
                                         .border(1.5.dp, glassBorderCol, CircleShape)
                                         .pointerInput(containerWidthPx, containerHeightPx) {
-                                            detectDragGestures { change, dragAmount ->
+                                            detectDragGestures(
+                                                onDragStart = { isDraggingOrb = true },
+                                                onDragEnd = {
+                                                    isDraggingOrb = false
+                                                    val curX = if (posX < 0f) cornerHomeX else posX
+                                                    val curY = if (posY < 0f) cornerHomeY else posY
+                                                    val d = hypot((curX - cornerHomeX).toDouble(), (curY - cornerHomeY).toDouble()).toFloat()
+                                                    if (d <= snapRadiusPx) {
+                                                        posX = cornerHomeX
+                                                        posY = cornerHomeY
+                                                    }
+                                                },
+                                                onDragCancel = { isDraggingOrb = false }
+                                            ) { change, dragAmount ->
                                                 change.consume()
-                                                val baseX = if (posX < 0f) defaultX else posX
-                                                val baseY = if (posY < 0f) defaultY else posY
+                                                val baseX = if (posX < 0f) cornerHomeX else posX
+                                                val baseY = if (posY < 0f) cornerHomeY else posY
                                                 posX = (baseX + dragAmount.x).coerceIn(marginPx, maxOrbX)
                                                 posY = (baseY + dragAmount.y).coerceIn(marginPx, maxOrbY)
                                             }
@@ -520,8 +587,7 @@ fun AlanMainScreen(
                                 }
                             }
 
-                            // Expanded State: Detached Draggable & Resizable Floating Glass Sidebar
-                            // Stays open across tab switches; collapses to small orb ONLY when tapping X!
+                            // Expanded State: Detached Draggable & Height-Resizable Floating Glass Sidebar
                             AnimatedVisibility(
                                 visible = glassDockExpanded,
                                 enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.85f),
@@ -532,26 +598,26 @@ fun AlanMainScreen(
                             ) {
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp),
                                     modifier = Modifier
                                         .width(dockWidthDp)
-                                        .heightIn(max = maxDockHeightDp)
+                                        .height(currentDockHeightDp)
                                         .shadow(elevation = 16.dp, shape = RoundedCornerShape(26.dp), clip = false)
                                         .clip(RoundedCornerShape(26.dp))
                                         .background(glassBg)
                                         .border(1.3.dp, glassBorderCol, RoundedCornerShape(26.dp))
-                                        .pointerInput(containerWidthPx, containerHeightPx, dockWidthPx, maxDockHeightPx) {
+                                        .pointerInput(containerWidthPx, containerHeightPx, dockWidthPx, currentDockHeightPx) {
                                             detectDragGestures { change, dragAmount ->
                                                 change.consume()
-                                                val baseX = if (posX < 0f) defaultX else posX
-                                                val baseY = if (posY < 0f) defaultY else posY
+                                                val baseX = if (posX < 0f) cornerHomeX else posX
+                                                val baseY = if (posY < 0f) cornerHomeY else posY
                                                 posX = (baseX + dragAmount.x).coerceIn(marginPx, maxDockX)
                                                 posY = (baseY + dragAmount.y).coerceIn(marginPx, maxDockY)
                                             }
                                         }
-                                        .padding(vertical = 9.dp, horizontal = 5.dp)
+                                        .padding(top = 8.dp, bottom = 6.dp, start = 5.dp, end = 5.dp)
                                 ) {
-                                    // Top drag handle bar
+                                    // Top Move Handle
                                     Box(
                                         modifier = Modifier
                                             .width(22.dp)
@@ -560,7 +626,7 @@ fun AlanMainScreen(
                                             .background(p.textMuted.copy(alpha = 0.55f))
                                     )
 
-                                    // Resize (Compact/Full) & Minimize-to-Orb (X) buttons
+                                    // Compact/Full Width & Minimize-to-Orb (X) Controls
                                     Row(
                                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                                         verticalAlignment = Alignment.CenterVertically
@@ -575,7 +641,7 @@ fun AlanMainScreen(
                                         ) {
                                             Icon(
                                                 imageVector = if (glassDockCompact) Icons.Outlined.UnfoldMore else Icons.Outlined.UnfoldLess,
-                                                contentDescription = "تغییر اندازه",
+                                                contentDescription = "عرض",
                                                 tint = p.accentGold,
                                                 modifier = Modifier.size(13.dp)
                                             )
@@ -591,18 +657,19 @@ fun AlanMainScreen(
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Outlined.Close,
-                                                contentDescription = "کوچک کردن منو",
+                                                contentDescription = "کوچک کردن",
                                                 tint = p.textPrimary,
                                                 modifier = Modifier.size(13.dp)
                                             )
                                         }
                                     }
 
-                                    // Circular Nav Items (Tap switches tab while keeping sidebar open!)
+                                    // Scrollable Circular Nav Options (stays open across tab switches!)
                                     Column(
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         verticalArrangement = Arrangement.spacedBy(if (glassDockCompact) 6.dp else 8.dp),
                                         modifier = Modifier
+                                            .weight(1f)
                                             .fillMaxWidth()
                                             .verticalScroll(rememberScrollState())
                                             .padding(vertical = 2.dp)
@@ -656,6 +723,41 @@ fun AlanMainScreen(
                                             }
                                         }
                                     }
+
+                                    // Bottom Vertical Height Resize Grip (Drag up/down to freely change sidebar length!)
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(18.dp)
+                                            .pointerInput(containerHeightPx) {
+                                                detectDragGestures { change, dragAmount ->
+                                                    change.consume()
+                                                    val deltaFrac = dragAmount.y / containerHeightPx.coerceAtLeast(1f)
+                                                    dockHeightFraction = (dockHeightFraction + deltaFrac).coerceIn(0.30f, 0.84f)
+                                                }
+                                            }
+                                    ) {
+                                        Column(
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(24.dp)
+                                                    .height(2.5.dp)
+                                                    .clip(CircleShape)
+                                                    .background(p.accentGold.copy(alpha = 0.72f))
+                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(16.dp)
+                                                    .height(2.dp)
+                                                    .clip(CircleShape)
+                                                    .background(p.accentGold.copy(alpha = 0.45f))
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -672,6 +774,18 @@ fun AlanMainScreen(
                                 controller.updateSplitTunnelConfig(mode, pkgs)
                                 showSplitTunnelDialog = false
                             }
+                        )
+                    }
+
+                    if (showHardwarePanel) {
+                        AlanHardwareDiagnosticsDialog(
+                            health = hardwareHealth,
+                            isConnected = telemetry.isConnected,
+                            tunnelMode = settings.tunnelMode,
+                            onRefresh = { controller.refreshHardwareHealth() },
+                            onForceGc = { controller.forceGcAndRefreshHardware() },
+                            onResetPeaks = { controller.resetHardwarePeaks() },
+                            onDismiss = { showHardwarePanel = false }
                         )
                     }
                 }

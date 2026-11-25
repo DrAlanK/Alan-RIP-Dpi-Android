@@ -474,8 +474,8 @@ fun ProfilesTabScreen(
 
         // 5. Profiles List
         LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(9.dp),
-            contentPadding = PaddingValues(bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            contentPadding = PaddingValues(bottom = 76.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
@@ -754,43 +754,42 @@ private fun V2ServerRowCard(
     val uriLow = remember(item.uri) { item.uri.lowercase(Locale.US) }
     val protoUp = remember(item.protocol) { item.protocol.uppercase(Locale.US) }
 
-    val transportAndSec = remember(uriLow, protoUp) {
+    val transportShort = remember(uriLow, protoUp) {
         when (protoUp) {
-            "ANYCONNECT", "OPENCONNECT" -> "ssl-vpn • tls"
-            "IKEV2" -> "ipsec • udp"
-            "L2TP" -> "l2tp • udp"
-            "SOCKS", "SOCKS5", "SOCKS4" -> "socks5 • tcp"
+            "ANYCONNECT", "OPENCONNECT" -> "ssl"
+            "IKEV2" -> "ipsec"
+            "L2TP" -> "l2tp"
+            "SOCKS", "SOCKS5", "SOCKS4" -> "socks5"
             else -> {
                 val net = when {
                     uriLow.contains("type=ws") || uriLow.contains("\"net\":\"ws\"") -> "ws"
                     uriLow.contains("type=grpc") || uriLow.contains("\"net\":\"grpc\"") -> "grpc"
-                    uriLow.contains("type=httpupgrade") -> "httpupgrade"
+                    uriLow.contains("type=httpupgrade") -> "httpup"
                     uriLow.contains("type=xhttp") || uriLow.contains("type=splithttp") -> "xhttp"
                     else -> "tcp"
                 }
                 val sec = when {
                     uriLow.contains("security=reality") -> "reality"
                     uriLow.contains("security=tls") || uriLow.contains("\"tls\":\"tls\"") -> "tls"
-                    else -> "none"
+                    else -> ""
                 }
-                "$net + $sec"
+                if (sec.isNotEmpty()) "$net+$sec" else net
             }
         }
     }
 
     val pingColor = when {
         item.status.equals("DEAD", true) || item.pingMs < 0 -> p.danger
-        item.pingMs in 1..250 -> p.emerald
-        item.pingMs > 250 -> p.accentGold
+        item.pingMs in 1..280 -> p.emerald
+        item.pingMs > 280 -> p.accentGold
         else -> p.textMuted
     }
     val pingText = when {
         item.status.equals("DEAD", true) || item.pingMs < 0 -> "timeout"
-        item.pingMs > 0 -> "${item.pingMs} ms"
-        else -> "—"
+        item.pingMs > 0 -> "${item.pingMs}ms"
+        else -> "تست"
     }
-    val isEntProto = protoUp in setOf("ANYCONNECT", "OPENCONNECT", "IKEV2", "L2TP")
-    val vectorTag = if (isEntProto) "NATIVE" else item.cachedVectorId.ifBlank { item.preferredVectorId.ifBlank { "AUTO" } }
+    val vectorTag = item.cachedVectorId.ifBlank { item.preferredVectorId.takeIf { it != "AUTO" }.orEmpty() }
     val cleanTitle = remember(item.name, item.protocol, item.host) {
         item.name.trim().ifBlank { "${item.protocol} (${item.host})" }
     }
@@ -800,186 +799,122 @@ private fun V2ServerRowCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
-            .then(
-                if (item.isSelected || isChecked) {
-                    Modifier.alanNeuInset(cornerRadius = 16.dp, accented = true)
-                } else {
-                    Modifier.alanGlassCard(cornerRadius = 16.dp)
-                }
+            .clip(RoundedCornerShape(13.dp))
+            .background(
+                if (item.isSelected || isChecked) p.accentSoftBg
+                else p.surfaceBg
             )
             .clickable(onClick = onSelect)
     ) {
+        // v2rayNG Left/Right Selection Indicator Strip
         Box(
             modifier = Modifier
-                .width(if (item.isSelected || isChecked) 5.dp else 3.dp)
+                .width(if (item.isSelected || isChecked) 4.dp else 2.dp)
                 .fillMaxHeight()
                 .background(
                     when {
                         item.isSelected || isChecked -> p.emerald
-                        item.pingMs > 0 -> p.accentGold.copy(alpha = 0.55f)
+                        item.pingMs > 0 -> p.accentGold.copy(alpha = 0.45f)
                         else -> Color.Transparent
                     }
                 )
         )
 
-        Column(
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier
                 .weight(1f)
-                .padding(horizontal = 13.dp, vertical = 10.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
+            // Left: Checkbox (only in multi-select) + Clean 2-line v2rayNG text info
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                modifier = Modifier.weight(1f)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    if (multiSelectMode) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(20.dp)
-                                .then(
-                                    if (isChecked) {
-                                        Modifier.clip(RoundedCornerShape(5.dp)).background(p.accentGold)
-                                    } else {
-                                        Modifier.alanNeuInset(cornerRadius = 5.dp)
-                                    }
-                                )
-                        ) {
-                            if (isChecked) {
-                                Icon(Icons.Outlined.Check, null, tint = p.onAccent, modifier = Modifier.size(13.dp))
-                            }
+                if (multiSelectMode) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(19.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(if (isChecked) p.accentGold else p.subtleBg)
+                    ) {
+                        if (isChecked) {
+                            Icon(Icons.Outlined.Check, null, tint = p.onAccent, modifier = Modifier.size(13.dp))
                         }
                     }
+                }
 
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.weight(1f)) {
                     LtrContent {
                         Text(
                             text = cleanTitle,
                             color = if (item.isSelected) p.emerald else p.textPrimary,
-                            fontWeight = FontWeight.ExtraBold,
+                            fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    LtrContent {
+                        val metaLine = buildString {
+                            append(protoUp)
+                            append(" • ")
+                            append(transportShort)
+                            if (vectorTag.isNotEmpty()) {
+                                append(" • ")
+                                append(vectorTag)
+                            }
+                            append("  ")
+                            append("${item.host}:${item.port}")
+                        }
+                        Text(
+                            text = metaLine,
+                            color = p.textMuted,
+                            fontSize = 10.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
+            }
 
-                Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(8.dp))
 
+            // Right: Clean v2rayNG Ping Text (tap to ping!) + Single Minimal More Icon
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .alanNeuInset(cornerRadius = 7.dp)
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                        .clip(RoundedCornerShape(7.dp))
+                        .clickable(onClick = onPingSingle)
+                        .padding(horizontal = 7.dp, vertical = 5.dp)
                 ) {
                     LtrContent {
                         Text(
                             text = pingText,
                             color = pingColor,
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 11.sp
+                            fontSize = 11.5.sp
                         )
                     }
                 }
-            }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                LtrContent {
-                    Text(
-                        text = if (item.sni.isNotBlank() && item.sni != item.host) {
-                            "${item.host}:${item.port}  •  ${item.sni}"
-                        } else {
-                            "${item.host}:${item.port}"
-                        },
-                        color = p.textMuted,
-                        fontSize = 10.5.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                Spacer(Modifier.width(6.dp))
-
-                Box(
+                Icon(
+                    imageVector = Icons.Outlined.MoreVert,
+                    contentDescription = "گزینه‌ها",
+                    tint = p.textSecondary,
                     modifier = Modifier
-                        .alanNeuInset(cornerRadius = 6.dp)
-                        .padding(horizontal = 7.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = groupLabel,
-                        color = p.accentGold,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
-                    )
-                }
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                LtrContent {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .alanNeuInset(cornerRadius = 6.dp)
-                                .padding(horizontal = 7.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = protoUp,
-                                color = p.emerald,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 9.5.sp
-                            )
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .alanNeuInset(cornerRadius = 6.dp)
-                                .padding(horizontal = 7.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = transportAndSec,
-                                color = p.textSecondary,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 9.5.sp
-                            )
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .alanNeuInset(cornerRadius = 6.dp)
-                                .padding(horizontal = 7.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = vectorTag,
-                                color = p.accentGold,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 9.5.sp
-                            )
-                        }
-                    }
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SmallTactileActionBtn(Icons.Outlined.NetworkCheck, p.emerald, onPingSingle)
-                    SmallTactileActionBtn(Icons.Outlined.QrCode2, p.accentGold, onShowQr)
-                    SmallTactileActionBtn(Icons.Outlined.MoreVert, p.textSecondary, onOpenActions)
-                }
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onOpenActions)
+                        .padding(4.dp)
+                )
             }
         }
     }

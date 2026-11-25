@@ -148,6 +148,7 @@ fun HomeTabScreen(
     val cleanStatusHeadline = when {
         isDisconnectingPhase -> "در حال قطع اتصال..."
         telemetry.isConnected && isPureAutoMode -> "متصل از طریق شبکه ابری هوشمند"
+        telemetry.isConnected && settings.tunnelMode.equals("PROXY", true) -> "پروکسی محلی فعال: SOCKS5 :${settings.socksPort} • HTTP :${settings.httpPort}"
         telemetry.isConnected -> "تونل امن روی پروفایل شخصی برقرار است"
         telemetry.isConnecting -> sanitizePersianStatusLine(telemetry.statusDetail, telemetry.progressPercent)
         isErrorPhase -> "ارتباط برقرار نشد؛ متد یا سرور دیگری را امتحان کنید"
@@ -1073,12 +1074,17 @@ private fun LiveRouteTimelineDialog(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScannerTabScreen(
     profiles: List<ProfileItem>,
     vectors: List<VectorSpec> = emptyList(),
     scanRows: List<ScanResultRow>,
     scanState: ScanUiState,
+    isTunnelConnected: Boolean = false,
+    isTunnelConnecting: Boolean = false,
+    activeVectorId: String = "",
+    activePingMs: Int = 0,
     forcedTargetIndex: Int?,
     onConsumedForcedTarget: () -> Unit,
     onStartMultiMethodScan: (scopeMode: String, selectedIndices: List<Int>, autoConnect: Boolean, useCleanIp: Boolean, selectedVectorIds: List<String>) -> Unit,
@@ -1092,7 +1098,7 @@ fun ScannerTabScreen(
     var autoConnectFirst by rememberSaveable { mutableStateOf(true) }
     var useCleanIpInScan by rememberSaveable { mutableStateOf(false) }
     var showMultiPicker by remember { mutableStateOf(false) }
-    var showVectorPicker by remember { mutableStateOf(false) }
+    var showVectorSheet by remember { mutableStateOf(false) }
     var localConnectLock by remember { mutableStateOf(false) }
     val selectedMultiIndices = remember { mutableStateListOf<Int>() }
     val selectedVectorIds = remember { mutableStateListOf<String>() }
@@ -1110,14 +1116,28 @@ fun ScannerTabScreen(
         }
     }
 
-    LaunchedEffect(scanState.isRunning, scanState.mode) {
-        if (scanState.isRunning) {
+    // Dynamically synchronize lock state with REAL connection state (never stuck on "Connecting..."!)
+    LaunchedEffect(isTunnelConnected, isTunnelConnecting, scanState.isRunning, scanState.mode) {
+        if (isTunnelConnected || (!isTunnelConnecting && scanState.mode != "auto_connecting")) {
             localConnectLock = false
         }
     }
 
-    val isAutoConnecting = scanState.mode == "auto_connecting" || localConnectLock
-    val cardsLocked = scanState.isRunning || isAutoConnecting
+    val isAutoConnectingNow = !isTunnelConnected && (
+        (scanState.mode == "auto_connecting" && isTunnelConnecting) ||
+            (localConnectLock && isTunnelConnecting)
+    )
+    val cardsLocked = scanState.isRunning || isAutoConnectingNow
+
+    val dynamicSummaryText = when {
+        isTunnelConnected && scanRows.isNotEmpty() ->
+            "✅ متصل شد روی ${activeVectorId.ifBlank { scanRows.first().boundVector }}${if (activePingMs > 0) " (${activePingMs}ms)" else ""}"
+        isAutoConnectingNow ->
+            "⚡ در حال اتصال خودکار به بهترین متد..."
+        !isTunnelConnected && !isTunnelConnecting && (scanState.mode == "auto_connecting" || scanState.mode == "connected") ->
+            "اتصال قطع شد — آماده اسکن یا انتخاب متد"
+        else -> scanState.summary
+    }
 
     val profileOptions = remember(profiles) {
         profiles.mapIndexed { idx, prof ->
@@ -1136,7 +1156,7 @@ fun ScannerTabScreen(
     )
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 8.dp)
@@ -1159,13 +1179,10 @@ fun ScannerTabScreen(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .weight(1f)
-                        .height(32.dp)
+                        .height(33.dp)
                         .then(
-                            if (sel) {
-                                Modifier.alanGlassCard(highlighted = true, cornerRadius = 10.dp)
-                            } else {
-                                Modifier.clip(RoundedCornerShape(10.dp))
-                            }
+                            if (sel) Modifier.alanGlassCard(highlighted = true, cornerRadius = 10.dp)
+                            else Modifier.clip(RoundedCornerShape(10.dp))
                         )
                         .clickable { scopeMode = key }
                 ) {
@@ -1181,10 +1198,10 @@ fun ScannerTabScreen(
 
         // Compact Controls Card
         Column(
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .alanGlassCard(cornerRadius = 16.dp)
+                .alanGlassCard(cornerRadius = 17.dp)
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             when (scopeMode) {
@@ -1244,103 +1261,39 @@ fun ScannerTabScreen(
                 }
             }
 
-            // Custom Vector Selector Accordion
-            Column(
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+            // Tap-to-Open Sleek Bottom Sheet Drawer for Selecting Methods
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .alanNeuInset(cornerRadius = 11.dp)
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .alanNeuInset(cornerRadius = 12.dp, accented = selectedVectorIds.isNotEmpty())
+                    .clickable { showVectorSheet = true }
+                    .padding(horizontal = 12.dp, vertical = 9.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showVectorPicker = !showVectorPicker }
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = if (selectedVectorIds.isEmpty()) "متدهای اسکن: همه متدها (${vectors.size})" else "متدهای انتخابی (${selectedVectorIds.size} متد)",
-                            color = p.textPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp
-                        )
-                        Text(
-                            text = if (selectedVectorIds.isEmpty()) "اولویت با ۵ متد جدید (VEC-27, 28, 24, 25, 26)" else selectedVectorIds.joinToString(", "),
-                            color = p.accentGold,
-                            fontSize = 9.5.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (showVectorPicker) "بستن ▲" else "انتخاب متدها ▼",
-                        color = p.emerald,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 10.5.sp
+                        text = if (selectedVectorIds.isEmpty()) "متدهای اسکن: همه متدها (${vectors.size})" else "متدهای انتخابی (${selectedVectorIds.size} متد)",
+                        color = p.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.5.sp
+                    )
+                    Text(
+                        text = if (selectedVectorIds.isEmpty()) "اولویت با ۵ متد جدید (VEC-27, 28, 24, 25, 26)" else selectedVectorIds.joinToString(", "),
+                        color = p.accentGold,
+                        fontSize = 9.8.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-
-                if (showVectorPicker && vectors.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(28.dp)
-                                .alanGlassCard(highlighted = selectedVectorIds.isEmpty(), cornerRadius = 8.dp)
-                                .clickable { selectedVectorIds.clear() }
-                        ) {
-                            Text("همه متدها", color = if (selectedVectorIds.isEmpty()) p.accentGold else p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                        }
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .weight(1.3f)
-                                .height(28.dp)
-                                .alanGlassCard(cornerRadius = 8.dp)
-                                .clickable {
-                                    selectedVectorIds.clear()
-                                    selectedVectorIds.addAll(listOf("VEC-27", "VEC-28", "VEC-24", "VEC-25", "VEC-26"))
-                                }
-                        ) {
-                            Text("۵ متد جدید (v1.7)", color = p.emerald, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                        }
-                    }
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                    ) {
-                        vectors.forEach { vSpec ->
-                            val picked = vSpec.id in selectedVectorIds
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .height(30.dp)
-                                    .then(
-                                        if (picked) Modifier.clip(RoundedCornerShape(8.dp)).background(p.accentGold)
-                                        else Modifier.alanGlassCard(cornerRadius = 8.dp)
-                                    )
-                                    .clickable {
-                                        if (picked) selectedVectorIds.remove(vSpec.id) else selectedVectorIds.add(vSpec.id)
-                                    }
-                                    .padding(horizontal = 9.dp)
-                            ) {
-                                LtrContent {
-                                    Text(
-                                        text = vSpec.id,
-                                        color = if (picked) p.onAccent else p.textSecondary,
-                                        fontWeight = if (picked) FontWeight.ExtraBold else FontWeight.SemiBold,
-                                        fontSize = 10.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .alanGlassCard(cornerRadius = 8.dp)
+                        .padding(horizontal = 9.dp, vertical = 5.dp)
+                ) {
+                    Text("انتخاب متد", color = p.emerald, fontWeight = FontWeight.ExtraBold, fontSize = 10.sp)
                 }
             }
 
@@ -1378,17 +1331,23 @@ fun ScannerTabScreen(
                 }
             }
 
+            // Neumorphic Scan Button + Dynamic Status Summary
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .height(38.dp)
-                        .clip(RoundedCornerShape(11.dp))
-                        .background(if (scanState.isRunning) p.danger else p.accentGold)
+                        .height(42.dp)
+                        .then(
+                            if (scanState.isRunning) {
+                                Modifier.alanNeuInset(cornerRadius = 13.dp, accented = true)
+                            } else {
+                                Modifier.alanGlassCard(highlighted = true, cornerRadius = 13.dp, accentBorderColor = p.accentGold)
+                            }
+                        )
                         .clickable {
                             if (scanState.isRunning) {
                                 onStopScan()
@@ -1402,20 +1361,32 @@ fun ScannerTabScreen(
                                 onStartMultiMethodScan(scopeMode, indices, autoConnectFirst, useCleanIpInScan, selectedVectorIds.toList())
                             }
                         }
-                        .padding(horizontal = 16.dp)
+                        .padding(horizontal = 18.dp)
                 ) {
-                    Text(
-                        text = if (scanState.isRunning) "توقف اسکن" else "شروع اسکن",
-                        color = if (scanState.isRunning) Color.White else p.onAccent,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 12.sp
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Icon(
+                            imageVector = if (scanState.isRunning) Icons.Outlined.Close else Icons.Outlined.Bolt,
+                            contentDescription = null,
+                            tint = if (scanState.isRunning) p.danger else p.accentGold,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = if (scanState.isRunning) "توقف اسکن" else "شروع اسکن",
+                            color = if (scanState.isRunning) p.danger else p.accentGold,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 12.sp
+                        )
+                    }
                 }
 
                 Text(
-                    text = scanState.summary,
-                    color = if (isAutoConnecting) p.accentGold else p.textSecondary,
-                    fontWeight = if (isAutoConnecting) FontWeight.Bold else FontWeight.Normal,
+                    text = dynamicSummaryText,
+                    color = when {
+                        isTunnelConnected -> p.emerald
+                        isAutoConnectingNow -> p.accentGold
+                        else -> p.textSecondary
+                    },
+                    fontWeight = if (isTunnelConnected || isAutoConnectingNow) FontWeight.Bold else FontWeight.Normal,
                     fontSize = 10.5.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -1424,18 +1395,18 @@ fun ScannerTabScreen(
             }
         }
 
-        // Prominent UI Lock Banner when Auto-Connecting to prevent race-condition crashes
-        if (isAutoConnecting) {
+        // Dynamic Banner (Only while actively auto-connecting, disappears automatically once connected or disconnected!)
+        if (isAutoConnectingNow) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
                 modifier = Modifier
                     .fillMaxWidth()
                     .alanGlassCard(highlighted = true, cornerRadius = 13.dp)
-                    .padding(horizontal = 12.dp, vertical = 9.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
-                    text = "⚡ در حال اتصال خودکار به بهترین متد؛ لطفاً روی متدها کلیک نکنید...",
+                    text = "⚡ در حال اتصال خودکار به بهترین متد؛ لطفاً لحظه‌ای صبر کنید...",
                     color = p.accentGold,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 11.sp,
@@ -1444,10 +1415,10 @@ fun ScannerTabScreen(
             }
         }
 
-        // Compact Verified Results List
+        // Results List
         LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(7.dp),
-            contentPadding = PaddingValues(bottom = 72.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = 76.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
@@ -1456,11 +1427,12 @@ fun ScannerTabScreen(
                 items = scanRows,
                 key = { idx, row -> "$idx-${row.targetIndex}-${row.itemId}" }
             ) { _, row ->
+                val isThisConnected = isTunnelConnected && activeVectorId.equals(row.boundVector, ignoreCase = true)
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .alanGlassCard(highlighted = row.rank == 1, cornerRadius = 14.dp)
+                        .alanGlassCard(highlighted = isThisConnected || row.rank == 1, cornerRadius = 14.dp)
                         .padding(horizontal = 12.dp, vertical = 9.dp)
                 ) {
                     Row(
@@ -1471,7 +1443,11 @@ fun ScannerTabScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "#${row.rank}  ${row.title.ifBlank { row.itemId }}",
-                                color = if (row.rank == 1) p.accentGold else p.textPrimary,
+                                color = when {
+                                    isThisConnected -> p.emerald
+                                    row.rank == 1 -> p.accentGold
+                                    else -> p.textPrimary
+                                },
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 12.sp,
                                 maxLines = 1,
@@ -1505,8 +1481,8 @@ fun ScannerTabScreen(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
                                 .weight(1f)
-                                .height(33.dp)
-                                .alanNeuInset(cornerRadius = 9.dp)
+                                .height(34.dp)
+                                .alanNeuInset(cornerRadius = 10.dp)
                                 .clickable(enabled = !cardsLocked) {
                                     onApplyVectorSingle(row.itemId, row.targetIndex, row.endpoint)
                                 }
@@ -1522,21 +1498,183 @@ fun ScannerTabScreen(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
                                 .weight(1.25f)
-                                .height(33.dp)
-                                .clip(RoundedCornerShape(9.dp))
-                                .background(if (cardsLocked) p.cardBorder else p.accentGold)
+                                .height(34.dp)
+                                .then(
+                                    if (isThisConnected) Modifier.alanNeuInset(cornerRadius = 10.dp, accented = true)
+                                    else Modifier.alanGlassCard(highlighted = !cardsLocked, cornerRadius = 10.dp)
+                                )
                                 .clickable(enabled = !cardsLocked) {
                                     localConnectLock = true
                                     onApplyVectorAndConnect(row.itemId, row.targetIndex, row.endpoint)
                                 }
                         ) {
                             Text(
-                                text = if (isAutoConnecting) "در حال اتصال..." else "ثبت و اتصال",
-                                color = if (cardsLocked) p.textMuted else p.onAccent,
+                                text = when {
+                                    isThisConnected -> "متصل است ✓"
+                                    isAutoConnectingNow -> "در حال اتصال..."
+                                    else -> "ثبت و اتصال"
+                                },
+                                color = when {
+                                    isThisConnected -> p.emerald
+                                    cardsLocked -> p.textMuted
+                                    else -> p.accentGold
+                                },
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 11.sp
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // Beautiful ModalBottomSheet Drawer for Choosing Methods
+    if (showVectorSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showVectorSheet = false },
+            sheetState = sheetState,
+            containerColor = p.surfaceBg,
+            contentColor = p.textPrimary,
+            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)
+        ) {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .padding(bottom = 18.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column {
+                            Text("انتخاب متدهای اسکن", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 14.5.sp)
+                            Text(
+                                text = if (selectedVectorIds.isEmpty()) "همه ${vectors.size} متد با اولویت ۵ متد جدید اسکن می‌شوند" else "${selectedVectorIds.size} متد انتخاب شده",
+                                color = p.textMuted,
+                                fontSize = 10.5.sp
+                            )
+                        }
+                        AlanNeuIconButton(Icons.Outlined.Close, p.textSecondary, 34.dp, onClick = { showVectorSheet = false })
+                    }
+
+                    // Preset Quick Pills
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(36.dp)
+                                .then(
+                                    if (selectedVectorIds.isEmpty()) Modifier.alanNeuInset(cornerRadius = 11.dp, accented = true)
+                                    else Modifier.alanGlassCard(cornerRadius = 11.dp)
+                                )
+                                .clickable { selectedVectorIds.clear() }
+                        ) {
+                            Text("همه متدها", color = if (selectedVectorIds.isEmpty()) p.accentGold else p.textSecondary, fontWeight = FontWeight.ExtraBold, fontSize = 10.5.sp)
+                        }
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1.2f)
+                                .height(36.dp)
+                                .alanGlassCard(cornerRadius = 11.dp)
+                                .clickable {
+                                    selectedVectorIds.clear()
+                                    selectedVectorIds.addAll(listOf("VEC-27", "VEC-28", "VEC-24", "VEC-25", "VEC-26"))
+                                }
+                        ) {
+                            Text("۵ متد جدید (v1.7)", color = p.emerald, fontWeight = FontWeight.ExtraBold, fontSize = 10.5.sp)
+                        }
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(36.dp)
+                                .alanGlassCard(cornerRadius = 11.dp)
+                                .clickable {
+                                    selectedVectorIds.clear()
+                                    selectedVectorIds.addAll(listOf("VEC-27", "VEC-24", "VEC-17", "VEC-20", "VEC-23", "VEC-11"))
+                                }
+                        ) {
+                            Text("بدون OOB", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
+                        }
+                    }
+
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 340.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        vectors.forEach { vSpec ->
+                            val picked = vSpec.id in selectedVectorIds
+                            val isNewV17 = vSpec.id in setOf("VEC-24", "VEC-25", "VEC-26", "VEC-27", "VEC-28")
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(
+                                        if (picked) Modifier.alanNeuInset(cornerRadius = 13.dp, accented = true)
+                                        else Modifier.alanGlassCard(cornerRadius = 13.dp)
+                                    )
+                                    .clickable {
+                                        if (picked) selectedVectorIds.remove(vSpec.id) else selectedVectorIds.add(vSpec.id)
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                LtrContent {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            text = vSpec.id,
+                                            color = if (picked) p.accentGold else if (isNewV17) p.emerald else p.textPrimary,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 12.sp
+                                        )
+                                        Text(
+                                            text = vSpec.name.substringAfter("—").trim(),
+                                            color = p.textSecondary,
+                                            fontSize = 11.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(if (picked) p.accentGold else Color.Transparent)
+                                ) {
+                                    if (picked) {
+                                        Icon(Icons.Outlined.Check, null, tint = p.onAccent, modifier = Modifier.size(14.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp)
+                            .alanGlassCard(highlighted = true, cornerRadius = 13.dp)
+                            .clickable { showVectorSheet = false }
+                    ) {
+                        Text("تایید انتخاب متدها", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 12.5.sp)
                     }
                 }
             }

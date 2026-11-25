@@ -34,6 +34,7 @@ class XrayCoreManager(
                 File(appContext.filesDir, ".xray_env_key").delete()
             } catch (_: Throwable) {
             }
+            AlanCaSanitizer.initAndExportCleanCaBundle(appContext) { msg -> statusLogger?.invoke(msg) }
             Seq.setContext(appContext)
             Libv2ray.initCoreEnv(appContext.filesDir.absolutePath, "")
             envInitialized.set(true)

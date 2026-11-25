@@ -191,7 +191,7 @@ class CleanIpScannerEngine(context: Context) {
             createProtectedRawSocket().apply { connect(InetSocketAddress(a, p), 2500) }
     }
 
-    private val httpClient = OkHttpClient.Builder()
+    private val httpClient = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(OkHttpClient.Builder())
         .socketFactory(protectedSocketFactory)
         .connectTimeout(2600, TimeUnit.MILLISECONDS)
         .readTimeout(2800, TimeUnit.MILLISECONDS)

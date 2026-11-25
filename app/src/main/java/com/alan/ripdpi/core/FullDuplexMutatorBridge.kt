@@ -21,7 +21,10 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -39,17 +42,19 @@ class FullDuplexMutatorBridge(
     initialJitterBytes: Int = 20,
     initialRawPassthrough: Boolean = false,
     val socks5DynamicMode: Boolean = false,
+    private val verboseSessionLogs: Boolean = false,
     private val protectSocket: ((Socket) -> Boolean)? = null,
     private val onLog: ((String) -> Unit)? = null
 ) {
 
     companion object {
-        private const val RX_SOCK_BUF = 4 * 1024 * 1024
+        // Mobile-optimized asymmetric buffers: 512KB RX / 96KB TX prevents 200MB+ RAM spikes & GC battery drain
+        private const val RX_SOCK_BUF = 512 * 1024
         private const val TX_ASYMMETRIC_BUF = 98304
-        private const val TX_BULK_FASTPATH_BUF = 524288
+        private const val TX_BULK_FASTPATH_BUF = 393216
         private const val TCP_MAXSEG_OPT = 2
         private const val TCP_MAXSEG_VALUE = 1220
-        private const val STREAM_CHUNK_SIZE = 65536
+        private const val STREAM_CHUNK_SIZE = 32768
         private const val UPLINK_SHIELD_WINDOW_BYTES = 16384
         private const val CONNECT_TIMEOUT_MS = 6500
         private const val HANDSHAKE_READ_TIMEOUT_MS = 6500
@@ -68,12 +73,15 @@ class FullDuplexMutatorBridge(
             override fun createSocket(a: InetAddress?, p: Int, la: InetAddress?, lp: Int): Socket = base.createSocket(a, p, la, lp)
         }
 
-        private val dohClient = OkHttpClient.Builder()
-            .socketFactory(dohSocketFactory)
-            .connectTimeout(2000, TimeUnit.MILLISECONDS)
-            .readTimeout(2000, TimeUnit.MILLISECONDS)
-            .retryOnConnectionFailure(false)
-            .build()
+        private val dohClient: OkHttpClient by lazy {
+            AlanCaSanitizer.applyTo(
+                OkHttpClient.Builder()
+                    .socketFactory(dohSocketFactory)
+                    .connectTimeout(2000, TimeUnit.MILLISECONDS)
+                    .readTimeout(2000, TimeUnit.MILLISECONDS)
+                    .retryOnConnectionFailure(false)
+            ).build()
+        }
 
         fun isPoisonedIp(ip: String): Boolean {
             val v = ip.trim()
@@ -116,8 +124,21 @@ class FullDuplexMutatorBridge(
     val txBytesTotal: AtomicLong = AtomicLong(0L)
     val rxBytesTotal: AtomicLong = AtomicLong(0L)
 
-    private val ioPool = Executors.newCachedThreadPool { r ->
-        Thread(r, "AlanMutatorBridge").apply { isDaemon = true }
+    // Bounded self-shrinking thread pool: idle threads terminate after 15s (zero idle CPU/battery!)
+    private val ioPool = ThreadPoolExecutor(
+        2,
+        128,
+        15L,
+        TimeUnit.SECONDS,
+        SynchronousQueue(),
+        ThreadFactory { r -> Thread(r, "AlanBridgeIO").apply { isDaemon = true } }
+    ).apply {
+        allowCoreThreadTimeOut(true)
+        setRejectedExecutionHandler { r, _ ->
+            if (running.get()) {
+                Thread(r, "AlanBridgeOverflow").apply { isDaemon = true }.start()
+            }
+        }
     }
 
     @Volatile
@@ -206,14 +227,14 @@ class FullDuplexMutatorBridge(
         val srv = ServerSocket()
         srv.reuseAddress = true
         try {
-            srv.bind(InetSocketAddress("127.0.0.1", listenPort), 256)
+            srv.bind(InetSocketAddress("127.0.0.1", listenPort), 128)
         } catch (_: BindException) {
-            onLog?.invoke("[Bridge] Port $listenPort busy (EADDRINUSE) -> auto-allocating clean ephemeral port")
-            srv.bind(InetSocketAddress("127.0.0.1", 0), 256)
+            onLog?.invoke("[Bridge] Port $listenPort busy (EADDRINUSE) -> auto-allocating ephemeral port")
+            srv.bind(InetSocketAddress("127.0.0.1", 0), 128)
         }
         boundPort = srv.localPort
         serverSocket = srv
-        onLog?.invoke("[Bridge] Listening 127.0.0.1:$boundPort (RX=4MB, TX=96KB, TCP_MAXSEG=$TCP_MAXSEG_VALUE, socks5Dyn=$socks5DynamicMode)")
+        onLog?.invoke("[Bridge] Active 127.0.0.1:$boundPort (RX=512KB, TX=96KB, MSS=$TCP_MAXSEG_VALUE)")
         ioPool.execute { acceptLoop(srv) }
         return boundPort
     }
@@ -261,7 +282,6 @@ class FullDuplexMutatorBridge(
             if (picked != null) {
                 dohResolutionCache[clean] = picked
                 cachedAddressRef.set(clean to picked)
-                onLog?.invoke("[DNS] $clean -> ${picked.hostAddress} (System)")
                 return picked
             }
         } catch (_: Throwable) {
@@ -286,7 +306,7 @@ class FullDuplexMutatorBridge(
                                         val resolved = InetAddress.getByName(ipStr)
                                         dohResolutionCache[clean] = resolved
                                         cachedAddressRef.set(clean to resolved)
-                                        onLog?.invoke("[DoH] $clean -> $ipStr (Anti-Poison)")
+                                        onLog?.invoke("[DoH] $clean -> $ipStr")
                                         return resolved
                                     }
                                 }
@@ -308,9 +328,7 @@ class FullDuplexMutatorBridge(
         var hdrRead = 0
         while (hdrRead < 5) {
             val n = ins.read(hdr, hdrRead, 5 - hdrRead)
-            if (n <= 0) {
-                return if (hdrRead > 0) hdr.copyOf(hdrRead) else ByteArray(0)
-            }
+            if (n <= 0) return if (hdrRead > 0) hdr.copyOf(hdrRead) else ByteArray(0)
             hdrRead += n
         }
 
@@ -417,7 +435,6 @@ class FullDuplexMutatorBridge(
     }
 
     private fun transmitUplinkStream(
-        sid: Int,
         remoteSock: Socket,
         remoteOut: OutputStream,
         dataArr: ByteArray,
@@ -431,7 +448,6 @@ class FullDuplexMutatorBridge(
     ): Boolean {
         if (dataLen <= 0) return fastpathUnlocked
 
-        // VEC-27 / VEC-28: Strict Regional PMTU (<=1140B) & Anti-16KB Flow-Stall (<=880B) ceiling on ALL flights
         if (vec.hybridMode == "regional_pmtu_1180" || vec.hybridMode == "anti_16kb_flow_stall") {
             val maxCap = if (vec.hybridMode == "regional_pmtu_1180") 1140 else 880
             if (dataLen > maxCap) {
@@ -456,12 +472,10 @@ class FullDuplexMutatorBridge(
             return fastpathUnlocked
         }
 
-        // VEC-26: Unlock 512KB SO_SNDBUF & 32KB bulk relay after initial 16KB or Flight 4
         if (vec.hybridMode == "fastpath_nic_offload_bypass") {
             var unlocked = fastpathUnlocked
             if (!unlocked && (sessionTxBytes >= 16384L || flightNum >= 4)) {
                 try { remoteSock.sendBufferSize = TX_BULK_FASTPATH_BUF } catch (_: Throwable) {}
-                onLog?.invoke("[S#%04d] VEC-26 Bulk Fast-Path unlocked (tx=${sessionTxBytes}B, F$flightNum -> SO_SNDBUF=512KB)".format(sid))
                 unlocked = true
             }
             if (unlocked) {
@@ -478,7 +492,6 @@ class FullDuplexMutatorBridge(
             }
         }
 
-        // VEC-24: Token-Bucket CWND Pacing (880..1120B, 0.5ms every 3 chunks on first 48KB)
         if (vec.hybridMode == "cwnd_token_bucket") {
             if (sessionTxBytes <= 49152L && dataLen > 900) {
                 var pos = 0
@@ -580,7 +593,6 @@ class FullDuplexMutatorBridge(
             AlanVpnService.protectRawSocket(remoteSock)
             remoteSock.tcpNoDelay = true
             remoteSock.keepAlive = true
-            // Asymmetric 4MB RX / 96KB TX anti-bufferbloat tuning (Windows v1.5.0 parity)
             try {
                 remoteSock.receiveBufferSize = RX_SOCK_BUF
                 remoteSock.sendBufferSize = TX_ASYMMETRIC_BUF
@@ -598,20 +610,26 @@ class FullDuplexMutatorBridge(
 
             AlanVpnService.protectRawSocket(remoteSock)
 
-            clientPfd = try { ParcelFileDescriptor.fromSocket(clientSock) } catch (_: Throwable) { null }
-            remotePfd = try { ParcelFileDescriptor.fromSocket(remoteSock) } catch (_: Throwable) { null }
+            // Only duplicate FDs when needed for native OOB / coalesce / TCP_MAXSEG
+            val needClientFd = !cfg.rawPassthrough && cfg.vector.coalesceFlight2
+            val needRemoteFd = !cfg.rawPassthrough
+            if (needClientFd) {
+                clientPfd = try { ParcelFileDescriptor.fromSocket(clientSock) } catch (_: Throwable) { null }
+            }
+            if (needRemoteFd) {
+                remotePfd = try { ParcelFileDescriptor.fromSocket(remoteSock) } catch (_: Throwable) { null }
+                try {
+                    remotePfd?.fileDescriptor?.let { fdesc ->
+                        Os.setsockoptInt(fdesc, OsConstants.IPPROTO_TCP, TCP_MAXSEG_OPT, TCP_MAXSEG_VALUE)
+                    }
+                } catch (_: Throwable) {}
+            }
             val clientFd = clientPfd?.fd ?: -1
             val remoteFd = remotePfd?.fd ?: -1
 
-            // Set TCP_MAXSEG = 1220 to defeat regional PMTU blackholes
-            try {
-                remotePfd?.fileDescriptor?.let { fdesc ->
-                    Os.setsockoptInt(fdesc, OsConstants.IPPROTO_TCP, TCP_MAXSEG_OPT, TCP_MAXSEG_VALUE)
-                }
-            } catch (_: Throwable) {}
-
-            AlanNativeSocket.tuneTcpSocket(clientFd, RX_SOCK_BUF)
-            AlanNativeSocket.tuneTcpSocket(remoteFd, TX_ASYMMETRIC_BUF)
+            if (remoteFd >= 0) {
+                AlanNativeSocket.tuneTcpSocket(remoteFd, TX_ASYMMETRIC_BUF)
+            }
 
             val remoteOut = remoteSock.getOutputStream()
             var sessionTxBytes = 0L
@@ -644,7 +662,9 @@ class FullDuplexMutatorBridge(
                             customStride = cfg.customStride,
                             jitterBytes = cfg.jitterBytes
                         )
-                        onLog?.invoke("[S#%04d] %s:%d TCP=%dms | %s: %s".format(sid, targetAddr.hostAddress, effectivePort, tcpMs, cfg.vector.vectorId, trace))
+                        if (verboseSessionLogs || sid <= 3) {
+                            onLog?.invoke("[S#%04d] %s:%d TCP=%dms | %s: %s".format(sid, targetAddr.hostAddress, effectivePort, tcpMs, cfg.vector.vectorId, trace))
+                        }
                         sent
                     }
                     isHttpReq -> {
@@ -657,26 +677,33 @@ class FullDuplexMutatorBridge(
                             customStride = cfg.customStride,
                             jitterBytes = cfg.jitterBytes
                         )
-                        onLog?.invoke("[S#%04d] %s:%d TCP=%dms | %s: %s".format(sid, targetAddr.hostAddress, effectivePort, tcpMs, cfg.vector.vectorId, trace))
+                        if (verboseSessionLogs || sid <= 3) {
+                            onLog?.invoke("[S#%04d] %s:%d TCP=%dms | %s: %s".format(sid, targetAddr.hostAddress, effectivePort, tcpMs, cfg.vector.vectorId, trace))
+                        }
                         sent
                     }
                     else -> {
                         remoteOut.write(firstData)
                         remoteOut.flush()
-                        onLog?.invoke("[S#%04d] %s:%d TCP=%dms | RawFlight1=%dB".format(sid, targetAddr.hostAddress, effectivePort, tcpMs, firstData.size))
                         firstData.size
                     }
                 }
                 txBytesTotal.addAndGet(sentBytes.toLong())
                 sessionTxBytes += sentBytes.toLong()
-            } else {
-                onLog?.invoke("[S#%04d] %s:%d TCP=%dms | Direct Passthrough".format(sid, targetAddr.hostAddress, effectivePort, tcpMs))
+            }
+
+            // Free duplicated ParcelFileDescriptors right after Flight 1/2 if not needed to avoid FD accumulation!
+            if (cfg.rawPassthrough || (!cfg.vector.uplinkOobShield && !cfg.vector.coalesceFlight2)) {
+                try { clientPfd?.close() } catch (_: Throwable) {}
+                clientPfd = null
+                try { remotePfd?.close() } catch (_: Throwable) {}
+                remotePfd = null
             }
 
             remoteSock.soTimeout = 0
             clientSock.soTimeout = 0
 
-            val downDone = AtomicBoolean(false)
+            val downLatch = CountDownLatch(1)
             ioPool.execute {
                 val buf = ByteArray(STREAM_CHUNK_SIZE)
                 try {
@@ -692,7 +719,7 @@ class FullDuplexMutatorBridge(
                 } catch (_: Throwable) {
                 } finally {
                     try { clientSock.shutdownOutput() } catch (_: Throwable) {}
-                    downDone.set(true)
+                    downLatch.countDown()
                 }
             }
 
@@ -713,7 +740,7 @@ class FullDuplexMutatorBridge(
                     var dataArr = upBuf
                     var dataLen = n
 
-                    if (!cfg.rawPassthrough && flightNum == 2 && cfg.vector.coalesceFlight2 && n <= 180) {
+                    if (!cfg.rawPassthrough && flightNum == 2 && cfg.vector.coalesceFlight2 && n <= 180 && clientPfd != null) {
                         if (AlanNativeSocket.waitReadable(clientFd, 18)) {
                             val extraBuf = ByteArray(STREAM_CHUNK_SIZE)
                             val extraN = try { cIn.read(extraBuf) } catch (_: Throwable) { -1 }
@@ -725,6 +752,8 @@ class FullDuplexMutatorBridge(
                                 dataLen = merged.size
                             }
                         }
+                        try { clientPfd?.close() } catch (_: Throwable) {}
+                        clientPfd = null
                     }
 
                     val vec = cfg.vector
@@ -780,18 +809,21 @@ class FullDuplexMutatorBridge(
                             val sentSh = TlsByteMutator.transmitUplinkShieldFrame(
                                 sock = remoteSock,
                                 out = remoteOut,
-                                nativeFd = remoteFd,
+                                nativeFd = if (remotePfd != null) remoteFd else -1,
                                 payload = dataArr,
                                 payloadLen = dataLen,
                                 injectOob = wantOob,
                                 mssClamp = vec.uplinkMssClamp
                             )
+                            if (oobShieldDone && remotePfd != null) {
+                                try { remotePfd?.close() } catch (_: Throwable) {}
+                                remotePfd = null
+                            }
                             txBytesTotal.addAndGet(sentSh.toLong())
                             uplinkAppBytes += dataLen
                         }
                         else -> {
                             fastpathUnlocked = transmitUplinkStream(
-                                sid = sid,
                                 remoteSock = remoteSock,
                                 remoteOut = remoteOut,
                                 dataArr = dataArr,
@@ -812,13 +844,12 @@ class FullDuplexMutatorBridge(
                 try { remoteSock.shutdownOutput() } catch (_: Throwable) {}
             }
 
-            var waitedMs = 0
-            while (!downDone.get() && waitedMs < 18000 && running.get()) {
-                try { Thread.sleep(50L) } catch (_: InterruptedException) { break }
-                waitedMs += 50
+            // Zero-CPU wait for remote downlink shutdown (replaces 50ms busy-polling loop!)
+            try {
+                downLatch.await(8L, TimeUnit.SECONDS)
+            } catch (_: InterruptedException) {
             }
-        } catch (t: Throwable) {
-            onLog?.invoke("[S#%04d] ERR ${cfg.remoteHost}:${cfg.remotePort} -> ${t.javaClass.simpleName}: ${t.message}".format(sid))
+        } catch (_: Throwable) {
         } finally {
             liveSockets.remove(clientSock)
             liveSockets.remove(remoteSock)

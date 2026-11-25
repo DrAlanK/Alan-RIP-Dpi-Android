@@ -30,6 +30,15 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Route
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.UploadFile
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -320,7 +329,8 @@ fun GeneralSettingsScreen(
 @Composable
 fun XraySettingsScreen(
     settings: EngineSettings,
-    onPatchSettings: (Map<String, Any>) -> Unit
+    onPatchSettings: (Map<String, Any>) -> Unit,
+    onImportBypassFile: (targetType: String, rawText: String, replaceExisting: Boolean) -> Int = { _, _, _ -> 0 }
 ) {
     val p = LocalAlanPalette.current
     var strideText by remember(settings.forwardStrideBytes) { mutableStateOf(settings.forwardStrideBytes.toString()) }
@@ -413,7 +423,13 @@ fun XraySettingsScreen(
                 AlanSheetTextField("تعداد هم‌زمانی Mux", muxText, { muxText = it.filter(Char::isDigit) }, ltr = true, numeric = true)
             }
 
-            Box(
+            RoutingAndDnsSettingsSection(
+            settings = settings,
+            onPatchSettings = onPatchSettings,
+            onImportBypassFile = onImportBypassFile
+        )
+
+        Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -485,36 +501,353 @@ private fun CleanSwitchItem(
 }
 
 @Composable
-fun LogsTabScreen(
-    logs: List<String>,
-    onClearLogs: () -> Unit
+fun RoutingAndDnsSettingsSection(
+    settings: EngineSettings,
+    onPatchSettings: (Map<String, Any>) -> Unit,
+    onImportBypassFile: (targetType: String, rawText: String, replaceExisting: Boolean) -> Int
 ) {
     val p = LocalAlanPalette.current
     val context = LocalContext.current
-    val listState = rememberLazyListState()
-    var copied by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
-    var activeFilter by remember { mutableStateOf("ALL") }
 
-    val filteredLogs = remember(logs, searchQuery, activeFilter) {
-        val q = searchQuery.trim().lowercase(Locale.ROOT)
-        logs.filter { line ->
-            val low = line.lowercase(Locale.ROOT)
-            val catOk = when (activeFilter) {
-                "DPI" -> low.contains("mutator") || low.contains("vec-") || low.contains("tls") || low.contains("dpi") || low.contains("lab")
-                "DNS" -> low.contains("dns") || low.contains("doh")
-                "CLEAN" -> low.contains("clean-ip") || low.contains("edge") || low.contains("tcp")
-                "XRAY" -> low.contains("xray") || low.contains("alantun") || low.contains("egress")
-                "ERR" -> low.contains("err") || low.contains("fail") || low.contains("timeout")
-                else -> true
+    var remoteDns by remember(settings.remoteDns) { mutableStateOf(settings.remoteDns) }
+    var domesticDns by remember(settings.domesticDns) { mutableStateOf(settings.domesticDns) }
+    var fallbackDns by remember(settings.fallbackDns) { mutableStateOf(settings.fallbackDns) }
+    var directDomains by remember(settings.customDirectDomains) { mutableStateOf(settings.customDirectDomains) }
+    var proxyDomains by remember(settings.customProxyDomains) { mutableStateOf(settings.customProxyDomains) }
+    var blockedDomains by remember(settings.customBlockedDomains) { mutableStateOf(settings.customBlockedDomains) }
+    var activeImportTarget by remember { mutableStateOf("direct") }
+    var routingFeedback by remember { mutableStateOf("") }
+
+    val bypassFileLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val rawText = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                val added = onImportBypassFile(activeImportTarget, rawText, false)
+                routingFeedback = if (added > 0) {
+                    "✅ $added دامنه/آی‌پی از فایل با موفقیت اضافه شد."
+                } else {
+                    "دامنه یا آی‌پی معتبری در فایل انتخابی پیدا نشد."
+                }
+            } catch (t: Throwable) {
+                routingFeedback = "خطا در خواندن فایل: ${t.javaClass.simpleName}"
             }
-            catOk && (q.isEmpty() || low.contains(q))
         }
     }
 
-    LaunchedEffect(filteredLogs.size) {
-        if (filteredLogs.isNotEmpty()) {
-            listState.animateScrollToItem(filteredLogs.lastIndex)
+    // DNS Configuration Card
+    Column(
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .alanGlassCard(cornerRadius = 18.dp)
+            .padding(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Icon(Icons.Outlined.Public, null, tint = p.emerald, modifier = Modifier.size(18.dp))
+            Text("تنظیمات پیشرفته DNS", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 13.5.sp)
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            AlanSheetTextField("Remote DNS", remoteDns, { remoteDns = it }, ltr = true, modifier = Modifier.weight(1f))
+            AlanSheetTextField("DNS داخلی ایران", domesticDns, { domesticDns = it }, ltr = true, modifier = Modifier.weight(1f))
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            AlanSheetTextField("Fallback DNS", fallbackDns, { fallbackDns = it }, ltr = true, modifier = Modifier.weight(1f))
+            AlanCustomSelectBox(
+                label = "استراتژی IP",
+                selectedValue = settings.dnsQueryStrategy,
+                options = listOf(
+                    SelectOptionItem("UseIPv4", "UseIPv4 (پایدار)"),
+                    SelectOptionItem("UseIP", "UseIP (دوگانه)"),
+                    SelectOptionItem("UseIPv6", "UseIPv6")
+                ),
+                onSelect = { onPatchSettings(mapOf("dnsQueryStrategy" to it)) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .alanNeuInset(cornerRadius = 12.dp)
+                .clickable { onPatchSettings(mapOf("disableDnsCache" to !settings.disableDnsCache)) }
+                .padding(horizontal = 12.dp, vertical = 9.dp)
+        ) {
+            Text("غیرفعال کردن کش داخلی DNS", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+            AlanPillSwitch(checked = settings.disableDnsCache, onCheckedChange = { onPatchSettings(mapOf("disableDnsCache" to it)) })
+        }
+
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(38.dp)
+                .alanGlassCard(highlighted = true, cornerRadius = 11.dp)
+                .clickable {
+                    onPatchSettings(
+                        mapOf(
+                            "remoteDns" to remoteDns.trim().ifBlank { "1.1.1.1" },
+                            "domesticDns" to domesticDns.trim().ifBlank { "178.22.122.100" },
+                            "fallbackDns" to fallbackDns.trim().ifBlank { "8.8.8.8" }
+                        )
+                    )
+                    routingFeedback = "✅ تنظیمات DNS ذخیره شد (در اتصال بعدی اعمال می‌شود)."
+                }
+        ) {
+            Text("ذخیره سرورهای DNS", color = p.emerald, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+        }
+    }
+
+    // Routing & Bypass Rules Card (with File Import!)
+    Column(
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .alanGlassCard(cornerRadius = 18.dp)
+            .padding(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Icon(Icons.Outlined.Route, null, tint = p.accentGold, modifier = Modifier.size(18.dp))
+            Text("مسیریابی (Routing) و لیست بایپس دامنه/IP", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 13.5.sp)
+        }
+
+        AlanCustomSelectBox(
+            label = "حالت مسیریابی ترافیک",
+            selectedValue = settings.routingMode,
+            options = listOf(
+                SelectOptionItem("bypass_ir", "دور زدن سایت‌های ایرانی و شبکه محلی (پیشنهادی)"),
+                SelectOptionItem("bypass_lan", "فقط دور زدن شبکه محلی (LAN)"),
+                SelectOptionItem("global", "سراسری (عبور تمام ترافیک از پروکسی)")
+            ),
+            onSelect = { onPatchSettings(mapOf("routingMode" to it)) }
+        )
+
+        AlanCustomSelectBox(
+            label = "استراتژی تطبیق دامنه (DomainStrategy)",
+            selectedValue = settings.domainStrategy,
+            options = listOf(
+                SelectOptionItem("IPIfNonMatch", "IPIfNonMatch (دقیق و متعادل)"),
+                SelectOptionItem("AsIs", "AsIs (سریع‌ترین / کم‌مصرف)"),
+                SelectOptionItem("IPOnDemand", "IPOnDemand (حل IP در لحظه)")
+            ),
+            onSelect = { onPatchSettings(mapOf("domainStrategy" to it)) }
+        )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .alanNeuInset(cornerRadius = 12.dp)
+                .clickable { onPatchSettings(mapOf("blockAds" to !settings.blockAds)) }
+                .padding(horizontal = 12.dp, vertical = 9.dp)
+        ) {
+            Text("مسدودسازی تبلیغات و ردیاب‌ها (AdBlock)", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+            AlanPillSwitch(checked = settings.blockAds, onCheckedChange = { onPatchSettings(mapOf("blockAds" to it)) })
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .alanNeuInset(cornerRadius = 12.dp)
+                .clickable { onPatchSettings(mapOf("blockQuic" to !settings.blockQuic)) }
+                .padding(horizontal = 12.dp, vertical = 9.dp)
+        ) {
+            Text("مسدودسازی QUIC (UDP 443) برای پایداری Anti-DPI", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+            AlanPillSwitch(checked = settings.blockQuic, onCheckedChange = { onPatchSettings(mapOf("blockQuic" to it)) })
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .alanNeuInset(cornerRadius = 12.dp)
+                .clickable { onPatchSettings(mapOf("enableSniffing" to !settings.enableSniffing)) }
+                .padding(horizontal = 12.dp, vertical = 9.dp)
+        ) {
+            Text("تشخیص خودکار دامنه از ترافیک (Sniffing)", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+            AlanPillSwitch(checked = settings.enableSniffing, onCheckedChange = { onPatchSettings(mapOf("enableSniffing" to it)) })
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .alanNeuInset(cornerRadius = 12.dp)
+                .clickable { onPatchSettings(mapOf("deepLogEnabled" to !settings.deepLogEnabled)) }
+                .padding(horizontal = 12.dp, vertical = 9.dp)
+        ) {
+            Text("لاگ عمیق مهندسی (Xray Debug + Socket Trace)", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+            AlanPillSwitch(checked = settings.deepLogEnabled, onCheckedChange = { onPatchSettings(mapOf("deepLogEnabled" to it)) })
+        }
+
+        // Direct / Bypass List + Import from File Button
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("سایت‌ها و IPهای بایپس مستقیم (Direct)", color = p.emerald, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .alanGlassCard(cornerRadius = 9.dp)
+                    .clickable {
+                        activeImportTarget = "direct"
+                        bypassFileLauncher.launch(arrayOf("text/*", "application/octet-stream", "*/*"))
+                    }
+                    .padding(horizontal = 9.dp, vertical = 5.dp)
+            ) {
+                Icon(Icons.Outlined.UploadFile, null, tint = p.accentGold, modifier = Modifier.size(14.dp))
+                Text("ورود از فایل", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 10.sp)
+            }
+        }
+        AlanSheetTextField(
+            label = "هر خط یک دامنه یا IP (مثلاً digikala.com یا 185.143.232.0/22)",
+            value = directDomains,
+            onValueChange = { directDomains = it },
+            ltr = true,
+            singleLine = false
+        )
+
+        // Force Proxy List + Import from File Button
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("دامنه‌های اجباری از پروکسی (Proxy)", color = p.accentGold, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .alanGlassCard(cornerRadius = 9.dp)
+                    .clickable {
+                        activeImportTarget = "proxy"
+                        bypassFileLauncher.launch(arrayOf("text/*", "application/octet-stream", "*/*"))
+                    }
+                    .padding(horizontal = 9.dp, vertical = 5.dp)
+            ) {
+                Icon(Icons.Outlined.UploadFile, null, tint = p.accentGold, modifier = Modifier.size(14.dp))
+                Text("ورود از فایل", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 10.sp)
+            }
+        }
+        AlanSheetTextField(
+            label = "دامنه‌ها یا IPهای عبور اجباری از تونل",
+            value = proxyDomains,
+            onValueChange = { proxyDomains = it },
+            ltr = true,
+            singleLine = false
+        )
+
+        // Blocked List + Import from File Button
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("دامنه‌ها و IPهای مسدود (Block)", color = p.danger, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .alanGlassCard(cornerRadius = 9.dp)
+                    .clickable {
+                        activeImportTarget = "block"
+                        bypassFileLauncher.launch(arrayOf("text/*", "application/octet-stream", "*/*"))
+                    }
+                    .padding(horizontal = 9.dp, vertical = 5.dp)
+            ) {
+                Icon(Icons.Outlined.UploadFile, null, tint = p.accentGold, modifier = Modifier.size(14.dp))
+                Text("ورود از فایل", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 10.sp)
+            }
+        }
+        AlanSheetTextField(
+            label = "دامنه‌ها یا IPهای مسدودشده",
+            value = blockedDomains,
+            onValueChange = { blockedDomains = it },
+            ltr = true,
+            singleLine = false
+        )
+
+        if (routingFeedback.isNotBlank()) {
+            Text(routingFeedback, color = p.emerald, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        }
+
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+                .alanGlassCard(highlighted = true, cornerRadius = 11.dp)
+                .clickable {
+                    onPatchSettings(
+                        mapOf(
+                            "customDirectDomains" to directDomains.trim(),
+                            "customProxyDomains" to proxyDomains.trim(),
+                            "customBlockedDomains" to blockedDomains.trim()
+                        )
+                    )
+                    routingFeedback = "✅ قوانین مسیریابی و لیست‌های بایپس ذخیره شدند."
+                }
+        ) {
+            Text("ذخیره قوانین مسیریابی و بایپس", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+fun LogsTabScreen(
+    logs: List<String>,
+    onClearLogs: () -> Unit,
+    onExportFullLogs: () -> String = { logs.joinToString("\n") }
+) {
+    val p = LocalAlanPalette.current
+    val context = LocalContext.current
+    var activeFilter by remember { mutableStateOf("ALL") }
+    var searchQuery by remember { mutableStateOf("") }
+    var feedback by remember { mutableStateOf("") }
+
+    val saveLogFileLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val fullText = onExportFullLogs()
+                context.contentResolver.openOutputStream(uri)?.use { os ->
+                    os.write(fullText.toByteArray(Charsets.UTF_8))
+                    os.flush()
+                }
+                feedback = "✅ فایل لاگ کامل با موفقیت ذخیره شد (${fullText.lines().size} خط)."
+            } catch (t: Throwable) {
+                feedback = "خطا در ذخیره فایل لاگ: ${t.javaClass.simpleName}"
+            }
+        }
+    }
+
+    val filtered = remember(logs, activeFilter, searchQuery) {
+        val q = searchQuery.trim().lowercase(Locale.US)
+        logs.asReversed().filter { line ->
+            val low = line.lowercase(Locale.US)
+            val catOk = when (activeFilter) {
+                "NET" -> low.contains("[s#") || low.contains("[bridge]") || low.contains("tcp=") || low.contains("tun") || low.contains("[proxymode]")
+                "XRAY" -> low.contains("xray") || low.contains("[core]")
+                "DNS" -> low.contains("dns") || low.contains("doh") || low.contains("ca-shield") || low.contains("routing")
+                "LAB" -> low.contains("lab") || low.contains("verifier") || low.contains("vec-") || low.contains("ping")
+                "ERR" -> low.contains("err") || low.contains("fail") || low.contains("timeout") || low.contains("خطا") || low.contains("رد شد")
+                else -> true
+            }
+            catOk && (q.isEmpty() || low.contains(q))
         }
     }
 
@@ -524,61 +857,65 @@ fun LogsTabScreen(
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
+        // Header with Save File, Share, Copy & Clear Actions
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .alanGlassCard(cornerRadius = 17.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            Column {
-                Text("کنسول لاگ عمیق مهندسی", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 15.5.sp)
+            Column(modifier = Modifier.weight(1f)) {
+                Text("کنسول لاگ عمیق مهندسی", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 13.5.sp)
                 Text(
-                    text = if (copied) "تمام خطوط در کلیپ‌بورد کپی شد." else "${filteredLogs.size} رویداد ثبت‌شده",
-                    color = if (copied) p.emerald else p.textSecondary,
-                    fontSize = 10.5.sp
+                    text = feedback.ifBlank { "${filtered.size} از ${logs.size} رویداد ثبت‌شده" },
+                    color = if (feedback.isNotBlank()) p.emerald else p.textMuted,
+                    fontSize = 10.5.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .height(36.dp)
-                        .alanGlassCard(cornerRadius = 11.dp)
-                        .clickable {
-                            if (filteredLogs.isNotEmpty()) {
-                                copyPlainTextToClipboard(context, "AlanDeepLogs", filteredLogs.joinToString("\n"))
-                                copied = true
-                            }
-                        }
-                        .padding(horizontal = 12.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.ContentCopy, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text("کپی لاگ", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                AlanNeuIconButton(
+                    icon = Icons.Outlined.Download,
+                    tint = p.emerald,
+                    size = 36.dp,
+                    onClick = {
+                        saveLogFileLauncher.launch("Alan-RIP-Dpi-Logs-${System.currentTimeMillis() / 1000}.log")
                     }
-                }
-
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .height(36.dp)
-                        .alanGlassCard(cornerRadius = 11.dp)
-                        .clickable {
-                            copied = false
-                            onClearLogs()
-                        }
-                        .padding(horizontal = 12.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.DeleteOutline, null, tint = p.danger, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("پاک‌سازی", color = p.danger, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                )
+                AlanNeuIconButton(
+                    icon = Icons.Outlined.Share,
+                    tint = p.accentGold,
+                    size = 36.dp,
+                    onClick = {
+                        sharePlainText(context, "Alan-RIP-Dpi Full Logs", onExportFullLogs())
                     }
-                }
+                )
+                AlanNeuIconButton(
+                    icon = Icons.Outlined.ContentCopy,
+                    tint = p.textPrimary,
+                    size = 36.dp,
+                    onClick = {
+                        copyPlainTextToClipboard(context, "AlanLogs", onExportFullLogs())
+                        feedback = "کل لاگ‌ها در کلیپ‌بورد کپی شد."
+                    }
+                )
+                AlanNeuIconButton(
+                    icon = Icons.Outlined.DeleteOutline,
+                    tint = p.danger,
+                    size = 36.dp,
+                    onClick = {
+                        onClearLogs()
+                        feedback = "لاگ‌ها پاک شدند."
+                    }
+                )
             }
         }
 
+        // Category Filter Bar
         Row(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
@@ -586,24 +923,21 @@ fun LogsTabScreen(
                 .horizontalScroll(rememberScrollState())
         ) {
             listOf(
-                "ALL" to "همه (${logs.size})",
-                "DPI" to "DPI / Mutator",
-                "DNS" to "DNS / DoH",
-                "CLEAN" to "Clean-IP / TCP",
-                "XRAY" to "Xray / TUN",
+                "ALL" to "همه",
+                "NET" to "شبکه/سوکت",
+                "XRAY" to "Xray",
+                "DNS" to "DNS/CA",
+                "LAB" to "متد/تست",
                 "ERR" to "خطاها"
             ).forEach { (key, title) ->
                 val sel = activeFilter == key
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .height(32.dp)
+                        .height(31.dp)
                         .then(
-                            if (sel) {
-                                Modifier.alanNeuInset(cornerRadius = 10.dp, accented = true)
-                            } else {
-                                Modifier.alanGlassCard(cornerRadius = 10.dp)
-                            }
+                            if (sel) Modifier.alanGlassCard(highlighted = true, cornerRadius = 10.dp)
+                            else Modifier.alanNeuInset(cornerRadius = 10.dp)
                         )
                         .clickable { activeFilter = key }
                         .padding(horizontal = 11.dp)
@@ -619,55 +953,42 @@ fun LogsTabScreen(
         }
 
         AlanSheetTextField(
-            label = "جستجو در جزئیات پکت، SNI، آی‌پی یا متد...",
+            label = "جستجو در لاگ‌ها (IP، پورت، VEC، Xray، خطا...)",
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            ltr = true
+            ltr = false
         )
 
-        Box(
+        // Log Console List
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+            contentPadding = PaddingValues(bottom = 76.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .alanNeuInset(cornerRadius = 18.dp)
+                .alanNeuInset(cornerRadius = 16.dp)
+                .padding(10.dp)
         ) {
-            if (filteredLogs.isEmpty()) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Text("لاگی در این دسته وجود ندارد.", color = p.textMuted, fontSize = 12.sp)
+            if (filtered.isEmpty()) {
+                item {
+                    Text("لاگی در این دسته وجود ندارد.", color = p.textMuted, fontSize = 11.5.sp, modifier = Modifier.padding(12.dp))
                 }
             } else {
-                LtrContent {
-                    LazyColumn(
-                        state = listState,
-                        contentPadding = PaddingValues(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        itemsIndexed(filteredLogs, key = { idx, _ -> idx }) { idx, line ->
-                            val low = line.lowercase(Locale.ROOT)
-                            val col: Color = when {
-                                low.contains("error") || low.contains("fail") || low.contains("blocked") || low.contains("timeout") -> p.danger
-                                low.contains("up:") || low.contains("verified") || low.contains("doh-ok") || low.contains("winner") || low.contains("ready") -> p.emerald
-                                low.contains("vec-") || low.contains("dpi") || low.contains("tls") || low.contains("clean-ip") -> p.accentGold
-                                else -> p.textPrimary
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                Text(
-                                    text = "%03d".format(idx + 1),
-                                    color = p.textMuted.copy(alpha = 0.6f),
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    lineHeight = 16.sp
-                                )
-                                Text(
-                                    text = line,
-                                    color = col,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    lineHeight = 16.sp
-                                )
-                            }
-                        }
+                itemsIndexed(filtered, key = { idx, _ -> idx }) { _, line ->
+                    val low = line.lowercase(Locale.US)
+                    val lineCol = when {
+                        low.contains("err") || low.contains("fail") || low.contains("timeout") || low.contains("خطا") || low.contains("رد شد") -> p.danger
+                        low.contains("تایید") || low.contains("ca-shield") || low.contains("proxymode") || low.contains("up:") || low.contains("verified") -> p.emerald
+                        low.contains("vec-") || low.contains("dpi-lab") || low.contains("profiler") -> p.accentGold
+                        else -> p.textSecondary
+                    }
+                    LtrContent {
+                        Text(
+                            text = line,
+                            color = lineCol,
+                            fontSize = 10.sp,
+                            lineHeight = 14.sp
+                        )
                     }
                 }
             }

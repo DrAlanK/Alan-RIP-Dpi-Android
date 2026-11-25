@@ -101,7 +101,7 @@ object TunnelStreamVerifier {
         keepAliveConnections: Int = 2
     ): OkHttpClient {
         val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", httpPort))
-        return OkHttpClient.Builder()
+        return com.alan.ripdpi.core.AlanCaSanitizer.applyTo(OkHttpClient.Builder())
             .proxy(proxy)
             .connectTimeout(timeoutMs, TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
@@ -123,7 +123,7 @@ object TunnelStreamVerifier {
     }
 
     fun fastProbe(httpPort: Int, timeoutMs: Long = 3400L): ProbeVerdict {
-        val client = okhttp3.OkHttpClient.Builder()
+        val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -145,7 +145,7 @@ object TunnelStreamVerifier {
 
 
     fun checkGeminiAccess(httpPort: Int, timeoutMs: Long = 4500L): Pair<Boolean, String> {
-        val client = okhttp3.OkHttpClient.Builder()
+        val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -302,7 +302,7 @@ object TunnelStreamVerifier {
     }
 
     fun resolveEgressEndpoint(httpPort: Int): EgressGeoInfo {
-        val client = okhttp3.OkHttpClient.Builder()
+        val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(4000L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(4000L, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -470,7 +470,7 @@ object TunnelStreamVerifier {
     }
 
     fun quickUploadCheck(httpPort: Int, timeoutMs: Long = 1800L): Pair<Boolean, Double> {
-        val client = okhttp3.OkHttpClient.Builder()
+        val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -499,7 +499,7 @@ object TunnelStreamVerifier {
     }
 
     fun probeTunnelAndGeo(httpPort: Int, timeoutMs: Long = 3200L, fetchGeo: Boolean = true): LaneGeoPingResult {
-        val client = okhttp3.OkHttpClient.Builder()
+        val client = com.alan.ripdpi.core.AlanCaSanitizer.applyTo(okhttp3.OkHttpClient.Builder())
             .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", httpPort)))
             .connectTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
