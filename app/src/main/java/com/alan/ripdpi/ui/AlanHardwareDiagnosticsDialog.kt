@@ -122,7 +122,7 @@ fun AlanHardwareDiagnosticsDialog(
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         HwMetricCard(
-                            title = "Total PSS (رم کل)",
+                            title = "Total RSS (رم کل)",
                             value = String.format(Locale.US, "%.1f MB", health.totalPssMb),
                             sub = String.format(Locale.US, "Native: %.1f • اوج: %.0f", health.nativeHeapMb, health.peakPssMb),
                             healthy = pssHealthy,

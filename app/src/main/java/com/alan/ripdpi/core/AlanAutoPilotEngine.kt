@@ -219,7 +219,7 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
         startTelemetryTicker()
         startSelfHealingWatchdog()
         triggerInstantGeoLocationProbes(_profiles.value.filter { it.countryCode == "UN" }, allowMicroTunnelForCdn = false)
-        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.8.1-beta] Core Ready (${xrayCoreManager.getXrayVersion()})") }
+        scope.launch { delay(250L); appendLog("[Alan-RIP-Dpi v1.8.2-beta] Core Ready (${xrayCoreManager.getXrayVersion()})") }
     }
 
     fun bindVpnPermissionRequester(requester: ((() -> Unit) -> Unit)?) {
@@ -344,8 +344,13 @@ class AlanAutoPilotEngine private constructor(context: Context) : AlanEngineCont
             activeTempBridges.clear()
             tempSnap.forEach { b -> try { b.stop() } catch (_: Throwable) {} }
 
+            val discStartMs = android.os.SystemClock.elapsedRealtime()
             teardownActiveRuntime()
             clearSparklines()
+            val remainVisualMs = 420L - (android.os.SystemClock.elapsedRealtime() - discStartMs)
+            if (remainVisualMs > 0L) {
+                delay(remainVisualMs)
+            }
 
             if (opGeneration.get() == genNow) {
                 _engineState.value = EngineState.DISCONNECTED

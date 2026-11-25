@@ -203,17 +203,20 @@ fun HomeTabScreen(
             .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
         val compact = maxHeight < 650.dp
-        val orbAreaHeight = if (compact) 202.dp else 244.dp
+        val orbAreaHeight = if (compact) 196.dp else 232.dp
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            // 1. Top Hero: Wide Bubble Field + Seamless One-Piece Morphing Orb
+            // 1. Top Hero: Wide Bubble Field + Seamless One-Piece Morphing Orb (absorbs extra height cleanly)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth()
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
             ) {
                 CenterPowerOrbButton(
                     isConnected = telemetry.isConnected,

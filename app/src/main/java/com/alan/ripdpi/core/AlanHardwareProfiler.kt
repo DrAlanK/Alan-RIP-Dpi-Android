@@ -30,6 +30,7 @@ data class HardwareHealthSnapshot(
 object AlanHardwareProfiler {
     private var prevCpuTicks: Long = -1L
     private var prevWallMs: Long = -1L
+    @Volatile private var lastCpuPct: Float = 0f
 
     @Volatile private var peakHeapMb: Float = 0f
     @Volatile private var peakPssMb: Float = 0f
@@ -55,9 +56,9 @@ object AlanHardwareProfiler {
         return try {
             val statText = File("/proc/self/stat").readText(Charsets.US_ASCII)
             val rparen = statText.lastIndexOf(')')
-            if (rparen <= 0) return 0f
+            if (rparen <= 0) return lastCpuPct
             val fields = statText.substring(rparen + 2).trim().split(Regex("\\s+"))
-            if (fields.size < 14) return 0f
+            if (fields.size < 14) return lastCpuPct
             val utime = fields[11].toLongOrNull() ?: 0L
             val stime = fields[12].toLongOrNull() ?: 0L
             val totalTicks = utime + stime
@@ -65,16 +66,37 @@ object AlanHardwareProfiler {
 
             val prevT = prevCpuTicks
             val prevW = prevWallMs
+            if (prevT < 0L || prevW < 0L) {
+                prevCpuTicks = totalTicks
+                prevWallMs = nowMs
+                return lastCpuPct
+            }
+            // Enforce >= 900ms sampling window so rapid open/refresh calls never produce bogus 30% spikes!
+            val deltaWallMs = nowMs - prevW
+            if (deltaWallMs < 900L) {
+                return lastCpuPct
+            }
             prevCpuTicks = totalTicks
             prevWallMs = nowMs
 
-            if (prevT < 0L || prevW < 0L || nowMs <= prevW) return 0f
             val deltaTicks = (totalTicks - prevT).coerceAtLeast(0L)
-            val deltaWallSec = (nowMs - prevW) / 1000.0
-            // Linux USER_HZ is almost universally 100 on Android
+            val deltaWallSec = deltaWallMs / 1000.0
             val cpuSec = deltaTicks / 100.0
             val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
-            ((cpuSec / (deltaWallSec * cores)) * 100.0).toFloat().coerceIn(0f, 100f)
+            val pct = ((cpuSec / (deltaWallSec * cores)) * 100.0).toFloat().coerceIn(0f, 100f)
+            lastCpuPct = pct
+            pct
+        } catch (_: Throwable) {
+            lastCpuPct
+        }
+    }
+
+    // Ultra-lightweight O(1) resident memory read from /proc/self/statm (avoids Debug.getMemoryInfo's heavy 80ms smaps scan!)
+    private fun readLightweightRssMb(): Float {
+        return try {
+            val parts = File("/proc/self/statm").readText(Charsets.US_ASCII).trim().split(Regex("\\s+"))
+            val rssPages = parts.getOrNull(1)?.toLongOrNull() ?: return 0f
+            (rssPages * 4096f) / (1024f * 1024f)
         } catch (_: Throwable) {
             0f
         }
@@ -93,15 +115,14 @@ object AlanHardwareProfiler {
         val javaUsedMb = ((rt.totalMemory() - rt.freeMemory()) / (1024f * 1024f)).coerceAtLeast(0f)
         val javaMaxMb = (rt.maxMemory() / (1024f * 1024f)).coerceAtLeast(1f)
         val nativeMb = (Debug.getNativeHeapAllocatedSize() / (1024f * 1024f)).coerceAtLeast(0f)
-        val memInfo = Debug.MemoryInfo().also { Debug.getMemoryInfo(it) }
-        val pssMb = (memInfo.totalPss / 1024f).coerceAtLeast(0f)
+        val rssMb = readLightweightRssMb()
 
         val threads = Thread.activeCount()
         val fds = countOpenFileDescriptors()
         val cpuPct = readProcessCpuPercent()
 
         if (javaUsedMb > peakHeapMb) peakHeapMb = javaUsedMb
-        if (pssMb > peakPssMb) peakPssMb = pssMb
+        if (rssMb > peakPssMb) peakPssMb = rssMb
         if (threads > peakThreads) peakThreads = threads
         if (fds > peakFds) peakFds = fds
 
@@ -135,7 +156,7 @@ object AlanHardwareProfiler {
             javaHeapUsedMb = javaUsedMb,
             javaHeapMaxMb = javaMaxMb,
             nativeHeapMb = nativeMb,
-            totalPssMb = pssMb,
+            totalPssMb = rssMb,
             cpuUsagePercent = cpuPct,
             activeThreads = threads,
             openFds = fds,

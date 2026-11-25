@@ -8,7 +8,7 @@ plugins {
 }
 
 base {
-    archivesName.set("Alan-RIP-Dpi-v1.8.1-beta")
+    archivesName.set("Alan-RIP-Dpi-v1.8.2-beta")
 }
 
 android {
@@ -19,8 +19,8 @@ android {
         applicationId = "com.alan.ripdpi"
         minSdk = 24
         targetSdk = 35
-        versionCode = 125
-        versionName = "1.8.1-beta"
+        versionCode = 126
+        versionName = "1.8.2-beta"
     }
 
     splits {
@@ -102,7 +102,7 @@ androidComponents {
                 it.filterType == FilterConfiguration.FilterType.ABI
             }?.identifier
             val mult = abiVersionMultipliers[abiName] ?: 4
-            output.versionCode.set(mult * 10000 + 125)
+            output.versionCode.set(mult * 10000 + 126)
         }
     }
 }
