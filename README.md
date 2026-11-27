@@ -213,8 +213,7 @@ cd Alan-RIP-Dpi-Android
 - **ریپازیتوری اندروید:** [DrAlanK/Alan-RIP-Dpi-Android](https://github.com/DrAlanK/Alan-RIP-Dpi-Android)
 - **ریپازیتوری ویندوز:** [DrAlanK/Alan-RIP-Dpi-Windows](https://github.com/DrAlanK/Alan-RIP-Dpi-Windows) ([دانلود آخرین نسخه ویندوز](https://github.com/DrAlanK/Alan-RIP-Dpi-Windows/releases/latest))
 
-> **سلب مسئولیت فنی:** این پروژه صرفاً با هدف پژوهش در زمینه مهندسی شبکه، بهینه‌سازی پروتکل‌های انتقال داده و حفظ پایداری ارتباطات توسعه یافته است. مسئولیت نحوه بهره‌برداری از این ابزار و رعایت قوانین محلی بر عهده کاربر نهایی است.
-
+>
 </div>
 
 ---
