@@ -1,5 +1,6 @@
 package com.alan.ripdpi.ui
 
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
@@ -53,6 +54,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -96,6 +98,9 @@ fun AlanMainScreen(
     }
     var forcedScannerTarget by remember { mutableStateOf<Int?>(null) }
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
+    var secretTapCount by remember { mutableIntStateOf(0) }
+    var lastSecretTapMs by remember { mutableLongStateOf(0L) }
+    var showHardwarePanel by remember { mutableStateOf(false) }
 
     // Stays open until the user explicitly clicks the X button to collapse into the small floating glass orb
     var glassDockExpanded by rememberSaveable { mutableStateOf(true) }
@@ -118,6 +123,7 @@ fun AlanMainScreen(
     val dohServers by controller.dohServers.collectAsState()
     val dohScanState by controller.dohScanState.collectAsState()
     val installedApps by controller.installedApps.collectAsState()
+    val hardwareHealth by controller.hardwareHealth.collectAsState()
 
     val vectors = remember(controller) { controller.getVectors() }
 
@@ -168,7 +174,18 @@ fun AlanMainScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier
                                 .alanNeuInset(cornerRadius = 16.dp)
-                                .clickable { glassDockExpanded = !glassDockExpanded }
+                                .clickable {
+                                    val now = SystemClock.elapsedRealtime()
+                                    secretTapCount = if (now - lastSecretTapMs > 1600L) 1 else secretTapCount + 1
+                                    lastSecretTapMs = now
+                                    if (secretTapCount >= 5) {
+                                        secretTapCount = 0
+                                        controller.refreshHardwareHealth()
+                                        showHardwarePanel = true
+                                    } else {
+                                        glassDockExpanded = !glassDockExpanded
+                                    }
+                                }
                                 .padding(horizontal = 14.dp, vertical = 8.dp)
                         ) {
                             Box(
@@ -351,6 +368,10 @@ fun AlanMainScreen(
                                 vectors = vectors,
                                 scanRows = scanRows,
                                 scanState = scanState,
+                                isTunnelConnected = telemetry.isConnected,
+                                isTunnelConnecting = telemetry.isConnecting,
+                                activeVectorId = telemetry.activeVectorId,
+                                activePingMs = telemetry.pingMs,
                                 forcedTargetIndex = forcedScannerTarget,
                                 onConsumedForcedTarget = { forcedScannerTarget = null },
                                 onStartMultiMethodScan = { scopeMode, indices, autoConn, useCleanIp, selVecs ->
@@ -401,11 +422,15 @@ fun AlanMainScreen(
                             )
                             5 -> XraySettingsScreen(
                                 settings = settings,
-                                onPatchSettings = { controller.updateSettings(it) }
+                                onPatchSettings = { controller.updateSettings(it) },
+                                onImportBypassFile = { targetType, rawText, replaceExisting ->
+                                    controller.importBypassListFromText(targetType, rawText, replaceExisting)
+                                }
                             )
                             6 -> LogsTabScreen(
                                 logs = logs,
-                                onClearLogs = { controller.clearLogs() }
+                                onClearLogs = { controller.clearLogs() },
+                                onExportFullLogs = { controller.exportAllLogsText() }
                             )
                             else -> AboutTabScreen()
                         }
@@ -659,6 +684,18 @@ fun AlanMainScreen(
                                 }
                             }
                         }
+                    }
+
+                    if (showHardwarePanel) {
+                        AlanHardwareDiagnosticsDialog(
+                            health = hardwareHealth,
+                            isConnected = telemetry.isConnected,
+                            tunnelMode = settings.tunnelMode,
+                            onRefresh = { controller.refreshHardwareHealth() },
+                            onRunMemoryAuditNow = { controller.runMemoryAuditNow() },
+                            onResetPeaks = { controller.resetHardwarePeaks() },
+                            onDismiss = { showHardwarePanel = false }
+                        )
                     }
 
                     if (showSplitTunnelDialog) {

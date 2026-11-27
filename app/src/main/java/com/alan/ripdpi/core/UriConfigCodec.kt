@@ -66,6 +66,199 @@ data class MultiLaneXraySession(
 
 object UriConfigCodec {
 
+
+    private val BUILTIN_AD_DOMAINS = listOf(
+        "domain:doubleclick.net", "domain:googlesyndication.com", "domain:googleadservices.com",
+        "domain:adservice.google.com", "domain:ads.google.com", "domain:adnxs.com",
+        "domain:taboola.com", "domain:outbrain.com", "domain:app-measurement.com",
+        "domain:unityads.unity3d.com", "domain:applovin.com", "domain:vungle.com",
+        "domain:ironsrc.com", "domain:yektanet.com", "domain:tapsell.ir",
+        "domain:sabavision.com", "domain:adivery.com", "domain:mediaad.org"
+    )
+
+    private val BUILTIN_IR_DIRECT_DOMAINS = listOf(
+        "domain:ir", "domain:shaparak.ir", "domain:digikala.com", "domain:snapp.ir",
+        "domain:snappfood.ir", "domain:divar.ir", "domain:sheypoor.com",
+        "domain:aparat.com", "domain:filimo.com", "domain:namava.ir",
+        "domain:cafebazaar.ir", "domain:myket.ir", "domain:rubika.ir",
+        "domain:eitaa.com", "domain:bale.ai", "domain:splus.ir",
+        "domain:varzesh3.com", "domain:torob.com", "domain:emalls.ir",
+        "domain:tapsi.ir", "domain:alibaba.ir", "domain:mci.ir",
+        "domain:irancell.ir", "domain:rightel.ir", "domain:shatel.ir"
+    )
+
+    fun parseRoutingEntries(raw: String): Pair<List<String>, List<String>> {
+        val domains = LinkedHashSet<String>()
+        val ips = LinkedHashSet<String>()
+        raw.lineSequence()
+            .flatMap { it.split(",", ";").asSequence() }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("//") }
+            .forEach { token ->
+                val cleaned = token
+                    .removePrefix("https://")
+                    .removePrefix("http://")
+                    .substringBefore("/")
+                    .trim()
+                if (cleaned.isEmpty()) return@forEach
+                val bareIp = cleaned.substringBefore("/")
+                val isIpv4OrCidr = bareIp.count { it == '.' } == 3 && bareIp.all { it.isDigit() || it == '.' }
+                val isIpv6OrCidr = cleaned.contains(":") && !cleaned.startsWith("domain:") && !cleaned.startsWith("full:") && !cleaned.startsWith("regexp:") && !cleaned.startsWith("keyword:") && !cleaned.startsWith("geosite:")
+                if (isIpv4OrCidr || isIpv6OrCidr) {
+                    ips.add(cleaned)
+                } else {
+                    val lower = cleaned.lowercase(Locale.US)
+                    if (lower.startsWith("domain:") || lower.startsWith("full:") || lower.startsWith("regexp:") || lower.startsWith("keyword:")) {
+                        domains.add(lower)
+                    } else if (!lower.startsWith("geosite:")) {
+                        domains.add("domain:${lower.removePrefix("*.").removePrefix(".")}")
+                    }
+                }
+            }
+        return domains.toList() to ips.toList()
+    }
+
+    private fun buildXrayDnsObject(settings: EngineSettings, directDomains: List<String>): JSONObject {
+        val remotePrimary = settings.remoteDns.trim().ifBlank { "1.1.1.1" }
+        val fallback = settings.fallbackDns.trim().ifBlank { "8.8.8.8" }
+        val domestic = settings.domesticDns.trim().ifBlank { "178.22.122.100" }
+        val servers = JSONArray()
+        servers.put(remotePrimary)
+        if (!fallback.equals(remotePrimary, ignoreCase = true)) {
+            servers.put(fallback)
+        }
+        if (settings.routingMode.equals("bypass_ir", ignoreCase = true) || directDomains.isNotEmpty()) {
+            val domDomains = JSONArray()
+            if (settings.routingMode.equals("bypass_ir", ignoreCase = true)) {
+                BUILTIN_IR_DIRECT_DOMAINS.forEach { domDomains.put(it) }
+            }
+            directDomains.take(300).forEach { domDomains.put(it) }
+            if (domDomains.length() > 0) {
+                servers.put(
+                    JSONObject().apply {
+                        put("address", domestic)
+                        put("port", 53)
+                        put("domains", domDomains)
+                    }
+                )
+            }
+        }
+        return JSONObject().apply {
+            put("servers", servers)
+            put("queryStrategy", settings.dnsQueryStrategy.ifBlank { "UseIPv4" })
+            put("disableCache", settings.disableDnsCache)
+            put("disableFallback", false)
+        }
+    }
+
+    private fun buildXrayRoutingObject(settings: EngineSettings): JSONObject {
+        val rules = JSONArray()
+
+        val privateCidrs = JSONArray()
+            .put("127.0.0.0/8")
+            .put("10.0.0.0/8")
+            .put("172.16.0.0/12")
+            .put("192.168.0.0/16")
+            .put("169.254.0.0/16")
+            .put("::1/128")
+            .put("fc00::/7")
+            .put("fe80::/10")
+
+        if (!settings.routingMode.equals("global", ignoreCase = true)) {
+            rules.put(
+                JSONObject().apply {
+                    put("type", "field")
+                    put("ip", privateCidrs)
+                    put("outboundTag", "direct")
+                }
+            )
+        }
+
+        if (settings.blockQuic) {
+            rules.put(
+                JSONObject().apply {
+                    put("type", "field")
+                    put("network", "udp")
+                    put("port", "443")
+                    put("outboundTag", "block")
+                }
+            )
+        }
+
+        if (settings.blockAds) {
+            val adArr = JSONArray().apply { BUILTIN_AD_DOMAINS.forEach { put(it) } }
+            rules.put(
+                JSONObject().apply {
+                    put("type", "field")
+                    put("domain", adArr)
+                    put("outboundTag", "block")
+                }
+            )
+        }
+
+        val (blkDomains, blkIps) = parseRoutingEntries(settings.customBlockedDomains)
+        if (blkDomains.isNotEmpty()) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("domain", JSONArray().apply { blkDomains.forEach { put(it) } })
+                put("outboundTag", "block")
+            })
+        }
+        if (blkIps.isNotEmpty()) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("ip", JSONArray().apply { blkIps.forEach { put(it) } })
+                put("outboundTag", "block")
+            })
+        }
+
+        val (prxDomains, prxIps) = parseRoutingEntries(settings.customProxyDomains)
+        if (prxDomains.isNotEmpty()) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("domain", JSONArray().apply { prxDomains.forEach { put(it) } })
+                put("outboundTag", "proxy")
+            })
+        }
+        if (prxIps.isNotEmpty()) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("ip", JSONArray().apply { prxIps.forEach { put(it) } })
+                put("outboundTag", "proxy")
+            })
+        }
+
+        val (dirDomains, dirIps) = parseRoutingEntries(settings.customDirectDomains)
+        if (dirDomains.isNotEmpty()) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("domain", JSONArray().apply { dirDomains.forEach { put(it) } })
+                put("outboundTag", "direct")
+            })
+        }
+        if (dirIps.isNotEmpty()) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("ip", JSONArray().apply { dirIps.forEach { put(it) } })
+                put("outboundTag", "direct")
+            })
+        }
+
+        if (settings.routingMode.equals("bypass_ir", ignoreCase = true)) {
+            val irArr = JSONArray().apply { BUILTIN_IR_DIRECT_DOMAINS.forEach { put(it) } }
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("domain", irArr)
+                put("outboundTag", "direct")
+            })
+        }
+
+        return JSONObject().apply {
+            put("domainStrategy", settings.domainStrategy.ifBlank { "IPIfNonMatch" })
+            put("rules", rules)
+        }
+    }
+
     fun allocateSafePort(preferredPort: Int, exclude: Set<Int> = emptySet()): Int {
         if (preferredPort in 1025..65534 && preferredPort !in exclude && isLocalPortAvailable(preferredPort)) {
             return preferredPort
@@ -659,20 +852,10 @@ object UriConfigCodec {
         root.put(
             "log",
             JSONObject().apply {
-                put("loglevel", if (forceLogSilent) "none" else "debug")
+                put("loglevel", if (forceLogSilent) "none" else if (settings.deepLogEnabled) "debug" else "error")
             }
         )
-        root.put("stats", JSONObject())
-        root.put(
-            "policy",
-            JSONObject().put(
-                "system",
-                JSONObject().apply {
-                    put("statsOutboundUplink", true)
-                    put("statsOutboundDownlink", true)
-                }
-            )
-        )
+        // Unused per-packet Xray stats disabled for lower CPU/battery usage
 
         val inbounds = JSONArray()
         inbounds.put(
@@ -691,7 +874,7 @@ object UriConfigCodec {
                 put(
                     "sniffing",
                     JSONObject().apply {
-                        put("enabled", true)
+                        put("enabled", settings.enableSniffing)
                         put("destOverride", JSONArray().put("http").put("tls").put("quic"))
                         put("routeOnly", true)
                     }
@@ -756,32 +939,13 @@ object UriConfigCodec {
         )
         root.put("outbounds", outbounds)
 
-        val privateCidrs = JSONArray()
-            .put("127.0.0.0/8")
-            .put("10.0.0.0/8")
-            .put("172.16.0.0/12")
-            .put("192.168.0.0/16")
-            .put("169.254.0.0/16")
-            .put("::1/128")
-            .put("fc00::/7")
-            .put("fe80::/10")
-
-        root.put(
-            "routing",
-            JSONObject().apply {
-                put("domainStrategy", "AsIs")
-                put(
-                    "rules",
-                    JSONArray().put(
-                        JSONObject().apply {
-                            put("type", "field")
-                            put("ip", privateCidrs)
-                            put("outboundTag", "direct")
-                        }
-                    )
-                )
-            }
-        )
+        if (!forceLogSilent) {
+            val (customDirDomains, _) = parseRoutingEntries(settings.customDirectDomains)
+            root.put("dns", buildXrayDnsObject(settings, customDirDomains))
+            root.put("routing", buildXrayRoutingObject(settings))
+        } else {
+            root.put("routing", JSONObject().put("domainStrategy", "AsIs").put("rules", JSONArray()))
+        }
 
         return CompiledXraySession(
             configJson = root.toString(),

@@ -1,5 +1,6 @@
 package com.alan.ripdpi.core
 
+import android.os.ParcelFileDescriptor
 import android.system.Os
 import android.system.OsConstants
 import java.io.FileDescriptor
@@ -54,20 +55,7 @@ object NativeOobBridge {
 
     fun extractFd(socket: Socket): Int {
         return try {
-            val implField = Socket::class.java.getDeclaredField("impl").apply { isAccessible = true }
-            val impl = implField.get(socket) ?: return -1
-            var cls: Class<*>? = impl.javaClass
-            while (cls != null) {
-                try {
-                    val fdField = cls.getDeclaredField("fd").apply { isAccessible = true }
-                    val fdObj = fdField.get(impl) as? FileDescriptor ?: return -1
-                    val intField = FileDescriptor::class.java.getDeclaredField("descriptor").apply { isAccessible = true }
-                    return intField.getInt(fdObj)
-                } catch (_: NoSuchFieldException) {
-                    cls = cls.superclass
-                }
-            }
-            -1
+            ParcelFileDescriptor.fromSocket(socket).use { it.fd }
         } catch (_: Throwable) {
             -1
         }

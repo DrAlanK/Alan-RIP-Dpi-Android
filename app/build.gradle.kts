@@ -1,3 +1,4 @@
+import java.util.Properties
 import com.android.build.api.variant.FilterConfiguration
 
 plugins {
@@ -7,7 +8,7 @@ plugins {
 }
 
 base {
-    archivesName.set("Alan-RIP-Dpi-v1.2.0")
+    archivesName.set("Alan-RIP-Dpi-v1.9.0")
 }
 
 android {
@@ -18,8 +19,8 @@ android {
         applicationId = "com.alan.ripdpi"
         minSdk = 24
         targetSdk = 35
-        versionCode = 123
-        versionName = "1.7.0"
+        versionCode = 130
+        versionName = "1.9.0"
     }
 
     splits {
@@ -31,10 +32,29 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val lp = Properties()
+            val lpFile = rootProject.file("local.properties")
+            if (lpFile.exists()) lpFile.inputStream().use { lp.load(it) }
+            val ksPath = lp.getProperty("release.storeFile") ?: System.getenv("ALAN_KEYSTORE_PATH") ?: ""
+            if (ksPath.isNotBlank() && file(ksPath).exists()) {
+                storeFile = file(ksPath)
+                storePassword = lp.getProperty("release.storePassword") ?: System.getenv("ALAN_KEYSTORE_PASS") ?: ""
+                keyAlias = lp.getProperty("release.keyAlias") ?: System.getenv("ALAN_KEY_ALIAS") ?: "alan_release"
+                keyPassword = lp.getProperty("release.keyPassword") ?: System.getenv("ALAN_KEY_PASS") ?: ""
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            val relCfg = signingConfigs.findByName("release")
+            signingConfig = if (relCfg?.storeFile != null) relCfg else signingConfigs.getByName("debug")
         }
         debug {
             applicationIdSuffix = ".debug"
@@ -82,7 +102,7 @@ androidComponents {
                 it.filterType == FilterConfiguration.FilterType.ABI
             }?.identifier
             val mult = abiVersionMultipliers[abiName] ?: 4
-            output.versionCode.set(mult * 1000 + 100)
+            output.versionCode.set(mult * 10000 + 130)
         }
     }
 }

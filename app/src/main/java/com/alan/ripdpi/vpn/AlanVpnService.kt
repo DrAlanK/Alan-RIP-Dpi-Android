@@ -356,10 +356,10 @@ class AlanVpnService : VpnService() {
             appendLine("")
             appendLine("misc:")
             appendLine("  task-stack-size: 81920")
-            appendLine("  tcp-buffer-size: 65536")
+            appendLine("  tcp-buffer-size: 131072")
             appendLine("  connect-timeout: 5000")
             appendLine("  read-write-timeout: 60000")
-            appendLine("  log-level: warn")
+            appendLine("  log-level: error")
         }
         val file = File(filesDir, "hev-socks5-tunnel.yaml")
         file.writeText(yaml, Charsets.UTF_8)
