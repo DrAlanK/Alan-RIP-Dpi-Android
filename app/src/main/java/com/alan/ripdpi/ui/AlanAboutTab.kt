@@ -152,7 +152,7 @@ fun AboutTabScreen() {
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .alanGlassCard(highlighted = true, cornerRadius = 22.dp)
+                .alanLiquidGlass(highlighted = true, cornerRadius = 22.dp)
                 .padding(vertical = 20.dp, horizontal = 16.dp)
         ) {
             Box(
@@ -318,7 +318,7 @@ fun AboutTabScreen() {
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier
                 .fillMaxWidth()
-                .alanGlassCard(highlighted = true, cornerRadius = 18.dp)
+                .alanLiquidGlass(highlighted = true, cornerRadius = 18.dp)
                 .clickable { openExternalUrl("https://github.com/Floxu1") }
                 .padding(horizontal = 14.dp, vertical = 13.dp)
         ) {

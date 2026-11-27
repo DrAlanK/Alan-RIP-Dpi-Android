@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
@@ -106,6 +107,7 @@ fun ProfilesTabScreen(
     onGetEditable: (Int) -> EditableConfigFields,
     onSaveEditable: (Int, EditableConfigFields) -> Unit,
     onSendToMethodScanner: (Int) -> Unit,
+    onSendMultipleToMethodScanner: (List<Int>) -> Unit = {},
     onAddSubscription: (String, String) -> Unit,
     onRefreshSubscriptions: () -> Unit,
     onRefreshSingleSub: (String) -> Unit = { _ -> onRefreshSubscriptions() },
@@ -197,13 +199,13 @@ fun ProfilesTabScreen(
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        // 1. Clean Decluttered v2rayNG Header (+, Bolt, MoreVert)
+        // 1. Clean Liquid Glass v2rayNG Header (+, Bolt, MoreVert)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier
                 .fillMaxWidth()
-                .alanGlassCard(cornerRadius = 18.dp)
+                .alanLiquidGlass(cornerRadius = 18.dp)
                 .padding(horizontal = 13.dp, vertical = 10.dp)
         ) {
             Column(modifier = Modifier.weight(1f)) {
@@ -287,6 +289,17 @@ fun ProfilesTabScreen(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    AlanNeuIconButton(
+                        icon = Icons.Outlined.Speed,
+                        tint = p.accentGold,
+                        size = 34.dp,
+                        onClick = {
+                            if (selectedIndices.isNotEmpty()) {
+                                onSendMultipleToMethodScanner(selectedIndices.toList())
+                                multiSelectMode = false
+                            }
+                        }
+                    )
                     AlanNeuIconButton(
                         icon = Icons.Outlined.Bolt,
                         tint = p.emerald,

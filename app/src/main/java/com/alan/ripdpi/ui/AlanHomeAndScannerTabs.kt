@@ -26,6 +26,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.outlined.PlaylistAdd
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
@@ -203,17 +206,20 @@ fun HomeTabScreen(
             .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
         val compact = maxHeight < 650.dp
-        val orbAreaHeight = if (compact) 202.dp else 244.dp
+        val orbAreaHeight = if (compact) 196.dp else 232.dp
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxSize()
         ) {
             // 1. Top Hero: Wide Bubble Field + Seamless One-Piece Morphing Orb
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth()
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
             ) {
                 CenterPowerOrbButton(
                     isConnected = telemetry.isConnected,
@@ -248,12 +254,12 @@ fun HomeTabScreen(
                 )
             }
 
-            // 2. Telemetry & Quick User Auto-Connect Pod
+            // 2. Telemetry & Quick User Auto-Connect Pod (Liquid Glass shell + Neumorphic inset meters)
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .alanGlassCard(cornerRadius = 22.dp)
+                    .alanLiquidGlass(cornerRadius = 22.dp)
                     .padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)
             ) {
                 Row(
@@ -401,7 +407,7 @@ fun HomeTabScreen(
                             .height(36.dp)
                             .then(
                                 if (selected) {
-                                    Modifier.alanGlassCard(highlighted = true, cornerRadius = 12.dp)
+                                    Modifier.alanLiquidGlass(highlighted = true, cornerRadius = 12.dp)
                                 } else {
                                     Modifier.clip(RoundedCornerShape(12.dp))
                                 }
@@ -435,7 +441,7 @@ fun HomeTabScreen(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .alanGlassCard(cornerRadius = 20.dp)
+                            .alanLiquidGlass(cornerRadius = 20.dp)
                             .clickable { showAutoLocationSheet = true }
                             .padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)
                     ) {
@@ -477,7 +483,7 @@ fun HomeTabScreen(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .alanGlassCard(cornerRadius = 20.dp)
+                            .alanLiquidGlass(cornerRadius = 20.dp)
                             .clickable { showManualServerPicker = true }
                             .padding(horizontal = 13.dp, vertical = if (compact) 9.dp else 11.dp)
                     ) {
@@ -534,7 +540,7 @@ fun HomeTabScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier
                             .weight(1.1f)
-                            .alanGlassCard(cornerRadius = 16.dp)
+                            .alanLiquidGlass(cornerRadius = 16.dp)
                             .clickable { onOpenDohScanner() }
                             .padding(horizontal = 12.dp, vertical = 9.dp)
                     ) {
@@ -563,7 +569,7 @@ fun HomeTabScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier
                             .weight(1f)
-                            .alanGlassCard(cornerRadius = 16.dp)
+                            .alanLiquidGlass(cornerRadius = 16.dp)
                             .clickable { onOpenSplitTunnelDialog() }
                             .padding(horizontal = 12.dp, vertical = 9.dp)
                     ) {
@@ -1086,10 +1092,12 @@ fun ScannerTabScreen(
     activeVectorId: String = "",
     activePingMs: Int = 0,
     forcedTargetIndex: Int?,
+    forcedTargetIndices: List<Int> = emptyList(),
     onConsumedForcedTarget: () -> Unit,
     onStartMultiMethodScan: (scopeMode: String, selectedIndices: List<Int>, autoConnect: Boolean, useCleanIp: Boolean, selectedVectorIds: List<String>) -> Unit,
     onStopScan: () -> Unit,
     onImportFromClipboard: () -> Unit,
+    onImportConfigsRaw: (String) -> Unit = {},
     onApplyVectorSingle: (vectorId: String, targetIndex: Int, endpoint: String) -> Unit,
     onApplyVectorAndConnect: (vectorId: String, targetIndex: Int, endpoint: String) -> Unit
 ) {
@@ -1097,9 +1105,11 @@ fun ScannerTabScreen(
     var scopeMode by rememberSaveable { mutableStateOf("single") }
     var autoConnectFirst by rememberSaveable { mutableStateOf(true) }
     var useCleanIpInScan by rememberSaveable { mutableStateOf(false) }
-    var showMultiPicker by remember { mutableStateOf(false) }
+    var showMultiPickerSheet by remember { mutableStateOf(false) }
+    var showCustomImportDialog by remember { mutableStateOf(false) }
     var showVectorSheet by remember { mutableStateOf(false) }
     var localConnectLock by remember { mutableStateOf(false) }
+    var pendingSelectNewAfterImport by remember { mutableStateOf<Set<String>?>(null) }
     val selectedMultiIndices = remember { mutableStateListOf<Int>() }
     val selectedVectorIds = remember { mutableStateListOf<String>() }
 
@@ -1108,12 +1118,38 @@ fun ScannerTabScreen(
     }
     var singleTargetIdx by remember(defaultSelectedIdx) { mutableIntStateOf(defaultSelectedIdx) }
 
-    LaunchedEffect(forcedTargetIndex) {
-        if (forcedTargetIndex != null && forcedTargetIndex >= 0) {
+    // Accept single or multiple targets sent from Profiles tab
+    LaunchedEffect(forcedTargetIndex, forcedTargetIndices) {
+        if (forcedTargetIndices.isNotEmpty()) {
+            scopeMode = "selected"
+            selectedMultiIndices.clear()
+            selectedMultiIndices.addAll(forcedTargetIndices.filter { it in profiles.indices }.distinct())
+            onConsumedForcedTarget()
+        } else if (forcedTargetIndex != null && forcedTargetIndex >= 0) {
             scopeMode = "single"
             singleTargetIdx = forcedTargetIndex
             onConsumedForcedTarget()
         }
+    }
+
+    // Auto-select newly imported configs right into the scanner's custom multi-config queue!
+    LaunchedEffect(profiles, pendingSelectNewAfterImport) {
+        val prevUids = pendingSelectNewAfterImport ?: return@LaunchedEffect
+        val freshIndices = profiles.mapIndexedNotNull { idx, item ->
+            if (item.uid !in prevUids) idx else null
+        }
+        if (freshIndices.isNotEmpty()) {
+            scopeMode = "selected"
+            freshIndices.forEach { idx ->
+                if (idx !in selectedMultiIndices) selectedMultiIndices.add(idx)
+            }
+            pendingSelectNewAfterImport = null
+        }
+    }
+
+    // Keep selected indices valid if repository shrinks
+    LaunchedEffect(profiles.size) {
+        selectedMultiIndices.removeAll { it !in profiles.indices }
     }
 
     LaunchedEffect(isTunnelConnected, isTunnelConnecting, scanState.isRunning, scanState.mode) {
@@ -1160,6 +1196,7 @@ fun ScannerTabScreen(
             .fillMaxSize()
             .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
+        // Scope Switcher (Neumorphic inset track + Liquid Glass active pill)
         Row(
             horizontalArrangement = Arrangement.spacedBy(5.dp),
             modifier = Modifier
@@ -1174,11 +1211,14 @@ fun ScannerTabScreen(
                     modifier = Modifier
                         .weight(1f)
                         .height(33.dp)
-                        .then(if (sel) Modifier.alanGlassCard(highlighted = true, cornerRadius = 10.dp) else Modifier.clip(RoundedCornerShape(10.dp)))
+                        .then(
+                            if (sel) Modifier.alanLiquidGlass(highlighted = true, cornerRadius = 10.dp)
+                            else Modifier.clip(RoundedCornerShape(10.dp))
+                        )
                         .clickable { scopeMode = key }
                 ) {
                     Text(
-                        text = label,
+                        text = if (key == "selected" && selectedMultiIndices.isNotEmpty()) "$label (${selectedMultiIndices.size})" else label,
                         color = if (sel) p.accentGold else p.textSecondary,
                         fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold,
                         fontSize = 11.sp
@@ -1187,11 +1227,12 @@ fun ScannerTabScreen(
             }
         }
 
+        // Main Scanner Control Pod (Liquid Glass shell + Neumorphic inset inputs & Neumorphic Scan button)
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .alanGlassCard(cornerRadius = 17.dp)
+                .alanLiquidGlass(cornerRadius = 18.dp)
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             when (scopeMode) {
@@ -1224,22 +1265,91 @@ fun ScannerTabScreen(
                     }
                 }
                 "selected" -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .alanNeuInset(cornerRadius = 11.dp)
-                            .clickable { showMultiPicker = true }
-                            .padding(horizontal = 11.dp, vertical = 9.dp)
-                    ) {
-                        Text(
-                            text = if (selectedMultiIndices.isEmpty()) "انتخاب چند کانفیگ (${profiles.size} موجود)..." else "${selectedMultiIndices.size} کانفیگ انتخاب شد",
-                            color = p.textPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.5.sp
-                        )
-                        Text("انتخاب", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp)
+                    // Two Direct Actions: Pick Multiple from Repo OR Import Custom Links straight to Scanner!
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .weight(1.15f)
+                                .height(38.dp)
+                                .alanNeuInset(cornerRadius = 11.dp, accented = selectedMultiIndices.isNotEmpty())
+                                .clickable { showMultiPickerSheet = true }
+                                .padding(horizontal = 8.dp)
+                        ) {
+                            Icon(Icons.Outlined.PlaylistAdd, null, tint = p.accentGold, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                text = if (selectedMultiIndices.isEmpty()) "انتخاب از مخزن (${profiles.size})" else "ویرایش انتخاب (${selectedMultiIndices.size})",
+                                color = p.textPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(38.dp)
+                                .alanGlassCard(cornerRadius = 11.dp)
+                                .clickable { showCustomImportDialog = true }
+                                .padding(horizontal = 8.dp)
+                        ) {
+                            Icon(Icons.Outlined.Add, null, tint = p.emerald, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = "ورود لینک دلخواه",
+                                color = p.emerald,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 10.5.sp,
+                                maxLines = 1
+                            )
+                        }
+                    }
+
+                    // Live Removable Chips of Selected Target Configs
+                    if (selectedMultiIndices.isNotEmpty()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                        ) {
+                            selectedMultiIndices.toList().forEach { idx ->
+                                val item = profiles.getOrNull(idx) ?: return@forEach
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier
+                                        .height(27.dp)
+                                        .alanNeuInset(cornerRadius = 9.dp)
+                                        .padding(horizontal = 8.dp)
+                                ) {
+                                    LtrContent {
+                                        Text(
+                                            text = item.name.take(18),
+                                            color = p.textPrimary,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 10.sp,
+                                            maxLines = 1
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Outlined.Close,
+                                        contentDescription = "حذف",
+                                        tint = p.danger,
+                                        modifier = Modifier
+                                            .size(13.dp)
+                                            .clickable { selectedMultiIndices.remove(idx) }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
                 else -> {
@@ -1247,6 +1357,7 @@ fun ScannerTabScreen(
                 }
             }
 
+            // Method Picker Selector Row
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1282,6 +1393,7 @@ fun ScannerTabScreen(
                 }
             }
 
+            // Two Compact Side-by-Side Toggles
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1315,6 +1427,7 @@ fun ScannerTabScreen(
                 }
             }
 
+            // Neumorphic Scan Button + Dynamic Status Summary
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1338,7 +1451,11 @@ fun ScannerTabScreen(
                                     "selected" -> selectedMultiIndices.toList()
                                     else -> profiles.indices.toList()
                                 }
-                                onStartMultiMethodScan(scopeMode, indices, autoConnectFirst, useCleanIpInScan, selectedVectorIds.toList())
+                                if (scopeMode == "selected" && indices.isEmpty()) {
+                                    showMultiPickerSheet = true
+                                } else {
+                                    onStartMultiMethodScan(scopeMode, indices, autoConnectFirst, useCleanIpInScan, selectedVectorIds.toList())
+                                }
                             }
                         }
                         .padding(horizontal = 18.dp)
@@ -1381,7 +1498,7 @@ fun ScannerTabScreen(
                 horizontalArrangement = Arrangement.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .alanGlassCard(highlighted = true, cornerRadius = 13.dp)
+                    .alanLiquidGlass(highlighted = true, cornerRadius = 13.dp)
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
@@ -1394,6 +1511,7 @@ fun ScannerTabScreen(
             }
         }
 
+        // Results List: Rank-1 / Connected in Liquid Glass, others in clean Neumorphism
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(bottom = 76.dp),
@@ -1407,7 +1525,17 @@ fun ScannerTabScreen(
                     verticalArrangement = Arrangement.spacedBy(7.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .alanGlassCard(highlighted = isThisConnected || row.rank == 1, cornerRadius = 14.dp)
+                        .then(
+                            if (isThisConnected || row.rank == 1) {
+                                Modifier.alanLiquidGlass(
+                                    highlighted = true,
+                                    cornerRadius = 15.dp,
+                                    accentBorderColor = if (isThisConnected) p.emerald else p.accentGold
+                                )
+                            } else {
+                                Modifier.alanGlassCard(cornerRadius = 15.dp)
+                            }
+                        )
                         .padding(horizontal = 12.dp, vertical = 9.dp)
                 ) {
                     Row(
@@ -1486,6 +1614,42 @@ fun ScannerTabScreen(
         }
     }
 
+    // 1. Multi-Config Picker Bottom Sheet (Searchable + Group Filter + Select All / Alive + Quick Custom Import)
+    if (showMultiPickerSheet) {
+        ScannerMultiConfigPickerSheet(
+            profiles = profiles,
+            initialSelected = selectedMultiIndices.toList(),
+            onDismiss = { showMultiPickerSheet = false },
+            onOpenCustomImport = {
+                showMultiPickerSheet = false
+                showCustomImportDialog = true
+            },
+            onConfirm = { picked ->
+                selectedMultiIndices.clear()
+                selectedMultiIndices.addAll(picked)
+                showMultiPickerSheet = false
+            }
+        )
+    }
+
+    // 2. Direct Custom Config Import Dialog straight into Scanner Multi-Select Queue
+    if (showCustomImportDialog) {
+        ScannerCustomConfigsImportDialog(
+            onDismiss = { showCustomImportDialog = false },
+            onPasteFromClipboard = {
+                pendingSelectNewAfterImport = profiles.map { it.uid }.toSet()
+                showCustomImportDialog = false
+                onImportFromClipboard()
+            },
+            onImportRaw = { rawText ->
+                pendingSelectNewAfterImport = profiles.map { it.uid }.toSet()
+                showCustomImportDialog = false
+                onImportConfigsRaw(rawText)
+            }
+        )
+    }
+
+    // 3. Method Picker Bottom Sheet
     if (showVectorSheet) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
@@ -1614,7 +1778,7 @@ fun ScannerTabScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(42.dp)
-                            .alanGlassCard(highlighted = true, cornerRadius = 13.dp)
+                            .alanLiquidGlass(highlighted = true, cornerRadius = 13.dp)
                             .clickable { showVectorSheet = false }
                     ) {
                         Text("تایید انتخاب متدها", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 12.5.sp)
@@ -1623,17 +1787,298 @@ fun ScannerTabScreen(
             }
         }
     }
+}
 
-    if (showMultiPicker) {
-        MultiProfilePickerDialog(
-            profiles = profiles,
-            initialSelected = selectedMultiIndices.toList(),
-            onDismiss = { showMultiPicker = false },
-            onConfirm = { picked ->
-                selectedMultiIndices.clear()
-                selectedMultiIndices.addAll(picked)
-                showMultiPicker = false
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ScannerMultiConfigPickerSheet(
+    profiles: List<ProfileItem>,
+    initialSelected: List<Int>,
+    onDismiss: () -> Unit,
+    onOpenCustomImport: () -> Unit,
+    onConfirm: (List<Int>) -> Unit
+) {
+    val p = LocalAlanPalette.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var search by remember { mutableStateOf("") }
+    var groupFilter by remember { mutableStateOf("ALL") }
+    val picked = remember { mutableStateListOf<Int>().apply { addAll(initialSelected) } }
+
+    val groups = remember(profiles) {
+        profiles.map { it.groupName.trim().ifBlank { "دستی" } }.distinct()
+    }
+
+    val filtered = remember(profiles, search, groupFilter) {
+        val q = search.trim().lowercase(Locale.ROOT)
+        profiles.mapIndexedNotNull { idx, item ->
+            val grp = item.groupName.trim().ifBlank { "دستی" }
+            val grpOk = groupFilter == "ALL" || grp.equals(groupFilter, ignoreCase = true)
+            val txtOk = q.isEmpty() || "${item.name} ${item.host} ${item.protocol} $grp".lowercase(Locale.ROOT).contains(q)
+            if (grpOk && txtOk) idx to item else null
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = p.surfaceBg,
+        contentColor = p.textPrimary,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)
+    ) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .padding(bottom = 18.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column {
+                        Text("انتخاب چند کانفیگ برای اسکن متد", color = p.textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                        Text("${picked.size} از ${profiles.size} کانفیگ انتخاب شده", color = p.emerald, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                    AlanNeuIconButton(Icons.Outlined.Close, p.textSecondary, 34.dp, onClick = onDismiss)
+                }
+
+                AlanSheetTextField("جستجو در نام، آدرس یا پروتکل...", search, { search = it }, ltr = false)
+
+                // Quick Batch Controls
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(33.dp)
+                            .alanGlassCard(cornerRadius = 10.dp)
+                            .clickable {
+                                filtered.forEach { (idx, _) -> if (idx !in picked) picked.add(idx) }
+                            }
+                    ) {
+                        Text("انتخاب همه", color = p.accentGold, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                    }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(33.dp)
+                            .alanGlassCard(cornerRadius = 10.dp)
+                            .clickable {
+                                picked.clear()
+                                filtered.filter { it.second.pingMs > 0 }.forEach { picked.add(it.first) }
+                            }
+                    ) {
+                        Text("فقط سالم‌ها", color = p.emerald, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                    }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(0.85f)
+                            .height(33.dp)
+                            .alanNeuInset(cornerRadius = 10.dp)
+                            .clickable { picked.clear() }
+                    ) {
+                        Text("پاک کردن", color = p.textSecondary, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                    }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1.1f)
+                            .height(33.dp)
+                            .alanLiquidGlass(highlighted = true, cornerRadius = 10.dp)
+                            .clickable { onOpenCustomImport() }
+                    ) {
+                        Text("+ لینک دلخواه", color = p.emerald, fontWeight = FontWeight.ExtraBold, fontSize = 10.sp)
+                    }
+                }
+
+                if (groups.size > 1) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                    ) {
+                        (listOf("ALL") + groups).forEach { grp ->
+                            val sel = groupFilter == grp
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .height(29.dp)
+                                    .then(if (sel) Modifier.alanLiquidGlass(highlighted = true, cornerRadius = 9.dp) else Modifier.alanNeuInset(cornerRadius = 9.dp))
+                                    .clickable { groupFilter = grp }
+                                    .padding(horizontal = 10.dp)
+                            ) {
+                                Text(
+                                    text = if (grp == "ALL") "همه گروه‌ها" else grp,
+                                    color = if (sel) p.accentGold else p.textSecondary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 310.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (filtered.isEmpty()) {
+                        Text(
+                            text = "کانفیگی یافت نشد؛ از «+ لینک دلخواه» مستقیم وارد کنید.",
+                            color = p.textMuted,
+                            fontSize = 11.5.sp,
+                            modifier = Modifier.padding(14.dp)
+                        )
+                    } else {
+                        filtered.forEach { (origIdx, item) ->
+                            val isSel = origIdx in picked
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(if (isSel) Modifier.alanNeuInset(cornerRadius = 12.dp, accented = true) else Modifier.alanGlassCard(cornerRadius = 12.dp))
+                                    .clickable {
+                                        if (isSel) picked.remove(origIdx) else picked.add(origIdx)
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 9.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    LtrContent {
+                                        Text(
+                                            text = item.name,
+                                            color = if (isSel) p.emerald else p.textPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    LtrContent {
+                                        Text(
+                                            text = "${item.protocol} • ${item.host}:${item.port}" + if (item.pingMs > 0) " • ${item.pingMs}ms" else "",
+                                            color = p.textMuted,
+                                            fontSize = 9.8.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isSel) p.accentGold else Color.Transparent)
+                                ) {
+                                    if (isSel) Icon(Icons.Outlined.Check, null, tint = p.onAccent, modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp)
+                        .alanLiquidGlass(highlighted = true, cornerRadius = 13.dp)
+                        .clickable { onConfirm(picked.toList()) }
+                ) {
+                    Text(
+                        text = "تایید انتخاب (${picked.size} کانفیگ)",
+                        color = p.accentGold,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 12.5.sp
+                    )
+                }
             }
-        )
+        }
+    }
+}
+
+@Composable
+private fun ScannerCustomConfigsImportDialog(
+    onDismiss: () -> Unit,
+    onPasteFromClipboard: () -> Unit,
+    onImportRaw: (String) -> Unit
+) {
+    val p = LocalAlanPalette.current
+    var rawLinks by remember { mutableStateOf("") }
+
+    Dialog(onDismissRequest = onDismiss) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = p.surfaceBg,
+                shadowElevation = 14.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(11.dp),
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("ورود کانفیگ دلخواه به اسکنر", color = p.accentGold, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                            Text("یک یا چند لینک وارد کنید تا مستقیم در صف اسکن قرار گیرند", color = p.textMuted, fontSize = 10.sp)
+                        }
+                        AlanNeuIconButton(Icons.Outlined.Close, p.textSecondary, 32.dp, onClick = onDismiss)
+                    }
+
+                    AlanSheetTextField(
+                        label = "لینک‌های vless / vmess / trojan / ss / socks5 / Base64...",
+                        value = rawLinks,
+                        onValueChange = { rawLinks = it },
+                        ltr = true,
+                        singleLine = false
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp)
+                                .alanGlassCard(cornerRadius = 11.dp)
+                                .clickable { onPasteFromClipboard() }
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Icon(Icons.Outlined.ContentPaste, null, tint = p.accentGold, modifier = Modifier.size(15.dp))
+                                Text("از کلیپ‌بورد", color = p.textPrimary, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                            }
+                        }
+
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1.25f)
+                                .height(40.dp)
+                                .alanLiquidGlass(highlighted = true, cornerRadius = 11.dp)
+                                .clickable {
+                                    if (rawLinks.isNotBlank()) onImportRaw(rawLinks.trim())
+                                }
+                        ) {
+                            Text("افزودن به صف اسکن", color = p.emerald, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
     }
 }

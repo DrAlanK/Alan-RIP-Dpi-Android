@@ -11,6 +11,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -673,6 +674,73 @@ fun sharePlainText(context: Context, title: String, text: String) {
 // ============================================================================
 // PURE BORDERLESS NEUMORPHIC MODIFIERS (Extruded & Inset with BlurMaskFilter)
 // ============================================================================
+
+
+// ============================================================================
+// LIQUID GLASS (FROSTED TRANSLUCENT) MODIFIER — Cached Brushes, Zero-CPU Cost
+// ============================================================================
+fun Modifier.alanLiquidGlass(
+    highlighted: Boolean = false,
+    cornerRadius: Dp = 18.dp,
+    accentBorderColor: Color? = null
+): Modifier = composed {
+    val p = LocalAlanPalette.current
+    val isDark = p.isDark
+    val shape = remember(cornerRadius) { RoundedCornerShape(cornerRadius) }
+    val accentCol = accentBorderColor ?: p.accentGold
+
+    val glassFill = remember(isDark, highlighted, accentCol) {
+        if (isDark) {
+            Brush.verticalGradient(
+                colors = listOf(
+                    if (highlighted) Color(0xCC2E374C) else Color(0xB8262F42),
+                    Color(0xA61A202E),
+                    Color(0xBA141925)
+                )
+            )
+        } else {
+            Brush.verticalGradient(
+                colors = listOf(
+                    if (highlighted) Color(0xF0FFFFFF) else Color(0xDCFFFFFF),
+                    Color(0xC8EDF3FC),
+                    Color(0xD8DCE6F5)
+                )
+            )
+        }
+    }
+
+    val specularRim = remember(isDark, highlighted, accentCol) {
+        if (isDark) {
+            Brush.verticalGradient(
+                colors = listOf(
+                    if (highlighted) accentCol.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.28f),
+                    Color.White.copy(alpha = 0.08f),
+                    if (highlighted) accentCol.copy(alpha = 0.25f) else Color.Black.copy(alpha = 0.35f)
+                )
+            )
+        } else {
+            Brush.verticalGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = 0.98f),
+                    if (highlighted) accentCol.copy(alpha = 0.42f) else Color(0xFFBAC8DE).copy(alpha = 0.48f),
+                    Color(0xFF9FB2CE).copy(alpha = 0.55f)
+                )
+            )
+        }
+    }
+
+    val tintOverlay = if (highlighted) {
+        accentCol.copy(alpha = if (isDark) 0.09f else 0.07f)
+    } else {
+        Color.Transparent
+    }
+
+    this
+        .clip(shape)
+        .background(glassFill)
+        .background(tintOverlay)
+        .border(width = if (highlighted) 1.25.dp else 1.dp, brush = specularRim, shape = shape)
+}
 
 fun Modifier.alanGlassCard(
     highlighted: Boolean = false,

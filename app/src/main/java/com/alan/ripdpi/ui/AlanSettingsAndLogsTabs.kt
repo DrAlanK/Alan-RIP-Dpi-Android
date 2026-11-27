@@ -832,7 +832,7 @@ fun LogsTabScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier
                 .fillMaxWidth()
-                .alanGlassCard(cornerRadius = 17.dp)
+                .alanLiquidGlass(cornerRadius = 17.dp)
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             Column(modifier = Modifier.weight(1f)) {
